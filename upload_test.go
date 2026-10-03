@@ -330,3 +330,41 @@ func TestWriteUploadSerializationFailureCreatesNoOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteUploadRepositoryContextConflicts(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		first := session.Session{Source: "codex", SessionID: "same", RepositoryObservations: []session.RepositoryObservation{{RecordLine: 1, Branch: "main", CommitHash: "recorded", RepositoryURL: "host/org/repo"}}}
+		other := first
+		if conflict {
+			other.RepositoryObservations = []session.RepositoryObservation{{RecordLine: 1, Branch: "changed", CommitHash: "recorded", RepositoryURL: "host/org/repo"}}
+		}
+		result := session.Result{Files: 4, Records: []session.Record{{Session: first}, {Session: other}, {Session: first}, {Session: session.Session{Source: "codex", SessionID: "valid"}}}}
+		path := filepath.Join(t.TempDir(), "request.json")
+		var stdout, stderr bytes.Buffer
+		code := writeUpload(options{output: path, format: "json"}, result, &stdout, &stderr)
+		var envelope session.Envelope
+		if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		wantCode, wantCount, summary := 0, 2, "duplicates=2 skipped=0 failed=0 complete"
+		if conflict {
+			wantCode, wantCount, summary = 1, 1, "duplicates=0 skipped=0 failed=3 incomplete"
+		}
+		if code != wantCode || envelope.SchemaVersion != 2 || len(envelope.Sessions) != wantCount || !strings.Contains(stderr.String(), summary) {
+			t.Fatalf("exit=%d payload=%s stderr=%s", code, stdout.Bytes(), stderr.String())
+		}
+		if conflict && envelope.Sessions[0].SessionID != "valid" {
+			t.Fatalf("conflicting group emitted: %s", stdout.Bytes())
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, stdout.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+		if !conflict && !bytes.Contains(compact.Bytes(), []byte(`"repository_observations":[{"record_line":1,"branch":"main","commit_hash":"recorded","repository_url":"host/org/repo"}]`)) {
+			t.Fatalf("context missing: %s", stdout.Bytes())
+		}
+		if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, stdout.Bytes()) {
+			t.Fatalf("file/stdout mismatch: %s %v", data, err)
+		}
+	}
+}

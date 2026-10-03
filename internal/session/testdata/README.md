@@ -29,3 +29,7 @@ cache-duration counters retain their presence, zero values, and relationships;
 IDs/timestamps are consistently sanitized. Root counter growth is tested only
 as a labeled synthetic mutation; growing counters observed in child evidence
 are not presented as a root fixture. Message content and tools remain excluded.
+
+Repository tests reuse the recorded `payload.git` in the Codex usage fixture and
+the repeated root `gitBranch` in the Claude usage fixture. Context transitions,
+empty/invalid values, and credential-bearing remote variants are synthetic tests.

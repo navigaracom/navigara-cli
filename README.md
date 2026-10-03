@@ -50,7 +50,7 @@ CLI `claude` maps to payload `claude_code`; `codex` maps to `codex`. IDs remain
 native opaque values; local ID agreement does not establish OTel compatibility.
 Only root sessions count. Optional times are RFC3339 UTC observation bounds,
 not session start/end events. Missing fields are omitted, never inferred from
-filesystem times or installed binaries. Payloads exclude paths and content.
+filesystem times or installed binaries. Payloads exclude local paths and content.
 
 The v2 contract also supports optional `usage_observations` in recorded order.
 Each observation has a one-based physical `record_line`, optional recorded
@@ -61,6 +61,20 @@ preserve native snapshots. Repeated observations are retained and never summed;
 model context does not attribute cumulative totals to a model. Counter absence
 means unknown, while zero is explicit. An omitted observation array means usage
 is unavailable, not zero. Usage does not imply complete billing or child coverage.
+
+Optional `repository_observations` preserve recorded context changes with physical
+`record_line`, optional UTC `observed_at`, and optional `branch`, `commit_hash`,
+`repository_url`. Claude reads root `gitBranch`; Codex reads metadata `payload.git`
+and uses the outer timestamp, rather than its creation timestamp. Consecutive
+identical contexts are omitted; missing fields never inherit prior context.
+Absent/null context emits nothing; explicit empty branches or git objects can
+record a clear/unknown context. No current git state or local paths are inferred.
+Repository URLs become lowercase host/path keys from HTTP(S), SSH, git URLs or
+SCP remotes, stripping credentials, ports, query/fragment, `.git`, and trailing
+slashes. Local paths and unsupported strings are omitted while other context is
+retained. Bare `host:path` follows SCP semantics; credential-shaped paths are
+rejected. Provider alias canonicalization is a subsequent backend responsibility.
+Reserved path escapes remain escaped; decoded backslashes and controls are rejected.
 
 `text` stdout shows discovered, emitted, duplicate, skipped, and failed counts,
 completeness, and sorted source/native IDs. `json` stdout matches the file bytes;

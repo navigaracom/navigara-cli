@@ -167,6 +167,16 @@ func Read(source string, r io.Reader) (Record, error) {
 		if u != nil {
 			result.Session.UsageObservations = append(result.Session.UsageObservations, *u)
 		}
+		repository, err := observeRepository(b, source, kind, timestamp, line)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if repository != nil {
+			observations := result.Session.RepositoryObservations
+			if len(observations) == 0 || repository.Branch != observations[len(observations)-1].Branch || repository.CommitHash != observations[len(observations)-1].CommitHash || repository.RepositoryURL != observations[len(observations)-1].RepositoryURL {
+				result.Session.RepositoryObservations = append(observations, *repository)
+			}
+		}
 	}
 	if result.Session.SessionID == "" {
 		if sawSidechain {

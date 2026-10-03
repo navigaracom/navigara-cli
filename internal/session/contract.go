@@ -14,12 +14,22 @@ type Envelope struct {
 // Session contains native identity and observation bounds, not lifecycle events.
 // Adapters map claude to claude_code and codex to codex and normalize times to UTC.
 type Session struct {
-	Source            string             `json:"source"`
-	SessionID         string             `json:"session_id"`
-	FirstObservedAt   *time.Time         `json:"first_observed_at,omitempty"`
-	LastObservedAt    *time.Time         `json:"last_observed_at,omitempty"`
-	SourceVersion     string             `json:"source_version,omitempty"`
-	UsageObservations []UsageObservation `json:"usage_observations,omitempty"`
+	Source                 string                  `json:"source"`
+	SessionID              string                  `json:"session_id"`
+	FirstObservedAt        *time.Time              `json:"first_observed_at,omitempty"`
+	LastObservedAt         *time.Time              `json:"last_observed_at,omitempty"`
+	SourceVersion          string                  `json:"source_version,omitempty"`
+	UsageObservations      []UsageObservation      `json:"usage_observations,omitempty"`
+	RepositoryObservations []RepositoryObservation `json:"repository_observations,omitempty"`
+}
+
+// RepositoryObservation contains recorded context, never inferred from local git.
+type RepositoryObservation struct {
+	RecordLine    int        `json:"record_line"`
+	ObservedAt    *time.Time `json:"observed_at,omitempty"`
+	Branch        string     `json:"branch,omitempty"`
+	CommitHash    string     `json:"commit_hash,omitempty"`
+	RepositoryURL string     `json:"repository_url,omitempty"`
 }
 
 // UsageObservation preserves provider-native usage at a physical JSONL line.
