@@ -85,9 +85,16 @@ func repositoryKey(value string) string {
 		return ""
 	}
 	host := strings.ToLower(u.Hostname())
-	for _, r := range u.Path {
-		if r == '\\' || r == '@' || unicode.IsControl(r) {
-			return ""
+	query, err := url.QueryUnescape(u.RawQuery)
+	if err != nil {
+		return ""
+	}
+	// Check every non-userinfo component before discarding query and fragment.
+	for _, component := range []string{u.Path, query, u.Fragment} {
+		for _, r := range component {
+			if r == '\\' || r == '@' || r == '%' || unicode.IsControl(r) {
+				return ""
+			}
 		}
 	}
 	path := strings.TrimSuffix(strings.ToLower(strings.Trim(u.EscapedPath(), "/")), ".git")

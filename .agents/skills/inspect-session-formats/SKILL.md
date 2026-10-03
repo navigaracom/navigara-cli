@@ -69,7 +69,9 @@ credential-free lowercase host/path keys, stripping userinfo/port/query/fragment
 bare `host:path` has SCP semantics. Local paths and unsupported URL strings are
 omitted without dropping branch/commit. Credential-shaped SCP paths are rejected,
 including escaped `@`. Backend provider alias canonicalization is separate.
-Reserved path escapes remain escaped; decoded backslashes and controls are rejected.
+Reserved path escapes remain escaped. Decoded backslashes, controls, `@`, or `%`
+in paths/query/fragments are unsupported; nested escapes are rejected. Proper
+URL userinfo is stripped. Empty repository segments after stripping `.git` are rejected.
 
 Discovery is distinct from reading: current Claude scanning excludes nested subagent files and `agent-*` names; eligible Codex histories include both roots and children. Check current `scan.go` rather than inferring discovery from reader acceptance.
 

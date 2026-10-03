@@ -74,8 +74,9 @@ SCP remotes, stripping credentials, ports, query/fragment, `.git`, and trailing
 slashes. Local paths and unsupported strings are omitted while other context is
 retained. Bare `host:path` follows SCP semantics; credential-shaped paths are
 rejected. Provider alias canonicalization is a subsequent backend responsibility.
-Reserved path escapes remain escaped; decoded backslashes, controls, and `@` in
-paths are unsupported. Empty repository segments after stripping `.git` are rejected.
+Reserved path escapes remain escaped. Decoded backslashes, controls, `@`, or `%`
+in paths/query/fragments are unsupported; nested escapes are rejected. Proper
+URL userinfo is stripped. Empty repository segments after stripping `.git` are rejected.
 
 `text` stdout shows discovered, emitted, duplicate, skipped, and failed counts,
 completeness, and sorted source/native IDs. `json` stdout matches the file bytes;
