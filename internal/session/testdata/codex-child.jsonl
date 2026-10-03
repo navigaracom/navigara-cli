@@ -1,0 +1,1 @@
+{"type":"session_meta","timestamp":"2026-01-02T00:01:00Z","payload":{"id":"codex-child","session_id":"codex-parent","parent_thread_id":"codex-parent","timestamp":"2026-01-02T00:00:00Z","cli_version":"0.147.0","cwd":"/workspace/example","source":{"subagent":{"thread_spawn":{"parent_thread_id":"codex-parent","depth":1}}}}}

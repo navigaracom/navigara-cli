@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-01-02T00:01:00Z","payload":{"id":"codex-root","session_id":"codex-root","timestamp":"2026-01-02T00:00:00Z","cli_version":"0.139.0","cwd":"/workspace/example","source":"exec"}}
+{"type":"event_msg","timestamp":"2026-01-02T00:02:00Z"}
