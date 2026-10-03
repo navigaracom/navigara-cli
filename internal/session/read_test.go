@@ -29,7 +29,7 @@ func TestReadFixtures(t *testing.T) {
 			got, err := Read(tc.source, strings.NewReader(fixture(t, tc.file)))
 			first, _ := time.Parse(time.RFC3339, "2026-01-02T00:00:00Z")
 			last, _ := time.Parse(time.RFC3339, tc.last)
-			want := Record{Session{Source: tc.source, SessionID: tc.id, SourceVersion: tc.version, FirstObservedAt: &first, LastObservedAt: &last}, "/workspace/example"}
+			want := Record{Session: Session{Source: tc.source, SessionID: tc.id, SourceVersion: tc.version, FirstObservedAt: &first, LastObservedAt: &last}}
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("got %+v, %v; want %+v", got, err, want)
 			}
@@ -73,7 +73,7 @@ func TestReadMutations(t *testing.T) {
 		{"bookkeeping only", "claude_code", "{}", "", "line 1"},
 		{"empty", "codex", "", "", "line 1"},
 		{"unknown source", "unknown", codex, "", "unsupported source"},
-		{"token limit", "codex", codex + strings.Repeat(" ", 16*1024*1024), "", "line 3"},
+		{"large opaque event", "codex", codex + `{"type":"response_item","payload":{"content":"` + strings.Repeat("x", 16*1024*1024) + `"}}`, "codex-root", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Read(tc.source, strings.NewReader(tc.input))
@@ -93,7 +93,7 @@ func TestReadMutations(t *testing.T) {
 					if tc.source == "codex" {
 						version = "0.139.0"
 					}
-					if got.Session.SourceVersion != version || got.WorkingDirectory != "/workspace/example" || got.Session.FirstObservedAt.Format(time.RFC3339) != "2026-01-02T00:00:00Z" || got.Session.LastObservedAt.Format(time.RFC3339) != "2026-01-02T00:02:00Z" {
+					if got.Session.SourceVersion != version || got.Session.FirstObservedAt.Format(time.RFC3339) != "2026-01-02T00:00:00Z" || got.Session.LastObservedAt.Format(time.RFC3339) != "2026-01-02T00:02:00Z" {
 						t.Fatalf("ignored row polluted root metadata: %+v", got)
 					}
 				}
@@ -116,14 +116,14 @@ func TestReadOptionalMetadataAndUTC(t *testing.T) {
 			}
 			delete(fields, "timestamp")
 			delete(fields, "version")
-			delete(fields, "cwd")
+			fields["cwd"] = 42
 			if _, ok := fields["sessionId"]; ok {
 				fields["sessionId"] = "opaque id"
 			}
 			if payload, ok := fields["payload"].(map[string]any); ok {
 				delete(payload, "timestamp")
 				delete(payload, "cli_version")
-				delete(payload, "cwd")
+				payload["cwd"] = 42
 				payload["id"], payload["session_id"] = "opaque id", "opaque id"
 			}
 			b, err := json.Marshal(fields)

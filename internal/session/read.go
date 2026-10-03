@@ -10,34 +10,40 @@ import (
 	"time"
 )
 
-// Record carries cwd for local discovery without adding paths to Session.
+// Record contains metadata extracted from a history.
 // An empty SessionID with no error denotes a recognized child-only history.
 type Record struct {
-	Session          Session
-	WorkingDirectory string
+	Session Session
 }
 
-// Read extracts recorded root metadata from JSONL with a 16 MiB scanner token
-// limit. Codex child headers return immediately; Claude sidechains are ignored
+// Read extracts recorded root metadata from JSONL. Memory scales with the largest
+// record. Codex child headers return immediately; Claude sidechains are ignored
 // until EOF. Errors discard all partial metadata and never include input values.
 func Read(source string, r io.Reader) (Record, error) {
 	if source != "claude_code" && source != "codex" {
 		return Record{}, fmt.Errorf("unsupported source")
 	}
 	result := Record{Session: Session{Source: source}}
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	reader := bufio.NewReader(r)
 	line, sawSidechain := 0, false
 	fail := func(problem string) (Record, error) {
 		return Record{}, fmt.Errorf("line %d: %s", line, problem)
 	}
-	for scanner.Scan() {
+	for {
+		b, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			line++
+			return fail("cannot read record")
+		}
+		if len(b) == 0 && err == io.EOF {
+			break
+		}
 		line++
-		b := bytes.TrimSpace(scanner.Bytes())
+		b = bytes.TrimSpace(b)
 		if len(b) == 0 {
 			continue
 		}
-		var id, version, cwd, timestamp string
+		var id, version, timestamp string
 		if source == "claude_code" {
 			var side struct {
 				IsSidechain bool `json:"isSidechain"`
@@ -60,13 +66,12 @@ func Read(source string, r io.Reader) (Record, error) {
 			}
 			var root struct {
 				Version   string `json:"version"`
-				Cwd       string `json:"cwd"`
 				Timestamp string `json:"timestamp"`
 			}
 			if json.Unmarshal(b, &root) != nil {
 				return fail("invalid root metadata")
 			}
-			id, version, cwd, timestamp = identity.ID, root.Version, root.Cwd, root.Timestamp
+			id, version, timestamp = identity.ID, root.Version, root.Timestamp
 		} else {
 			// Decode payload only on metadata rows: unrelated event IDs and types are opaque.
 			var header struct {
@@ -84,7 +89,6 @@ func Read(source string, r io.Reader) (Record, error) {
 						ID             string          `json:"id"`
 						SessionID      json.RawMessage `json:"session_id"`
 						Version        string          `json:"cli_version"`
-						Cwd            string          `json:"cwd"`
 						Timestamp      string          `json:"timestamp"`
 						ParentThreadID string          `json:"parent_thread_id"`
 						Source         json.RawMessage `json:"source"`
@@ -118,7 +122,7 @@ func Read(source string, r io.Reader) (Record, error) {
 						return fail("conflicting session identity")
 					}
 				}
-				id, version, cwd = p.ID, p.Version, p.Cwd
+				id, version = p.ID, p.Version
 				if addTimestamp(&result.Session, p.Timestamp) != nil {
 					return fail("invalid timestamp")
 				}
@@ -143,16 +147,9 @@ func Read(source string, r io.Reader) (Record, error) {
 		if result.Session.SourceVersion == "" {
 			result.Session.SourceVersion = version
 		}
-		if result.WorkingDirectory == "" {
-			result.WorkingDirectory = cwd
-		}
 		if addTimestamp(&result.Session, timestamp) != nil {
 			return fail("invalid timestamp")
 		}
-	}
-	if scanner.Err() != nil {
-		line++
-		return fail("cannot read record (read failure or scanner token limit)")
 	}
 	if result.Session.SessionID == "" {
 		if sawSidechain {
