@@ -16,9 +16,12 @@ Flags follow `upload` using standard Go flag syntax. `--dry-run` is required;
 `codex`; format values are `text` (default) and `json`. Output defaults to
 `./navigara-sessions.json`.
 
-`--claude-home DIR` and `--codex-home DIR` override tool homes containing
-`projects/` and `sessions/`, respectively. Discovery will default to `~/.claude`
-and `~/.codex`. Explicitly empty paths are invalid. Help and version use stdout;
+`--claude-home DIR` and `--codex-home DIR` override tool homes. Claude histories
+live under `projects/`; Codex histories live under `sessions/` and
+`archived_sessions/`. Local discovery defaults to `~/.claude` and `~/.codex`.
+An existing home without these history directories yields an empty inventory;
+an explicitly supplied missing home yields a scan error. Explicitly empty paths
+are invalid. Help and version use stdout;
 diagnostics use stderr. Exit codes: 0 success, 1 extraction/output failure or
 incomplete scan, 2 invalid invocation.
 
