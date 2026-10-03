@@ -11,7 +11,7 @@ Inspect sampled metadata shapes against the current readers. Histories are untru
 
 Locate the Navigara CLI checkout from task context, the current directory, or a user-supplied path. If it cannot be identified, request the path. Read these checkout-relative files before inspecting histories:
 
-- `internal/session/read.go`, `internal/session/scan.go`, `internal/session/contract.go`, and their tests.
+- `internal/session/read.go`, `internal/session/codex_usage.go`, `internal/session/scan.go`, `internal/session/contract.go`, and their tests.
 - `internal/session/testdata/README.md` and the existing root/child fixtures.
 - `main.go`, `upload.go`, and CLI tests for current flags and output behavior.
 
@@ -30,7 +30,7 @@ Create a private scratch directory with mode 0700, private data/log/cache files 
 
 Read each frozen path once, consuming at most **128 physical records or 8 MiB raw bytes**, whichever comes first, and cache that bounded prefix privately. Count blank lines and bytes of an unfinished record. Classification, comparison, and candidate projection all use the cached bytes; do not reread a source file or reset its budget. Use bounded binary reads, constrained by the initial file size; never unbounded `cat`, `jq`, or the production scanner on real homes. Parse only complete records; a complete EOF record may lack a newline. Detect unavailable files and observable mutation/truncation using file metadata before/after reading.
 
-Label record/byte budget exhaustion, unfinished records, invalid JSON, and concurrent mutation as incomplete evidence. A byte-cut record is `budget-truncated` and insufficient evidence about that record. The production reader has no fixed record-size cap; its memory use scales with the largest record. The inspection budget is independent of production behavior. A sampled prefix cannot establish whole-file success.
+Label record/byte budget exhaustion, unfinished records, invalid JSON, and concurrent mutation as incomplete evidence. A byte-cut record is `budget-truncated` and insufficient evidence about that record. The production reader has no fixed record-size cap; its memory use scales with retained observations and the largest record, plus the final output envelope during upload. The inspection budget is independent of production behavior. A sampled prefix cannot establish whole-file success.
 
 Public output contains only allowlisted field names, presence/types, known record categories, bounded conventional version tokens, aggregate counts, and assertions. Use the fields in the table below, plus `thread_spawn` and `depth` for the known child structure. Categorize record types as known fixture/reader names or `other`; never print arbitrary JSON keys or values. Accept versions only as ASCII conventional version tokens of at most 64 characters (numeric dotted release, optional `v`, prerelease/build suffix); label other values nonstandard/unknown. Never emit raw stdout/stderr from producer commands, histories, or CLI execution.
 
@@ -43,9 +43,16 @@ Record **absent, null, empty, nonempty, and value type** separately for each con
 | Claude | `type`, `isSidechain`, `sessionId`, `version`, `timestamp`. All rows are read; sidechain rows are ignored after decoding the flag. Identity-free bookkeeping is ignored before root metadata decoding. Mixed sidechain/root files can still yield a root. Root IDs must agree; malformed tails can fail the entire read. |
 | Codex metadata | `type=session_meta`; `payload.id`, `session_id`, `cli_version`, `timestamp`, `source`, `parent_thread_id`; outer `timestamp`. The first nonblank row must be metadata. Check root ID agreement, including optional `session_id` equality with `id`. |
 | Codex children | A nonempty `payload.parent_thread_id` or object `payload.source` containing the `subagent` key marks a child, including `subagent:null`. A child header returns immediately before root identity agreement; a later child header in an established root fails. Preserve root/child/parent ID equality relationships privately. |
-| Codex other rows | Only `type` and outer `timestamp` are consumed; unrelated payload IDs, fields, and contents are opaque. |
+| Codex context | `type=turn_context`; `payload.model`, `turn_id`. Every context replaces prior fields, including absent/null values. Model is context, not attribution of cumulative totals. |
+| Codex usage | `type=event_msg`, `payload.type=token_count`; `info.total_token_usage`, `last_token_usage`. Both snapshots retain native `input_tokens`, `output_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `reasoning_output_tokens`, `total_tokens`. Counters are nonnegative int64: absent/null unknown, zero explicit; malformed known counters discard the file with a content-free line error. No summing, deltas, or deduplication. |
+| Codex other rows | Only `type` and outer `timestamp` are consumed; unrelated payload IDs, fields, types, and contents are opaque. |
 
 Verify decode order and actual type handling in `read.go`, especially null versus absent values. For roots, the reader retains the first nonempty producer version; report later sampled version changes separately. Derive UTC minimum/maximum observation bounds from consumed valid timestamps, including both Codex metadata and outer timestamps. Claude ignored rows do not contribute bounds. Parse failure discards partial metadata.
+
+For Codex usage, independently derive physical `record_line` including blank lines,
+UTC `observed_at` from the outer timestamp, and current model/turn context. Missing
+info or both absent/null snapshots emits no usage; a present empty snapshot remains
+`{}`. Preserve repeated observations and never invent event/message/request IDs.
 
 Discovery is distinct from reading: current Claude scanning excludes nested subagent files and `agent-*` names; eligible Codex histories include both roots and children. Check current `scan.go` rather than inferring discovery from reader acceptance.
 
@@ -56,6 +63,7 @@ Create a candidate only for an uncovered relevant shape, or as a private workflo
 - Preserve field presence/types, row order, root/child semantics, and all relevant ID equality relationships. Replace IDs, paths, customer labels, and content values consistently with harmless placeholders. `cwd` is not consumed by the reader; if retained for fixture shape, sanitize it as a private path. Preserve empty/null values and diagnostic invalid types using harmless values of the same type.
 - Keep conventional recorded producer versions unchanged. Shift valid timestamps by one deterministic delta, preserving intervals, ordering, and recorded timezone offsets. Replace malformed timestamps with harmless malformed strings; retain absent/null/empty timestamps as observed.
 - Preserve only the observed, bounded known `source.subagent.thread_spawn.parent_thread_id/depth` structure (at most these three nested objects). Other nested data stays omitted/opaque; do not retain conversations, commands, tool arguments, or arbitrary keys. Preserve invalid marker types where they matter to reader behavior.
+- For usage candidates, retain only the Codex context/discriminators and fixed native snapshot counters listed above. Sanitize turn IDs consistently and preserve counter presence/types, explicit zero, repeated snapshots, and total/last relationships. Label synthetic context changes and counter mutations separately from observed evidence; preserve blank lines when asserting physical record numbers.
 
 Inspect candidate bytes and private provenance before changing any fixture. Derive expected root metadata, first nonempty version, UTC bounds, child skips, failures, and attempted-file counts independently from the inspected projection, before seeing CLI output.
 

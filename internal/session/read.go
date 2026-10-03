@@ -18,14 +18,16 @@ type Record struct {
 	Path string
 }
 
-// Read extracts recorded root metadata from JSONL. Memory scales with the largest
-// record. Codex child headers return immediately; Claude sidechains are ignored
-// until EOF. Errors discard all partial metadata and never include input values.
+// Read extracts recorded root metadata from JSONL. Memory scales with retained
+// observations and the largest record. Codex child headers return immediately;
+// Claude sidechains are ignored until EOF. Errors discard all partial metadata
+// and never include input values.
 func Read(source string, r io.Reader) (Record, error) {
 	if source != "claude_code" && source != "codex" {
 		return Record{}, fmt.Errorf("unsupported source")
 	}
 	result := Record{Session: Session{Source: source}}
+	var context codexContext
 	reader := bufio.NewReader(r)
 	line, sawSidechain := 0, false
 	fail := func(problem string) (Record, error) {
@@ -45,7 +47,7 @@ func Read(source string, r io.Reader) (Record, error) {
 		if len(b) == 0 {
 			continue
 		}
-		var id, version, timestamp string
+		var id, version, timestamp, kind string
 		if source == "claude_code" {
 			var side struct {
 				IsSidechain bool `json:"isSidechain"`
@@ -75,13 +77,14 @@ func Read(source string, r io.Reader) (Record, error) {
 			}
 			id, version, timestamp = identity.ID, root.Version, root.Timestamp
 		} else {
-			// Decode payload only on metadata rows: unrelated event IDs and types are opaque.
+			// Stage known row types; unrelated event IDs and payloads are opaque.
 			var header struct {
 				Type string `json:"type"`
 			}
 			if json.Unmarshal(b, &header) != nil {
 				return fail("invalid JSON record")
 			}
+			kind = header.Type
 			if result.Session.SessionID == "" && header.Type != "session_meta" {
 				return fail("expected session_meta first")
 			}
@@ -151,6 +154,15 @@ func Read(source string, r io.Reader) (Record, error) {
 		}
 		if addTimestamp(&result.Session, timestamp) != nil {
 			return fail("invalid timestamp")
+		}
+		if source == "codex" {
+			u, err := context.observe(b, kind, timestamp, line)
+			if err != nil {
+				return fail(err.Error())
+			}
+			if u != nil {
+				result.Session.UsageObservations = append(result.Session.UsageObservations, *u)
+			}
 		}
 	}
 	if result.Session.SessionID == "" {

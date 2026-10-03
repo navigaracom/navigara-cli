@@ -1,6 +1,6 @@
 # Source-reader fixtures
 
-These four fixtures are allowlisted projections of local completed Claude Code
+These fixtures are allowlisted projections of local completed Claude Code
 and Codex histories, captured read-only. No conversation, tool, or command
 content is retained. Private provenance and source hashes remain outside git.
 
@@ -13,3 +13,11 @@ markers. The child source retains subagent/thread_spawn/parent_thread_id/depth;
 other nested fields are removed. IDs are consistently replaced, cwd becomes
 /workspace/example, and timestamps become fixed chronological UTC values.
 Tests explicitly mutate these projections for invalid input and boundary cases.
+
+Codex usage producer: 0.156.1. `codex-usage.jsonl` retains four observed rows:
+session metadata, turn context, and two token-count snapshots. IDs and timestamps
+are consistently sanitized; native counter presence, zero values, and snapshot
+relationships are preserved. The reader retains total and last snapshots in file
+order without computing deltas or attributing cumulative totals to the context
+model. Tests label unobserved repetitions, model changes, resets, and invalid
+counters as synthetic. No new real history reads are needed to replay this fixture.
