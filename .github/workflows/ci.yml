@@ -11,10 +11,16 @@ permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Quality
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  ci:
+    name: CI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -33,22 +39,6 @@ jobs:
       - name: Test
         run: go test ./...
 
-  build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    env:
-      CGO_ENABLED: '0'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
       - name: Build both architectures and check native startup
         run: |
           os="$(go env GOOS)"
@@ -69,16 +59,15 @@ jobs:
   detect-changes:
     name: detect-changes
     if: always()
-    needs: [quality, build]
+    needs: [ci]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      QUALITY_RESULT: ${{ needs.quality.result }}
-      BUILD_RESULT: ${{ needs.build.result }}
+      CI_RESULT: ${{ needs.ci.result }}
     steps:
       - name: Require every job to succeed
         run: |
-          printf 'Quality: %s\nBuild: %s\n' "$QUALITY_RESULT" "$BUILD_RESULT"
-          if [ "$QUALITY_RESULT" != success ] || [ "$BUILD_RESULT" != success ]; then
+          printf 'CI: %s\n' "$CI_RESULT"
+          if [ "$CI_RESULT" != success ]; then
             exit 1
           fi
