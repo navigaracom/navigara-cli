@@ -8,8 +8,9 @@ navigara --version
 navigara sessions upload --dry-run --source all --format json --output ./navigara-sessions.json
 ```
 
-`sessions upload` currently reports that extraction is unavailable, exits 1,
-and creates no file. It performs no network requests.
+`sessions upload` scans local histories and writes a request with exclusive
+creation and mode 0600. Existing files and symlinks are refused; parent
+directories must already exist. It performs no network requests.
 
 Flags follow `upload` using standard Go flag syntax. `--dry-run` is required;
 `--dry-run=false` is rejected. Source values are `all` (default), `claude`, and
@@ -50,6 +51,14 @@ Only root sessions count. Optional times are RFC3339 UTC observation bounds,
 not session start/end events. Missing fields are omitted, never inferred from
 filesystem times or installed binaries. Payloads exclude paths and content.
 
-Once extraction and writing are available, `text` stdout will show counts and
-identities; `json` stdout will match the request envelope. The output file will
-use exclusive creation with mode 0600 and refuse overwrite.
+`text` stdout shows discovered, emitted, duplicate, skipped, and failed counts,
+completeness, and sorted source/native IDs. `json` stdout matches the file bytes;
+its summary goes to stderr. Exact metadata copies of a source/ID emit once.
+Conflicting copies exclude the entire group and count all copies as failed.
+
+Malformed files and root/directory errors produce exit 1 with an incomplete
+summary, while valid sessions still appear in the output. Root errors do not
+increase failed file counts. Empty complete scans write `sessions: []` and exit 0.
+Reader memory scales with the largest JSONL record. Each history is read only
+up to its initial file size, excluding later appends. Output failures return 1;
+a stdout failure preserves the completed request file.

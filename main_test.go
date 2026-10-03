@@ -47,7 +47,6 @@ func TestRun(t *testing.T) {
 		{"empty claude home", []string{"sessions", "upload", "--dry-run", "--claude-home="}, 2, "", "--claude-home"},
 		{"empty codex home", []string{"sessions", "upload", "--dry-run", "--codex-home="}, 2, "", "--codex-home"},
 		{"positional argument", []string{"sessions", "upload", "--dry-run", "extra"}, 2, "", "unexpected argument"},
-		{"default upload", []string{"sessions", "upload", "--dry-run"}, 1, "", "extraction is not implemented"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,18 +64,13 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func TestUploadDoesNotCreateOutput(t *testing.T) {
-	for _, source := range []string{"all", "claude", "codex"} {
-		t.Run(source, func(t *testing.T) {
-			output := filepath.Join(t.TempDir(), "sessions.json")
-			var stdout, stderr bytes.Buffer
-			args := []string{"sessions", "upload", "--dry-run", "--source", source, "--format=json", "--output", output, "--claude-home", t.TempDir(), "--codex-home", t.TempDir()}
-			if got := run(args, &stdout, &stderr); got != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "extraction is not implemented") {
-				t.Fatalf("exit=%d stdout=%q stderr=%q", got, stdout.String(), stderr.String())
-			}
-			if _, err := os.Stat(output); !os.IsNotExist(err) {
-				t.Fatalf("output was created or cannot be checked: %v", err)
-			}
-		})
+func TestInvalidUploadDoesNotCreateOutput(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "sessions.json")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"sessions", "upload", "--source=other", "--output", output}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit=%d", code)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("invalid invocation created output: %v", err)
 	}
 }
