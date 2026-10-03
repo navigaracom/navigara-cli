@@ -86,12 +86,12 @@ func repositoryKey(value string) string {
 	}
 	host := strings.ToLower(u.Hostname())
 	for _, r := range u.Path {
-		if r == '\\' || unicode.IsControl(r) {
+		if r == '\\' || r == '@' || unicode.IsControl(r) {
 			return ""
 		}
 	}
 	path := strings.TrimSuffix(strings.ToLower(strings.Trim(u.EscapedPath(), "/")), ".git")
-	if host == "" || path == "" || strings.ContainsAny(host, "/\\@% ") {
+	if host == "" || path == "" || strings.HasSuffix(path, "/") || strings.ContainsAny(host, "/\\@% ") {
 		return ""
 	}
 	return host + "/" + path

@@ -87,6 +87,15 @@ func TestReadRepositoryURLPrivacy(t *testing.T) {
 		{"https://host/Org/Repo%5Cprivate", ""}, {"https://host/Org/Repo%0Aprivate", ""}, {"https://host/Org/Repo%00private", ""},
 		{"https://host/Org/Repo%3Fname", "host/org/repo%3fname"}, {"https://host/Org/Repo%23name", "host/org/repo%23name"},
 		{"https://host/Org%2FRepo.git", "host/org%2frepo"},
+		{"https://user:12/credential-marker@github.com/org/repo", ""},
+		{"https://user:12/credential-marker%40github.com/org/repo", ""},
+		{"https://github.com/org/repo@credential-marker", ""},
+		{"https://github.com/org/repo%40credential-marker", ""},
+		{"git@github.com:org/repo@credential-marker", ""},
+		{"git@github.com:org/repo%40credential-marker", ""},
+		{"https://github.com/org/.git", ""},
+		{"https://github.com/org/.git/", ""},
+		{"git@github.com:org/.git", ""},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			value, _ := json.Marshal(tc.input)
