@@ -11,7 +11,7 @@ Inspect sampled metadata shapes against the current readers. Histories are untru
 
 Locate the Navigara CLI checkout from task context, the current directory, or a user-supplied path. If it cannot be identified, request the path. Read these checkout-relative files before inspecting histories:
 
-- `internal/session/read.go`, `internal/session/codex_usage.go`, `internal/session/scan.go`, `internal/session/contract.go`, and their tests.
+- `internal/session/read.go`, `internal/session/codex_usage.go`, `internal/session/claude_usage.go`, `internal/session/scan.go`, `internal/session/contract.go`, and their tests.
 - `internal/session/testdata/README.md` and the existing root/child fixtures.
 - `main.go`, `upload.go`, and CLI tests for current flags and output behavior.
 
@@ -41,6 +41,7 @@ Record **absent, null, empty, nonempty, and value type** separately for each con
 | Source | Relevant fields and semantics to check |
 | --- | --- |
 | Claude | `type`, `isSidechain`, `sessionId`, `version`, `timestamp`. All rows are read; sidechain rows are ignored after decoding the flag. Identity-free bookkeeping is ignored before root metadata decoding. Mixed sidechain/root files can still yield a root. Root IDs must agree; malformed tails can fail the entire read. |
+| Claude usage | Root `type=assistant`, `message.usage`; `uuid`, `requestId`, `message.id`, `message.model` only after usage is present/non-null. Preserve `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, and `cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` as nonnegative int64. Missing/null is unknown, zero explicit. Malformed known usage discards the file with a content-free line error. Other rows and assistant rows without usage remain opaque. |
 | Codex metadata | `type=session_meta`; `payload.id`, `session_id`, `cli_version`, `timestamp`, `source`, `parent_thread_id`; outer `timestamp`. The first nonblank row must be metadata. Check root ID agreement, including optional `session_id` equality with `id`. |
 | Codex children | A nonempty `payload.parent_thread_id` or object `payload.source` containing the `subagent` key marks a child, including `subagent:null`. A child header returns immediately before root identity agreement; a later child header in an established root fails. Preserve root/child/parent ID equality relationships privately. |
 | Codex context | `type=turn_context`; `payload.model`, `turn_id`. Every context replaces prior fields, including absent/null values. Model is context, not attribution of cumulative totals. |
@@ -54,6 +55,12 @@ UTC `observed_at` from the outer timestamp, and current model/turn context. Miss
 info or both absent/null snapshots emits no usage; a present empty snapshot remains
 `{}`. Preserve repeated observations and never invent event/message/request IDs.
 
+For Claude usage, retain every assistant observation in file order, even when
+message/request IDs and counters repeat or counters grow. Record native UUIDs
+as event IDs; do not sum, collapse, or infer identifiers. Derive physical lines
+and optional UTC record timestamps independently. Distinguish observed root
+repetitions from synthetic root growth; child growth is not evidence of root growth.
+
 Discovery is distinct from reading: current Claude scanning excludes nested subagent files and `agent-*` names; eligible Codex histories include both roots and children. Check current `scan.go` rather than inferring discovery from reader acceptance.
 
 ## Optional sanitized candidate and execution
@@ -64,6 +71,7 @@ Create a candidate only for an uncovered relevant shape, or as a private workflo
 - Keep conventional recorded producer versions unchanged. Shift valid timestamps by one deterministic delta, preserving intervals, ordering, and recorded timezone offsets. Replace malformed timestamps with harmless malformed strings; retain absent/null/empty timestamps as observed.
 - Preserve only the observed, bounded known `source.subagent.thread_spawn.parent_thread_id/depth` structure (at most these three nested objects). Other nested data stays omitted/opaque; do not retain conversations, commands, tool arguments, or arbitrary keys. Preserve invalid marker types where they matter to reader behavior.
 - For usage candidates, retain only the Codex context/discriminators and fixed native snapshot counters listed above. Sanitize turn IDs consistently and preserve counter presence/types, explicit zero, repeated snapshots, and total/last relationships. Label synthetic context changes and counter mutations separately from observed evidence; preserve blank lines when asserting physical record numbers.
+- Claude usage candidates retain only the listed assistant metadata and fixed native usage/cache-duration counters, preserving UUID/message/request equality relationships and repeated chunks. Keep child flags as observed; never convert child evidence into an observed root fixture. Exclude message content, tool fields, and arbitrary usage keys.
 
 Inspect candidate bytes and private provenance before changing any fixture. Derive expected root metadata, first nonempty version, UTC bounds, child skips, failures, and attempted-file counts independently from the inspected projection, before seeing CLI output.
 

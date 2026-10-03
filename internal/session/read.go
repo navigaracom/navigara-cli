@@ -155,14 +155,17 @@ func Read(source string, r io.Reader) (Record, error) {
 		if addTimestamp(&result.Session, timestamp) != nil {
 			return fail("invalid timestamp")
 		}
+		var u *UsageObservation
 		if source == "codex" {
-			u, err := context.observe(b, kind, timestamp, line)
-			if err != nil {
-				return fail(err.Error())
-			}
-			if u != nil {
-				result.Session.UsageObservations = append(result.Session.UsageObservations, *u)
-			}
+			u, err = context.observe(b, kind, timestamp, line)
+		} else {
+			u, err = observeClaude(b, timestamp, line)
+		}
+		if err != nil {
+			return fail(err.Error())
+		}
+		if u != nil {
+			result.Session.UsageObservations = append(result.Session.UsageObservations, *u)
 		}
 	}
 	if result.Session.SessionID == "" {
