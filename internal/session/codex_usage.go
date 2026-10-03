@@ -11,7 +11,7 @@ type codexContext struct {
 	TurnID string `json:"turn_id"`
 }
 
-func (c *codexContext) observe(b []byte, kind, timestamp string, line int) (*UsageObservation, error) {
+func (c *codexContext) observe(b []byte, kind string, observedAt *time.Time, line int) (*UsageObservation, error) {
 	if kind != "turn_context" && kind != "event_msg" {
 		return nil, nil
 	}
@@ -60,14 +60,6 @@ func (c *codexContext) observe(b []byte, kind, timestamp string, line int) (*Usa
 	if info.Total == nil && info.Last == nil {
 		return nil, nil
 	}
-	u := &UsageObservation{RecordLine: line, Model: c.Model, TurnID: c.TurnID, TotalTokenUsage: info.Total, LastTokenUsage: info.Last}
-	if timestamp != "" {
-		t, err := time.Parse(time.RFC3339Nano, timestamp)
-		if err != nil {
-			return nil, fmt.Errorf("invalid timestamp")
-		}
-		t = t.UTC()
-		u.ObservedAt = &t
-	}
+	u := &UsageObservation{RecordLine: line, ObservedAt: observedAt, Model: c.Model, TurnID: c.TurnID, TotalTokenUsage: info.Total, LastTokenUsage: info.Last}
 	return u, nil
 }

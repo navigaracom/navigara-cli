@@ -28,15 +28,19 @@ func TestReadRepositorySyntheticChanges(t *testing.T) {
 		if source == "codex" {
 			input = `{"type":"session_meta","payload":{"id":"root"}}` + "\n"
 		}
-		for _, context := range []string{`"main"`, `null`, `"main"`, `"next"`, `""`, `""`, `"main"`} {
+		for i, context := range []string{`"main"`, `null`, `"main"`, `"next"`, `""`, `""`, `"main"`} {
+			timestamp := "2026-01-02T02:00:00+02:00"
+			if i == 2 {
+				timestamp = "2026-01-02T02:00:01+02:00"
+			}
 			if source == "codex" {
 				git := `{"branch":` + context + `}`
 				if context == "null" {
 					git = "null"
 				}
-				input += `{"type":"session_meta","timestamp":"2026-01-02T02:00:00+02:00","payload":{"id":"root","git":` + git + `}}` + "\n\n"
+				input += `{"type":"session_meta","timestamp":"` + timestamp + `","payload":{"id":"root","git":` + git + `}}` + "\n\n"
 			} else {
-				input += `{"sessionId":"root","timestamp":"2026-01-02T02:00:00+02:00","gitBranch":` + context + `}` + "\n\n"
+				input += `{"sessionId":"root","timestamp":"` + timestamp + `","gitBranch":` + context + `}` + "\n\n"
 			}
 		}
 		got, err := Read(source, strings.NewReader(input))

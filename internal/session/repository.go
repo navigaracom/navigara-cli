@@ -10,7 +10,7 @@ import (
 	"unicode"
 )
 
-func observeRepository(b []byte, source, kind, timestamp string, line int) (*RepositoryObservation, error) {
+func observeRepository(b []byte, source, kind string, observedAt *time.Time, line int) (*RepositoryObservation, error) {
 	var context RepositoryObservation
 	if source == "claude_code" {
 		var row struct {
@@ -50,14 +50,7 @@ func observeRepository(b []byte, source, kind, timestamp string, line int) (*Rep
 		context.Branch, context.CommitHash, context.RepositoryURL = fields.Branch, fields.Commit, repositoryKey(fields.URL)
 	}
 	context.RecordLine = line
-	if timestamp != "" {
-		t, err := time.Parse(time.RFC3339Nano, timestamp)
-		if err != nil {
-			return nil, fmt.Errorf("invalid timestamp")
-		}
-		t = t.UTC()
-		context.ObservedAt = &t
-	}
+	context.ObservedAt = observedAt
 	return &context, nil
 }
 
