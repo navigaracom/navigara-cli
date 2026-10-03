@@ -49,10 +49,12 @@ jobs:
             GOOS="$os" GOARCH="$target_arch" go build -o "$RUNNER_TEMP/navigara-$os-$target_arch" .
           done
           output="$RUNNER_TEMP/startup-output"
-          "$RUNNER_TEMP/navigara-$os-$arch" > "$output" 2>&1
-          if [ -s "$output" ]; then
-            printf 'Native startup unexpectedly emitted output:\n'
+          errors="$RUNNER_TEMP/startup-errors"
+          "$RUNNER_TEMP/navigara-$os-$arch" --help > "$output" 2> "$errors"
+          if ! grep -q 'Usage: navigara' "$output" || [ -s "$errors" ]; then
+            printf 'Native help did not match the CLI contract:\n'
             cat "$output"
+            cat "$errors"
             exit 1
           fi
 
