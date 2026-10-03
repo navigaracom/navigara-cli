@@ -1,21 +1,32 @@
 # Navigara CLI
 
-Prepare local Claude Code and Codex session inventories for Navigara.
+Export local Claude Code and Codex token usage as OTLP/HTTP JSON for Navigara.
 
 ```sh
 navigara --help
 navigara --version
-navigara sessions upload --dry-run --source all --format json --output ./navigara-sessions.json
+navigara sessions upload --source all --output ./navigara-backfill
 ```
 
-`sessions upload` scans local histories and writes a request with exclusive
-creation and mode 0600. Existing files and symlinks are refused; parent
-directories must already exist. It performs no network requests.
+`sessions upload` creates a new directory with mode 0700, containing bounded
+`metrics-000001.json`, `metrics-000002.json`, … request bodies with mode 0600.
+Existing output paths and symlinks are refused; parent directories must exist.
+Each body is at most 4 MiB and can be POSTed unchanged to the existing
+`/otlp/v1/metrics` endpoint. The command performs no network requests or authentication. Token metrics are
+supported; session events are not yet exported.
 
-Flags follow `upload` using standard Go flag syntax. `--dry-run` is required;
-`--dry-run=false` is rejected. Source values are `all` (default), `claude`, and
-`codex`; format values are `text` (default) and `json`. Output defaults to
-`./navigara-sessions.json`.
+```sh
+curl --fail -H "Authorization: Bearer $NAVIGARA_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @navigara-backfill/metrics-000001.json \
+  "$NAVIGARA_URL/otlp/v1/metrics"
+```
+
+Send each generated body separately using credentials accepted by that endpoint.
+
+Flags follow `upload` using standard Go flag syntax. `--dry-run` defaults to true;
+`--dry-run=false` is unsupported. Source values are `all` (default), `claude`, and
+`codex`. Output defaults to `./navigara-backfill`.
 
 `--claude-home DIR` and `--codex-home DIR` override tool homes. Claude histories
 live under `projects/`; Codex histories live under `sessions/` and
@@ -26,68 +37,30 @@ are invalid. Help and version use stdout;
 diagnostics use stderr. Exit codes: 0 success, 1 extraction/output failure or
 incomplete scan, 2 invalid invocation.
 
-The request contract uses `schema_version: 2` and a `sessions` array, including
-`[]` for an empty inventory. This illustrative envelope contains only session
-identity and optional observation bounds/version. Both readers also extract
-native usage observations when recorded:
+Claude message counters become delta sums; identical repeated snapshots contribute
+once, and conflicting snapshots remain ambiguous. Codex requires adjacent totals
+whose difference matches the current last-usage snapshot, with unchanged model
+and turn context. Its first snapshot is a baseline and emits no points. Missing
+context, resets, unsafe values, and ambiguous usage are omitted and counted. Explicit zeros
+are retained. No cumulative start time, identity, cost, or complete billing
+coverage is inferred. OTLP bodies contain only mapped usage and recorded repository
+URLs, excluding local paths and message content.
+Overlap with previously ingested live telemetry is not yet reconciled.
 
-```json
-{
-  "schema_version": 2,
-  "sessions": [
-    {
-      "source": "claude_code",
-      "session_id": "native-session-id",
-      "first_observed_at": "2026-10-03T08:00:00Z",
-      "last_observed_at": "2026-10-03T08:05:00Z",
-      "source_version": "recorded-version"
-    }
-  ]
-}
-```
+Recorded repository URLs are attached to usage when available. Credentials,
+queries, and local paths are stripped. No current git state is inferred.
 
-CLI `claude` maps to payload `claude_code`; `codex` maps to `codex`. IDs remain
-native opaque values; local ID agreement does not establish OTel compatibility.
-Only root sessions count. Optional times are RFC3339 UTC observation bounds,
-not session start/end events. Missing fields are omitted, never inferred from
-filesystem times or installed binaries. Payloads exclude local paths and content.
-
-The v2 contract also supports optional `usage_observations` in recorded order.
-Each observation has a one-based physical `record_line`, optional recorded
-`observed_at`, native event/message/request/turn IDs, and model context. Claude
-`message_usage` preserves input/output and cache counters, including native cache
-creation duration counters. Codex `total_token_usage` and `last_token_usage`
-preserve native snapshots. Repeated observations are retained and never summed;
-model context does not attribute cumulative totals to a model. Counter absence
-means unknown, while zero is explicit. An omitted observation array means usage
-is unavailable, not zero. Usage does not imply complete billing or child coverage.
-
-Optional `repository_observations` preserve recorded context changes with physical
-`record_line`, optional UTC `observed_at`, and optional `branch`, `commit_hash`,
-`repository_url`. Claude reads root `gitBranch`; Codex reads metadata `payload.git`
-and uses the outer timestamp, rather than its creation timestamp. Consecutive
-identical contexts are omitted; missing fields never inherit prior context.
-Absent/null context emits nothing; explicit empty branches or git objects can
-record a clear/unknown context. No current git state or local paths are inferred.
-Repository URLs become lowercase host/path keys from HTTP(S), SSH, git URLs or
-SCP remotes, stripping credentials, ports, query/fragment, `.git`, and trailing
-slashes. Local paths and unsupported strings are omitted while other context is
-retained. Bare `host:path` follows SCP semantics; credential-shaped paths are
-rejected. Provider alias canonicalization is a subsequent backend responsibility.
-Reserved path escapes remain escaped. Decoded backslashes, controls, `@`, or `%`
-in paths/query/fragments are unsupported; nested escapes are rejected. Proper
-URL userinfo is stripped. Empty repository segments after stripping `.git` are rejected.
-
-`text` stdout shows discovered, emitted, duplicate, skipped, and failed counts,
-completeness, and sorted source/native IDs. `json` stdout matches the file bytes;
-its summary goes to stderr. Copies with the same complete emitted payload for a
-source/ID emit once.
-Conflicting copies exclude the entire group and count all copies as failed.
+Stdout shows discovered and selected session counts, duplicate/skipped/failed
+counts, completeness, sorted source/native IDs, point and batch counts, and
+mapped/repeated/ambiguous/unmapped observation counts. Native IDs are not invented.
+Copies with identical complete recorded metadata for a source/ID count once;
+conflicting copies exclude the entire group and count all copies as failed.
 
 Malformed files and root/directory errors produce exit 1 with an incomplete
-summary, while valid sessions still appear in the output. Root errors do not
-increase failed file counts. Empty complete scans write `sessions: []` and exit 0.
-Memory scales with the largest JSONL record, retained observations, and final
-envelope. Each history is read only up to its initial file size, excluding later
-appends. Output failures return 1;
-a stdout failure preserves the completed request file.
+summary, while valid usage is still exported. Root errors do not increase failed
+file counts. Empty complete scans create an empty output directory and exit 0.
+Memory scales with retained observations and bounded encoding batches. Each
+history is read only up to its initial size, excluding later appends. Output
+failures return 1; completed batches remain if a later batch fails. A failed
+individual file write removes that incomplete file. Stdout failure preserves
+completed output.
