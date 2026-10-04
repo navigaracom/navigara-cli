@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -301,8 +300,8 @@ func (c *commitIndex) between(cwd string, from, to time.Time) []string {
 	list, ok := c.byRepo[key]
 	if !ok {
 		// Authors write their email in any case; match it literally, ignoring case.
-		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--regexp-ignore-case",
-			"--author="+regexp.QuoteMeta(c.email), "--format=%H %ct").Output()
+		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--regexp-ignore-case", "--fixed-strings",
+			"--author="+c.email, "--format=%H %ct").Output()
 		if err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				sha, ts, ok := strings.Cut(line, " ")
