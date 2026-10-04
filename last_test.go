@@ -44,6 +44,27 @@ func TestLastInvalidCreatesNoOutput(t *testing.T) {
 	}
 }
 
+func TestLastWiresRunToMappedFixturePoints(t *testing.T) {
+	for _, test := range []struct {
+		last, summary string
+	}{
+		{"1h", "points=4 batches=1 mapped=2 repeated=1 ambiguous=0 unmapped=1 filtered=6"},
+		{"3h", "points=10 batches=2 mapped=2 repeated=1 ambiguous=0 unmapped=1 filtered=0"},
+		{"1d", "points=10 batches=2 mapped=2 repeated=1 ambiguous=0 unmapped=1 filtered=0"},
+	} {
+		t.Run(test.last, func(t *testing.T) {
+			home := t.TempDir()
+			claude, codex := filepath.Join(home, "claude"), filepath.Join(home, "codex")
+			writeRecentUsageFixtures(t, claude, codex, time.Now().UTC())
+			output := filepath.Join(home, "output")
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"sessions", "upload", "--last", test.last, "--output", output, "--claude-home", claude, "--codex-home", codex}, &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), test.summary) {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
 func TestLastFiltersMappedFixturePoints(t *testing.T) {
 	var records []session.Record
 	for _, source := range []string{"claude", "codex"} {
@@ -79,4 +100,28 @@ func TestFilterPointsIsInclusive(t *testing.T) {
 	if filtered != 2 || len(kept) != 3 || !kept[0].Time.Equal(start) || !kept[2].Time.Equal(start.Add(2*time.Hour)) {
 		t.Fatalf("kept=%+v filtered=%d", kept, filtered)
 	}
+}
+
+func writeRecentUsageFixtures(t *testing.T, claudeHome, codexHome string, now time.Time) {
+	t.Helper()
+	claude, err := os.ReadFile(filepath.Join("internal", "session", "testdata", "claude-usage.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	codex, err := os.ReadFile(filepath.Join("internal", "session", "testdata", "codex-usage.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrite := func(data []byte, old string, stamp time.Time) []byte {
+		return bytes.ReplaceAll(data, []byte(old), []byte(stamp.Format(time.RFC3339Nano)))
+	}
+	claude = rewrite(claude, "2026-11-08T16:10:04.225Z", now.Add(-time.Minute))
+	claude = rewrite(claude, "2026-11-08T16:10:05.707Z", now.Add(-30*time.Second))
+	codex = rewrite(codex, "2026-11-08T09:06:40.678Z", now.Add(-2*time.Hour-7*time.Minute))
+	codex = rewrite(codex, "2026-11-08T09:10:13.870Z", now.Add(-2*time.Hour-3*time.Minute))
+	codex = rewrite(codex, "2026-11-08T09:10:14.143Z", now.Add(-2*time.Hour-2*time.Minute))
+	codex = rewrite(codex, "2026-11-08T09:10:29.108Z", now.Add(-2*time.Hour-time.Minute))
+	codex = rewrite(codex, "2026-11-08T09:10:42.921Z", now.Add(-2*time.Hour))
+	putHistory(t, filepath.Join(claudeHome, "projects", "example", "claude.jsonl"), claude)
+	putHistory(t, filepath.Join(codexHome, "sessions", "codex.jsonl"), codex)
 }

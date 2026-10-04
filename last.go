@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -9,24 +9,19 @@ import (
 	"github.com/navigaracom/navigara-cli/internal/otel"
 )
 
+var errLast = errors.New("--last must be a positive duration")
+
 func parseLast(value string) (time.Duration, error) {
-	if value == "" {
-		return 0, fmt.Errorf("--last must be a positive duration")
-	}
-	if strings.HasSuffix(value, "d") {
-		digits := strings.TrimSuffix(value, "d")
-		if digits == "" || strings.Trim(digits, "0123456789") != "" {
-			return 0, fmt.Errorf("--last must be a positive duration")
-		}
+	if digits, ok := strings.CutSuffix(value, "d"); ok {
 		days, err := strconv.ParseUint(digits, 10, 64)
 		if err != nil || days == 0 || days > uint64(time.Duration(1<<63-1)/(24*time.Hour)) {
-			return 0, fmt.Errorf("--last must be a positive duration")
+			return 0, errLast
 		}
 		return time.Duration(days) * 24 * time.Hour, nil
 	}
 	duration, err := time.ParseDuration(value)
 	if err != nil || duration <= 0 {
-		return 0, fmt.Errorf("--last must be a positive duration")
+		return 0, errLast
 	}
 	return duration, nil
 }
