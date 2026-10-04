@@ -367,6 +367,7 @@ func TestCommitCalls(t *testing.T) {
 		{`git -C /other/repo commit -m fix`, []commitCall{{"/other/repo", "fix"}}},
 		{`git -C sub -c user.name=x commit -m x`, []commitCall{{"/repo/sub", "x"}}},
 		{`git commit -m one && git commit --allow-empty -m two`, []commitCall{{"/repo", "one"}, {"/repo", "two"}}},
+		{`git commit -m fix && git commit --amend --no-edit`, []commitCall{{"/repo", "fix"}}},
 		{`git merge main && git rebase main`, nil},
 		{`git status && echo git commit`, nil},
 	} {
@@ -528,5 +529,35 @@ func TestBuildClaudeKeepsACommitWhenALaterStepFails(t *testing.T) {
 	results := events(s, "tool_result")
 	if len(results) != 1 || results[0].Attrs["vcs.ref.head.revision"] != found[0].SHA || len(dirs) != 1 || dirs[0] != "/repos/my-module" {
 		t.Errorf("result = %v, lookups in %v; want the commit made before the push failed", results, dirs)
+	}
+}
+
+func TestBuildClaudeRevisionIsTheLastStepsCommit(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": `git commit -m a && git commit -m "$MSG"`}),
+			toolUse("t2", "Bash", map[string]any{"command": `git commit -m fix && git commit --amend --no-edit`})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	found := []Commit{
+		{SHA: strings.Repeat("a", 40), Subject: "a", Reachable: true},
+		{SHA: strings.Repeat("d", 40), Subject: "dynamic", Reachable: true},
+		{SHA: strings.Repeat("0", 40), Subject: "fix"},
+		{SHA: strings.Repeat("f", 40), Subject: "fix", Reachable: true},
+	}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return found }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]any{}
+	for _, e := range events(s, "tool_result") {
+		got[e.Attrs["tool_use_id"].(string)] = e.Attrs["vcs.ref.head.revision"]
+	}
+	if got["t1"] != nil || got["t2"] != strings.Repeat("f", 40) {
+		t.Errorf("revisions = %v; want none when the last message is unknown, and the amended commit", got)
 	}
 }

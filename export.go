@@ -279,8 +279,8 @@ type commit struct {
 }
 
 // commitIndex lists the signed-in user's commits per repository, once, from local refs; a
-// repository's worktrees share them, so a commit made in another worktree is found too. Only
-// reachable commits count: an amend or rebase replaces the commit a session first made.
+// repository's worktrees share them, so a commit made in another worktree is found too. The reflog
+// keeps commits of deleted branches; Reachable tells an amended commit from its replacement.
 type commitIndex struct {
 	email  string
 	byRepo map[string][]commit
@@ -300,8 +300,13 @@ func (c *commitIndex) between(cwd string, from, to time.Time) []telemetry.Commit
 	}
 	list, ok := c.byRepo[key]
 	if !ok {
-		// Authors write their email in any case; match it literally, ignoring case.
-		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--format=%H%x1f%ct%x1f%ae%x1f%s").Output()
+		reachable := map[string]bool{}
+		if out, err := exec.Command("git", "-C", cwd, "rev-list", "--all").Output(); err == nil {
+			for _, sha := range strings.Fields(string(out)) {
+				reachable[sha] = true
+			}
+		}
+		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--format=%H%x1f%ct%x1f%ae%x1f%s").Output()
 		if err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				fields := strings.Split(line, "\x1f")
@@ -309,7 +314,8 @@ func (c *commitIndex) between(cwd string, from, to time.Time) []telemetry.Commit
 					continue
 				}
 				if secs, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
-					list = append(list, commit{at: time.Unix(secs, 0).UTC(), Commit: telemetry.Commit{SHA: fields[0], Subject: fields[3]}})
+					list = append(list, commit{at: time.Unix(secs, 0).UTC(),
+						Commit: telemetry.Commit{SHA: fields[0], Subject: fields[3], Reachable: reachable[fields[0]]}})
 				}
 			}
 		}

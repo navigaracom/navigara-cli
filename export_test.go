@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/navigaracom/navigara-cli/internal/telemetry"
 )
 
 // fixtureHomes writes two Claude Code sessions and a ~/.claude.json with the signed-in account.
@@ -190,7 +192,47 @@ func TestCommitIndexKeepsTheAmendedCommit(t *testing.T) {
 	idx := &commitIndex{email: "dev@example.com", byRepo: map[string][]commit{}}
 	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
 	got := idx.between(repo, at.Add(-time.Second), at.Add(time.Second))
-	if len(got) != 1 || got[0].SHA != head {
-		t.Fatalf("commits = %v, want only the amended head %s", got, head)
+	reachable := 0
+	for _, c := range got {
+		if c.Reachable {
+			reachable++
+			if c.SHA != head {
+				t.Errorf("reachable commit %s, want the amended head %s", c.SHA, head)
+			}
+		}
+	}
+	if len(got) != 2 || reachable != 1 {
+		t.Fatalf("commits = %+v; want the replaced commit and the amended head, only the head reachable", got)
+	}
+}
+
+func TestCommitIndexKeepsADeletedBranchCommit(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_EMAIL=dev@example.com",
+			"GIT_AUTHOR_NAME=Dev", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "base", "--date=2026-09-01T10:00:00Z")
+	git("checkout", "-q", "-b", "feature")
+	git("commit", "-q", "--allow-empty", "-m", "work")
+	git("checkout", "-q", "main")
+	git("branch", "-q", "-D", "feature")
+	idx := &commitIndex{email: "dev@example.com", byRepo: map[string][]commit{}}
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	got := idx.between(repo, at.Add(-time.Second), at.Add(time.Second))
+	var work *telemetry.Commit
+	for i := range got {
+		if got[i].Subject == "work" {
+			work = &got[i]
+		}
+	}
+	if work == nil || work.Reachable {
+		t.Fatalf("commits = %+v, want the deleted branch's commit, unreachable", got)
 	}
 }
