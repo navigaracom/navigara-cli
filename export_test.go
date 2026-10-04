@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fixtureHomes writes two Claude Code sessions and a ~/.claude.json with the signed-in account.
@@ -139,5 +141,29 @@ func TestUploadSkipsASourceWithoutItsOwnEmail(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "codex-1") || !strings.Contains(stdout.String(), "claude_code") {
 		t.Errorf("stdout = %q; want Claude Code sessions only", stdout.String())
+	}
+}
+
+func TestCommitIndexMatchesAuthorEmailInAnyCase(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_EMAIL=Dev.Name+x@Example.com", "GIT_COMMITTER_EMAIL=dev@example.com",
+			"GIT_AUTHOR_NAME=Dev", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "one")
+	idx := &commitIndex{email: "dev.name+x@example.com", byRepo: map[string][]commit{}}
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	if got := idx.between(repo, at.Add(-time.Second), at.Add(time.Second)); len(got) != 1 {
+		t.Fatalf("commits = %v, want the one commit whose author email differs only in case", got)
+	}
+	other := &commitIndex{email: "devxname+x@example.com", byRepo: map[string][]commit{}}
+	if got := other.between(repo, at.Add(-time.Second), at.Add(time.Second)); len(got) != 0 {
+		t.Fatalf("commits = %v; the email must match literally, not as a pattern", got)
 	}
 }

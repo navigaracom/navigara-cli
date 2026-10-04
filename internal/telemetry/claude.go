@@ -541,7 +541,7 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 		_ = json.Unmarshal(tool.input, &input)
 		if strings.Contains(input.Command, "git commit") || strings.Contains(input.Command, "git merge") ||
 			strings.Contains(input.Command, "git cherry-pick") || strings.Contains(input.Command, "git rebase") {
-			commits = s.commits(r.Cwd, tool.at.Add(-time.Second), r.at.Add(time.Second))
+			commits = s.commits(commandDir(r.Cwd, input.Command), tool.at.Add(-time.Second), r.at.Add(time.Second))
 		}
 	}
 	if len(commits) > 0 {
@@ -890,4 +890,41 @@ func firstAfter(rows []parsedRow, t time.Time) time.Time {
 		}
 	}
 	return t
+}
+
+// commandDir is the directory a shell command's git step runs in: the recorded working directory,
+// moved by any "cd DIR" before it and by "git -C DIR".
+func commandDir(cwd, command string) string {
+	dir := cwd
+	move := func(to string) {
+		to = strings.Trim(to, `"'`)
+		switch {
+		case to == "" || to == "-":
+		case strings.HasPrefix(to, "~/"):
+			if home, err := os.UserHomeDir(); err == nil {
+				dir = filepath.Join(home, to[2:])
+			}
+		case filepath.IsAbs(to):
+			dir = filepath.Clean(to)
+		default:
+			dir = filepath.Join(dir, to)
+		}
+	}
+	for _, step := range strings.FieldsFunc(command, func(r rune) bool { return r == '&' || r == ';' || r == '\n' || r == '|' }) {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(step), "cd "); ok {
+			move(strings.TrimSpace(rest))
+			continue
+		}
+		fields := strings.Fields(step)
+		for i := 0; i+2 < len(fields); i++ {
+			if fields[i] == "git" && fields[i+1] == "-C" {
+				move(fields[i+2])
+				return dir
+			}
+		}
+		if len(fields) > 0 && fields[0] == "git" {
+			return dir
+		}
+	}
+	return dir
 }

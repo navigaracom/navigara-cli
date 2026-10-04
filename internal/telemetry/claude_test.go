@@ -351,3 +351,18 @@ func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
 		t.Errorf("commit window = %v..%v, want the tool call with a second of slack", asked[0], asked[1])
 	}
 }
+
+func TestCommandDir(t *testing.T) {
+	for _, tc := range []struct{ command, want string }{
+		{"git commit -m x", "/repo"},
+		{"cd ../other && git add -A && git commit -m x", "/other"},
+		{"cd /abs/wt; git commit -m x", "/abs/wt"},
+		{"git -C sub commit -m x", "/repo/sub"},
+		{`cd "../with quotes" && git commit`, "/with quotes"},
+		{"git commit -m x && cd /later", "/repo"},
+	} {
+		if got := commandDir("/repo", tc.command); got != tc.want {
+			t.Errorf("commandDir(%q) = %q, want %q", tc.command, got, tc.want)
+		}
+	}
+}
