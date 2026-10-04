@@ -120,3 +120,24 @@ func TestUploadNeedsAnIdentity(t *testing.T) {
 		t.Fatalf("output created without an identity")
 	}
 }
+
+func TestUploadSkipsASourceWithoutItsOwnEmail(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	rollout := filepath.Join(codexHome, "sessions", "2026", "10", "01", "rollout-2026-10-01T10-00-00-c1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(rollout), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	meta := `{"timestamp":"2026-10-01T10:00:00Z","type":"session_meta","payload":{"id":"codex-1","originator":"codex-tui"}}` + "\n"
+	if err := os.WriteFile(rollout, []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
+		"--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stderr.String(), "skipping Codex") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "codex-1") || !strings.Contains(stdout.String(), "claude_code") {
+		t.Errorf("stdout = %q; want Claude Code sessions only", stdout.String())
+	}
+}

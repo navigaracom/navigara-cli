@@ -43,6 +43,8 @@ type Session struct {
 	Missing map[string]int
 
 	seen *seen
+	// lastSettled is the end of the last process run a cost-state row settled.
+	lastSettled time.Time
 }
 
 // seen dedupes records across a session's transcripts: subagent and fork transcripts repeat

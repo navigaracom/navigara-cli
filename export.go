@@ -25,9 +25,22 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	if opts.email != "" {
 		ident = ident.WithEmail(opts.email)
 	}
-	if ident.Email == "" && ident.CodexEmail == "" && !opts.allowAnonymous {
+	// Each tool needs its own signed-in email: one tool's account says nothing about the other's.
+	claudeOK := ident.Email != "" || opts.allowAnonymous
+	codexOK := ident.CodexEmail != "" || opts.allowAnonymous
+	wantClaude := opts.source == "all" || opts.source == "claude"
+	wantCodex := opts.source == "all" || opts.source == "codex"
+	if (!wantClaude || !claudeOK) && (!wantCodex || !codexOK) {
 		fmt.Fprintln(stderr, "navigara: no signed-in email found; pass --email or --allow-anonymous")
 		return 2
+	}
+	if wantClaude && !claudeOK {
+		fmt.Fprintln(stderr, "navigara: skipping Claude Code: no signed-in email; pass --email or --allow-anonymous")
+		wantClaude = false
+	}
+	if wantCodex && !codexOK {
+		fmt.Fprintln(stderr, "navigara: skipping Codex: no signed-in email; pass --email or --allow-anonymous")
+		wantCodex = false
 	}
 
 	pinned := map[string]bool{}
@@ -50,7 +63,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 			sessions = append(sessions, s)
 		}
 	}
-	if opts.source == "all" || opts.source == "claude" {
+	if wantClaude {
 		scan := session.Scan("claude", opts.claudeHome, opts.codexHome)
 		for _, err := range scan.Errors {
 			fmt.Fprintln(stderr, "navigara:", err)
@@ -66,7 +79,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 			keep(s, err, id)
 		}
 	}
-	if opts.source == "all" || opts.source == "codex" {
+	if wantCodex {
 		seen := map[string]bool{}
 		for _, path := range telemetry.CodexRollouts(codexHome) {
 			id := telemetry.CodexSessionID(path)

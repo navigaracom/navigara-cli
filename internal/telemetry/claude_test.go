@@ -224,6 +224,9 @@ func TestBuildClaudeEstimatesWithoutCostState(t *testing.T) {
 	if !s.Estimated {
 		t.Fatal("cost not marked estimated")
 	}
+	if starts := events(s, "session_start"); len(starts) != 1 || !starts[0].Time.Equal(time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("session start = %v, want the first row", starts)
+	}
 	var subOutput float64
 	for _, e := range events(s, "api_request") {
 		switch e.Attrs["request_id"] {
@@ -302,5 +305,9 @@ func TestBuildClaudeSettlesEachProcessRun(t *testing.T) {
 	}
 	if !s.Estimated {
 		t.Error("a resumed run without its own cost-state is estimated")
+	}
+	starts := events(s, "session_start")
+	if len(starts) != 2 || !starts[1].Time.Equal(time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("session starts = %v, want the first process's start and the resumed run's first row", starts)
 	}
 }

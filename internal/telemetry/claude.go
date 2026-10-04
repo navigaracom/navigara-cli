@@ -266,13 +266,8 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 		s.reconcileCost(rows)
 	}
 	if s.Estimated {
-		// Without a cost-state row, the first recorded row is the closest start the transcript has.
-		for _, r := range rows {
-			if !r.at.IsZero() && r.at.Before(s.Start) {
-				s.event("session_start", r.at, map[string]any{})
-				break
-			}
-		}
+		// A process without a cost-state row has no recorded start: its first row is the closest.
+		s.event("session_start", firstAfter(rows, s.lastSettled), map[string]any{})
 	}
 	s.mergePoints()
 	s.sortRecords()
@@ -716,6 +711,7 @@ func (s *Session) reconcileCost(rows []parsedRow) {
 	}
 	if s.End.After(from) {
 		s.Estimated = true
+		s.lastSettled = from
 	}
 }
 
@@ -855,4 +851,14 @@ func denied(b claudeBlock) bool {
 	return strings.Contains(text, "Permission for this action was denied") ||
 		strings.Contains(text, "doesn't want to proceed with this tool use") ||
 		strings.Contains(text, "tool use was rejected")
+}
+
+// firstAfter is the time of the first timestamped row after t.
+func firstAfter(rows []parsedRow, t time.Time) time.Time {
+	for _, r := range rows {
+		if !r.at.IsZero() && r.at.After(t) {
+			return r.at
+		}
+	}
+	return t
 }
