@@ -438,6 +438,7 @@ func TestCommitSubject(t *testing.T) {
 		{"git commit -m 'feat: x\nmore detail\n\nBody.'", "feat: x more detail"},
 		{"git commit -q -F - <<'EOF' 2>&1 | tail -3\nfeat: from stdin\n\nBody.\nEOF", "feat: from stdin"},
 		{"git commit -q -am 'fix: all'", "fix: all"},
+		{"git -C /repos/my-module commit -m fix", "fix"},
 	} {
 		if got := commitSubject(tc.command); got != tc.want {
 			t.Errorf("commitSubject(%q) = %q, want %q", tc.command, got, tc.want)
@@ -498,5 +499,31 @@ func TestBuildClaudeGivesAParallelMergeNoCommits(t *testing.T) {
 	}
 	if len(got) != 1 || got["t2"] != "1" {
 		t.Errorf("revisions per call = %v; want only the commit's own revision on t2", got)
+	}
+}
+
+func TestBuildClaudeKeepsACommitWhenALaterStepFails(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	failed := toolResult("t1")
+	failed["is_error"] = true
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit and push"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git -C /repos/my-module commit -m fix && git push"})),
+		user("2026-10-01T10:00:09Z", "p1", []any{failed}),
+	)
+	found := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix"}}
+	var dirs []string
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(cwd string, _, _ time.Time) []Commit {
+		dirs = append(dirs, cwd)
+		return found
+	}}, Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := events(s, "tool_result")
+	if len(results) != 1 || results[0].Attrs["vcs.ref.head.revision"] != found[0].SHA || len(dirs) != 1 || dirs[0] != "/repos/my-module" {
+		t.Errorf("result = %v, lookups in %v; want the commit made before the push failed", results, dirs)
 	}
 }

@@ -535,7 +535,8 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 		attrs["vcs.ref.head.name"] = r.GitBranch
 	}
 	var commits []string
-	if tool.name == "Bash" && s.commits != nil && !b.IsError {
+	// A later step can fail after the commit; a commit that did not happen simply matches nothing.
+	if tool.name == "Bash" && s.commits != nil {
 		var input struct {
 			Command string `json:"command"`
 		}
@@ -963,14 +964,18 @@ func moveDir(base, to string) string {
 // "$(cat <<'EOF' ... EOF)" message, and "-F -" fed by a heredoc. It is "" when the message is not a
 // literal the command shows.
 func commitSubject(args string) string {
-	fields := strings.Fields(args)
+	spans := wordSpan.FindAllStringIndex(args, -1)
+	fields := make([]string, len(spans))
+	for i, sp := range spans {
+		fields[i] = args[sp[0]:sp[1]]
+	}
 	for i, f := range fields {
 		switch {
 		case (f == "-F" || f == "--file") && i+1 < len(fields) && fields[i+1] == "-", f == "--file=-":
 			return subjectOf(heredocBody(args))
 		case f == "-m" || f == "--message" || strings.HasPrefix(f, "--message=") ||
 			(len(f) > 2 && f[0] == '-' && f[1] != '-' && strings.HasSuffix(f, "m")):
-			at := strings.Index(args, f) + len(f)
+			at := spans[i][1]
 			rest := strings.TrimLeft(args[at:], " =")
 			if strings.HasPrefix(f, "--message=") {
 				rest = strings.TrimPrefix(f, "--message=") + args[at:]
@@ -992,6 +997,8 @@ func subjectOf(msg string) string {
 	paragraph, _, _ := strings.Cut(strings.TrimSpace(msg), "\n\n")
 	return strings.Join(strings.Fields(paragraph), " ")
 }
+
+var wordSpan = regexp.MustCompile(`\S+`)
 
 var heredocStart = regexp.MustCompile(`<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
 
