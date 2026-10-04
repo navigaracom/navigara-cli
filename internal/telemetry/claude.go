@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -539,8 +540,8 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 			Command string `json:"command"`
 		}
 		_ = json.Unmarshal(tool.input, &input)
-		if dir, single, ok := commitStep(r.Cwd, input.Command); ok {
-			commits = s.claimCommits(s.commits(dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), commitSubject(input.Command), single)
+		for _, call := range commitCalls(r.Cwd, input.Command) {
+			commits = append(commits, s.claimCommit(s.commits(call.dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), call.subject)...)
 		}
 	}
 	if len(commits) > 0 {
@@ -891,110 +892,154 @@ func firstAfter(rows []parsedRow, t time.Time) time.Time {
 	return t
 }
 
-// committingSubcommands create commits.
-var committingSubcommands = map[string]bool{"commit": true, "merge": true, "cherry-pick": true, "rebase": true, "revert": true, "am": true}
+// commitCall is one "git commit" in a shell command: where it runs and its message's subject.
+type commitCall struct{ dir, subject string }
 
-// commitStep finds the first step of a shell command that creates commits and the directory it
-// runs in: the recorded working directory, moved by every "cd DIR" before it and by "git -C DIR".
-func commitStep(cwd, command string) (dir string, single bool, ok bool) {
-	dir = cwd
-	move := func(base, to string) string {
-		to = strings.Trim(to, `"'`)
-		switch {
-		case to == "" || to == "-":
-			return base
-		case strings.HasPrefix(to, "~/"):
-			if home, err := os.UserHomeDir(); err == nil {
-				return filepath.Join(home, to[2:])
-			}
-			return base
-		case filepath.IsAbs(to):
-			return filepath.Clean(to)
-		}
-		return filepath.Join(base, to)
-	}
-	for _, step := range strings.FieldsFunc(command, func(r rune) bool { return r == '&' || r == ';' || r == '\n' || r == '|' }) {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(step), "cd "); ok {
-			dir = move(dir, strings.TrimSpace(rest))
-			continue
-		}
-		fields := strings.Fields(step)
-		if len(fields) == 0 || fields[0] != "git" {
-			continue
-		}
-		at := dir
-		// Skip global options to reach the subcommand; -C moves this step only.
-		for i := 1; i < len(fields); i++ {
-			switch f := fields[i]; {
+// commitCalls finds every "git commit" of a shell command. The directory is the recorded working
+// directory moved by each "cd DIR" before it and by "git -C DIR". The subject is "" when the message
+// is not a literal the shell would pass unchanged.
+func commitCalls(cwd, command string) []commitCall {
+	var calls []commitCall
+	for _, at := range gitInvocation.FindAllStringIndex(command, -1) {
+		dir := dirBefore(cwd, command[:at[0]])
+		fields := strings.Fields(command[at[1]:])
+		for i := 0; i < len(fields); i++ {
+			f := fields[i]
+			switch {
 			case f == "-C" && i+1 < len(fields):
-				at = move(at, fields[i+1])
+				dir = moveDir(dir, fields[i+1])
 				i++
+				continue
 			case f == "-c" || f == "--git-dir" || f == "--work-tree":
 				i++
+				continue
 			case strings.HasPrefix(f, "-"):
-			default:
-				if committingSubcommands[f] {
-					return at, f == "commit", true
+				continue
+			case f == "commit":
+				end := len(command)
+				if next := gitInvocation.FindStringIndex(command[at[1]:]); next != nil {
+					end = at[1] + next[0]
 				}
-				i = len(fields)
+				calls = append(calls, commitCall{dir: dir, subject: commitSubject(command[at[1]:end])})
 			}
+			break
 		}
 	}
-	return "", false, false
+	return calls
+}
+
+// gitInvocation is git at the start of a shell command, not an argument (echo git commit).
+var gitInvocation = regexp.MustCompile(`(?:^|[;&|(\n])\s*git\s`)
+
+// dirBefore is where a command stands after the "cd" steps of its prefix.
+func dirBefore(cwd, prefix string) string {
+	dir := cwd
+	for _, step := range strings.FieldsFunc(prefix, func(r rune) bool { return r == '&' || r == ';' || r == '\n' || r == '|' }) {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(step), "cd "); ok {
+			dir = moveDir(dir, strings.TrimSpace(rest))
+		}
+	}
+	return dir
+}
+
+func moveDir(base, to string) string {
+	to = strings.Trim(to, `"'`)
+	switch {
+	case to == "" || to == "-":
+		return base
+	case strings.HasPrefix(to, "~/"):
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, to[2:])
+		}
+		return base
+	case filepath.IsAbs(to):
+		return filepath.Clean(to)
+	}
+	return filepath.Join(base, to)
+}
+
+// commitSubject is git's subject of the message one "git commit" passes: its first paragraph with
+// the lines joined by spaces. It reads -m/--message (also a "-am" cluster) as the shell would, a
+// "$(cat <<'EOF' ... EOF)" message, and "-F -" fed by a heredoc. It is "" when the message is not a
+// literal the command shows.
+func commitSubject(args string) string {
+	fields := strings.Fields(args)
+	for i, f := range fields {
+		switch {
+		case (f == "-F" || f == "--file") && i+1 < len(fields) && fields[i+1] == "-", f == "--file=-":
+			return subjectOf(heredocBody(args))
+		case f == "-m" || f == "--message" || strings.HasPrefix(f, "--message=") ||
+			(len(f) > 2 && f[0] == '-' && f[1] != '-' && strings.HasSuffix(f, "m")):
+			at := strings.Index(args, f) + len(f)
+			rest := strings.TrimLeft(args[at:], " =")
+			if strings.HasPrefix(f, "--message=") {
+				rest = strings.TrimPrefix(f, "--message=") + args[at:]
+			}
+			if strings.HasPrefix(rest, `"$(cat <<`) {
+				return subjectOf(heredocBody(rest))
+			}
+			word, ok := shellWord(rest)
+			if !ok {
+				return ""
+			}
+			return subjectOf(word)
+		}
+	}
+	return ""
+}
+
+func subjectOf(msg string) string {
+	paragraph, _, _ := strings.Cut(strings.TrimSpace(msg), "\n\n")
+	return strings.Join(strings.Fields(paragraph), " ")
+}
+
+var heredocStart = regexp.MustCompile(`<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
+
+// heredocBody is the text of the first heredoc in a command, up to its terminator line.
+func heredocBody(command string) string {
+	m := heredocStart.FindStringSubmatchIndex(command)
+	if m == nil {
+		return ""
+	}
+	tag := command[m[2]:m[3]]
+	_, body, ok := strings.Cut(command[m[1]:], "\n")
+	if !ok {
+		return ""
+	}
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) == tag {
+			return strings.Join(lines, "\n")
+		}
+		lines = append(lines, line)
+	}
+	return ""
+}
+
+// claimCommit picks the one commit a "git commit" made: the only unclaimed commit with its subject
+// made during the call. Parallel calls share a time window and the repository holds other sessions'
+// commits, so an unknown subject or two candidates leave the call without a revision.
+func (s *Session) claimCommit(found []Commit, subject string) []string {
+	if subject == "" {
+		return nil
+	}
+	var fit []string
+	for _, c := range found {
+		if !s.seen.commits[c.SHA] && strings.Join(strings.Fields(c.Subject), " ") == subject {
+			fit = append(fit, c.SHA)
+		}
+	}
+	if len(fit) != 1 {
+		return nil
+	}
+	s.seen.commits[fit[0]] = true
+	return fit
 }
 
 // Commit is one commit of the signed-in user.
 type Commit struct {
 	SHA     string
 	Subject string
-}
-
-// claimCommits picks the call's commits from those made during it. Parallel calls share a time
-// window, and each commit belongs to one call only. A plain "git commit" makes one commit: it
-// claims a commit only when exactly one unclaimed commit with its message fits, and none when the
-// match is ambiguous. Merge, rebase and the like keep every unclaimed commit of the window.
-func (s *Session) claimCommits(found []Commit, subject string, single bool) []string {
-	var fit []string
-	for _, c := range found {
-		if !s.seen.commits[c.SHA] && (subject == "" || c.Subject == subject) {
-			fit = append(fit, c.SHA)
-		}
-	}
-	if single && len(fit) != 1 {
-		return nil
-	}
-	for _, sha := range fit {
-		s.seen.commits[sha] = true
-	}
-	return fit
-}
-
-// commitSubject is the first line of the message a git commit command passes with -m or --message,
-// unquoted as the shell would, also through a "$(cat <<'EOF' ... EOF)" heredoc. It is "" when the
-// command does not say or the message is not a literal (a variable, another substitution).
-func commitSubject(command string) string {
-	for _, arg := range []string{" -m", " --message"} {
-		i := strings.Index(command, arg)
-		if i < 0 || !strings.Contains(command[:i], "commit") {
-			continue
-		}
-		rest := strings.TrimLeft(command[i+len(arg):], " =")
-		if strings.HasPrefix(rest, `"$(cat <<`) {
-			_, body, ok := strings.Cut(rest, "\n")
-			if !ok {
-				return ""
-			}
-			line, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
-			return strings.TrimSpace(line)
-		}
-		msg, ok := shellWord(rest)
-		if !ok {
-			return ""
-		}
-		line, _, _ := strings.Cut(strings.TrimSpace(msg), "\n")
-		return strings.TrimSpace(line)
-	}
-	return ""
 }
 
 // shellWord reads one shell word with its quotes removed; ok is false when the word holds an
