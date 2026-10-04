@@ -162,8 +162,10 @@ func TestCommitIndexMatchesAuthorEmailInAnyCase(t *testing.T) {
 	if got := idx.between(repo, at.Add(-time.Second), at.Add(time.Second)); len(got) != 1 {
 		t.Fatalf("commits = %v, want the one commit whose author email differs only in case", got)
 	}
-	other := &commitIndex{email: "devxname+x@example.com", byRepo: map[string][]commit{}}
-	if got := other.between(repo, at.Add(-time.Second), at.Add(time.Second)); len(got) != 0 {
-		t.Fatalf("commits = %v; the email must match literally, not as a pattern", got)
+	for _, email := range []string{"devxname+x@example.com", "name+x@example.com"} {
+		other := &commitIndex{email: email, byRepo: map[string][]commit{}}
+		if got := other.between(repo, at.Add(-time.Second), at.Add(time.Second)); len(got) != 0 {
+			t.Fatalf("%s matched %v; only the whole author email counts", email, got)
+		}
 	}
 }

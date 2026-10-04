@@ -136,7 +136,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 			}
 			if sender != nil {
 				if err := sender.post(b); err != nil {
-					fmt.Fprintf(stderr, "navigara: send: %v (re-run to resume: the receiver drops records it has)\n", err)
+					fmt.Fprintf(stderr, "navigara: send: %v (re-run with a new --output to resume: the receiver drops records it already has)\n", err)
 					return 1
 				}
 			}
@@ -300,13 +300,15 @@ func (c *commitIndex) between(cwd string, from, to time.Time) []string {
 	list, ok := c.byRepo[key]
 	if !ok {
 		// Authors write their email in any case; match it literally, ignoring case.
-		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--regexp-ignore-case", "--fixed-strings",
-			"--author="+c.email, "--format=%H %ct").Output()
+		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--format=%H %ct %ae").Output()
 		if err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-				sha, ts, ok := strings.Cut(line, " ")
-				if secs, err := strconv.ParseInt(ts, 10, 64); ok && err == nil {
-					list = append(list, commit{at: time.Unix(secs, 0).UTC(), sha: sha})
+				fields := strings.Fields(line)
+				if len(fields) != 3 || !strings.EqualFold(fields[2], c.email) {
+					continue
+				}
+				if secs, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+					list = append(list, commit{at: time.Unix(secs, 0).UTC(), sha: fields[0]})
 				}
 			}
 		}

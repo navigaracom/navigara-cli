@@ -539,9 +539,8 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 			Command string `json:"command"`
 		}
 		_ = json.Unmarshal(tool.input, &input)
-		if strings.Contains(input.Command, "git commit") || strings.Contains(input.Command, "git merge") ||
-			strings.Contains(input.Command, "git cherry-pick") || strings.Contains(input.Command, "git rebase") {
-			commits = s.commits(commandDir(r.Cwd, input.Command), tool.at.Add(-time.Second), r.at.Add(time.Second))
+		if dir, ok := commitStep(r.Cwd, input.Command); ok {
+			commits = s.commits(dir, tool.at.Add(-time.Second), r.at.Add(time.Second))
 		}
 	}
 	if len(commits) > 0 {
@@ -892,39 +891,54 @@ func firstAfter(rows []parsedRow, t time.Time) time.Time {
 	return t
 }
 
-// commandDir is the directory a shell command's git step runs in: the recorded working directory,
-// moved by any "cd DIR" before it and by "git -C DIR".
-func commandDir(cwd, command string) string {
+// committingSubcommands create commits.
+var committingSubcommands = map[string]bool{"commit": true, "merge": true, "cherry-pick": true, "rebase": true, "revert": true, "am": true}
+
+// commitStep finds the first step of a shell command that creates commits and the directory it
+// runs in: the recorded working directory, moved by every "cd DIR" before it and by "git -C DIR".
+func commitStep(cwd, command string) (string, bool) {
 	dir := cwd
-	move := func(to string) {
+	move := func(base, to string) string {
 		to = strings.Trim(to, `"'`)
 		switch {
 		case to == "" || to == "-":
+			return base
 		case strings.HasPrefix(to, "~/"):
 			if home, err := os.UserHomeDir(); err == nil {
-				dir = filepath.Join(home, to[2:])
+				return filepath.Join(home, to[2:])
 			}
+			return base
 		case filepath.IsAbs(to):
-			dir = filepath.Clean(to)
-		default:
-			dir = filepath.Join(dir, to)
+			return filepath.Clean(to)
 		}
+		return filepath.Join(base, to)
 	}
 	for _, step := range strings.FieldsFunc(command, func(r rune) bool { return r == '&' || r == ';' || r == '\n' || r == '|' }) {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(step), "cd "); ok {
-			move(strings.TrimSpace(rest))
+			dir = move(dir, strings.TrimSpace(rest))
 			continue
 		}
 		fields := strings.Fields(step)
-		for i := 0; i+2 < len(fields); i++ {
-			if fields[i] == "git" && fields[i+1] == "-C" {
-				move(fields[i+2])
-				return dir
+		if len(fields) == 0 || fields[0] != "git" {
+			continue
+		}
+		at := dir
+		// Skip global options to reach the subcommand; -C moves this step only.
+		for i := 1; i < len(fields); i++ {
+			switch f := fields[i]; {
+			case f == "-C" && i+1 < len(fields):
+				at = move(at, fields[i+1])
+				i++
+			case f == "-c" || f == "--git-dir" || f == "--work-tree":
+				i++
+			case strings.HasPrefix(f, "-"):
+			default:
+				if committingSubcommands[f] {
+					return at, true
+				}
+				i = len(fields)
 			}
 		}
-		if len(fields) > 0 && fields[0] == "git" {
-			return dir
-		}
 	}
-	return dir
+	return "", false
 }

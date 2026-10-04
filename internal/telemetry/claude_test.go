@@ -352,17 +352,47 @@ func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
 	}
 }
 
-func TestCommandDir(t *testing.T) {
-	for _, tc := range []struct{ command, want string }{
-		{"git commit -m x", "/repo"},
-		{"cd ../other && git add -A && git commit -m x", "/other"},
-		{"cd /abs/wt; git commit -m x", "/abs/wt"},
-		{"git -C sub commit -m x", "/repo/sub"},
-		{`cd "../with quotes" && git commit`, "/with quotes"},
-		{"git commit -m x && cd /later", "/repo"},
+func TestCommitStep(t *testing.T) {
+	for _, tc := range []struct {
+		command, want string
+		ok            bool
+	}{
+		{"git commit -m x", "/repo", true},
+		{"cd ../other && git add -A && git commit -m x", "/other", true},
+		{"git add -A && cd ../other && git commit -m x", "/other", true},
+		{"cd /abs/wt; git commit -m x", "/abs/wt", true},
+		{"git -C /other/repo commit -m fix", "/other/repo", true},
+		{"git -C sub -c user.name=x commit -m x", "/repo/sub", true},
+		{`cd "../with quotes" && git merge main`, "/with quotes", true},
+		{"git status && git log", "", false},
+		{"echo git commit", "", false},
 	} {
-		if got := commandDir("/repo", tc.command); got != tc.want {
-			t.Errorf("commandDir(%q) = %q, want %q", tc.command, got, tc.want)
+		got, ok := commitStep("/repo", tc.command)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("commitStep(%q) = %q, %v; want %q, %v", tc.command, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+func TestBuildClaudeLooksUpCommitsWhereTheCommandCommitted(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git -C /other/repo commit -m fix"}),
+			toolUse("t2", "Bash", map[string]any{"command": "git add -A && cd ../wt && git commit -m fix"})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	var dirs []string
+	commits := func(cwd string, from, to time.Time) []string {
+		dirs = append(dirs, cwd)
+		return nil
+	}
+	if _, err := BuildClaude(ClaudeInput{Path: root, Commits: commits}, Identity{}, func(string) string { return "" }); err != nil {
+		t.Fatal(err)
+	}
+	if len(dirs) != 2 || dirs[0] != "/other/repo" || dirs[1] != "/wt" {
+		t.Errorf("commit lookups in %v, want /other/repo and /wt", dirs)
 	}
 }
