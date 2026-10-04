@@ -274,8 +274,8 @@ func writeRequest(path string, data []byte) error {
 }
 
 type commit struct {
-	at  time.Time
-	sha string
+	at time.Time
+	telemetry.Commit
 }
 
 // commitIndex lists the signed-in user's commits per repository, once, from local refs; a
@@ -285,7 +285,7 @@ type commitIndex struct {
 	byRepo map[string][]commit
 }
 
-func (c *commitIndex) between(cwd string, from, to time.Time) []string {
+func (c *commitIndex) between(cwd string, from, to time.Time) []telemetry.Commit {
 	if cwd == "" || c.email == "" {
 		return nil
 	}
@@ -300,27 +300,27 @@ func (c *commitIndex) between(cwd string, from, to time.Time) []string {
 	list, ok := c.byRepo[key]
 	if !ok {
 		// Authors write their email in any case; match it literally, ignoring case.
-		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--format=%H %ct %ae").Output()
+		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--format=%H%x1f%ct%x1f%ae%x1f%s").Output()
 		if err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-				fields := strings.Fields(line)
-				if len(fields) != 3 || !strings.EqualFold(fields[2], c.email) {
+				fields := strings.Split(line, "\x1f")
+				if len(fields) != 4 || !strings.EqualFold(fields[2], c.email) {
 					continue
 				}
 				if secs, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
-					list = append(list, commit{at: time.Unix(secs, 0).UTC(), sha: fields[0]})
+					list = append(list, commit{at: time.Unix(secs, 0).UTC(), Commit: telemetry.Commit{SHA: fields[0], Subject: fields[3]}})
 				}
 			}
 		}
 		c.byRepo[key] = list
 	}
-	var shas []string
+	var found []telemetry.Commit
 	seen := map[string]bool{}
 	for _, cm := range list {
-		if !cm.at.Before(from.Truncate(time.Second)) && !cm.at.After(to) && !seen[cm.sha] {
-			seen[cm.sha] = true
-			shas = append(shas, cm.sha)
+		if !cm.at.Before(from.Truncate(time.Second)) && !cm.at.After(to) && !seen[cm.SHA] {
+			seen[cm.SHA] = true
+			found = append(found, cm.Commit)
 		}
 	}
-	return shas
+	return found
 }

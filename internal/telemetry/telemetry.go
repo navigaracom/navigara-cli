@@ -45,17 +45,18 @@ type Session struct {
 	seen *seen
 	// lastSettled is the end of the last process run a cost-state row settled.
 	lastSettled time.Time
-	commits     func(cwd string, from, to time.Time) []string
+	commits     func(cwd string, from, to time.Time) []Commit
 }
 
 // seen dedupes records across a session's transcripts: subagent and fork transcripts repeat
 // the parent's rows, requests and tool calls.
 type seen struct {
-	rows, requests, tools, results map[string]bool
+	rows, requests, tools, results, commits map[string]bool
 }
 
 func newSeen() *seen {
-	return &seen{rows: map[string]bool{}, requests: map[string]bool{}, tools: map[string]bool{}, results: map[string]bool{}}
+	return &seen{rows: map[string]bool{}, requests: map[string]bool{}, tools: map[string]bool{}, results: map[string]bool{},
+		commits: map[string]bool{}}
 }
 
 func (s *Session) event(name string, at time.Time, attrs map[string]any) {

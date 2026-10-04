@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -20,8 +21,8 @@ type ClaudeInput struct {
 	Subagents []string
 	// Until drops records after this time; the session's own cost totals then no longer apply.
 	Until time.Time
-	// Commits lists the full ids of the commits made in a working directory's repository in [from, to].
-	Commits func(cwd string, from, to time.Time) []string
+	// Commits lists the commits made in a working directory's repository in [from, to].
+	Commits func(cwd string, from, to time.Time) []Commit
 }
 
 // ClaudeSubagents lists the subagent transcripts Claude Code keeps next to a root transcript.
@@ -540,7 +541,7 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 		}
 		_ = json.Unmarshal(tool.input, &input)
 		if dir, ok := commitStep(r.Cwd, input.Command); ok {
-			commits = s.commits(dir, tool.at.Add(-time.Second), r.at.Add(time.Second))
+			commits = s.claimCommits(s.commits(dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), commitSubject(input.Command))
 		}
 	}
 	if len(commits) > 0 {
@@ -941,4 +942,46 @@ func commitStep(cwd, command string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// Commit is one commit of the signed-in user.
+type Commit struct {
+	SHA     string
+	Subject string
+}
+
+// claimCommits picks the call's commits from those made during it. Parallel calls share a time
+// window, so a call that names its message keeps only the commits with that subject, and each
+// commit belongs to one call only.
+func (s *Session) claimCommits(found []Commit, subject string) []string {
+	var out []string
+	for _, c := range found {
+		if s.seen.commits[c.SHA] || (subject != "" && c.Subject != subject) {
+			continue
+		}
+		s.seen.commits[c.SHA] = true
+		out = append(out, c.SHA)
+	}
+	return out
+}
+
+var commitMessage = regexp.MustCompile(`(?s)git\b[^&;|]*?\bcommit\b.*?\s(?:-m|--message)(?:\s+|=)("(?:[^"\\]|\\.)*"|'[^']*'|\S+)`)
+
+// commitSubject is the first line of the message a git commit command passes with -m, also through
+// a "$(cat <<'EOF' ... EOF)" heredoc; "" when the command does not say.
+func commitSubject(command string) string {
+	m := commitMessage.FindStringSubmatch(command)
+	if m == nil {
+		return ""
+	}
+	msg := strings.Trim(m[1], `"'`)
+	if strings.HasPrefix(msg, "$(cat <<") {
+		_, body, ok := strings.Cut(command[strings.Index(command, msg[:8]):], "\n")
+		if !ok {
+			return ""
+		}
+		msg = body
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(msg), "\n")
+	return strings.TrimSpace(line)
 }

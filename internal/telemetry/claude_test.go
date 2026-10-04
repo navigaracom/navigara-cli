@@ -327,9 +327,9 @@ func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
 		withBranch(user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")})),
 	)
 	var asked []time.Time
-	commits := func(cwd string, from, to time.Time) []string {
+	commits := func(cwd string, from, to time.Time) []Commit {
 		asked = append(asked, from, to)
-		return []string{strings.Repeat("a", 40), strings.Repeat("b", 40)}
+		return []Commit{{SHA: strings.Repeat("a", 40), Subject: "fix"}, {SHA: strings.Repeat("b", 40), Subject: "fix"}}
 	}
 	s, err := BuildClaude(ClaudeInput{Path: root, Commits: commits}, Identity{}, func(string) string { return "" })
 	if err != nil {
@@ -385,7 +385,7 @@ func TestBuildClaudeLooksUpCommitsWhereTheCommandCommitted(t *testing.T) {
 		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
 	)
 	var dirs []string
-	commits := func(cwd string, from, to time.Time) []string {
+	commits := func(cwd string, from, to time.Time) []Commit {
 		dirs = append(dirs, cwd)
 		return nil
 	}
@@ -394,5 +394,46 @@ func TestBuildClaudeLooksUpCommitsWhereTheCommandCommitted(t *testing.T) {
 	}
 	if len(dirs) != 2 || dirs[0] != "/other/repo" || dirs[1] != "/wt" {
 		t.Errorf("commit lookups in %v, want /other/repo and /wt", dirs)
+	}
+}
+
+func TestBuildClaudeGivesParallelCommitsToTheirOwnCalls(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	heredoc := "git commit -q -m \"$(cat <<'EOF'\nfeat: two\n\nBody.\nEOF\n)\""
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit both"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": `git commit -m "fix: one"`}),
+			toolUse("t2", "Bash", map[string]any{"command": heredoc})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	both := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix: one"}, {SHA: strings.Repeat("2", 40), Subject: "feat: two"}}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return both }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range events(s, "tool_result") {
+		if rev, ok := e.Attrs["vcs.ref.head.revision"].(string); ok {
+			got[e.Attrs["tool_use_id"].(string)] = rev[:1]
+		}
+	}
+	if len(got) != 2 || got["t1"] != "1" || got["t2"] != "2" {
+		t.Errorf("revisions per call = %v, want t1:1 and t2:2", got)
+	}
+}
+
+func TestCommitSubject(t *testing.T) {
+	for _, tc := range []struct{ command, want string }{
+		{`git commit -m "fix: one"`, "fix: one"},
+		{`git commit -q -m 'chore: x' && git push`, "chore: x"},
+		{"git commit -q -m \"$(cat <<'EOF'\nfeat: two\n\nBody.\nEOF\n)\"", "feat: two"},
+		{"git commit --amend --no-edit", ""},
+	} {
+		if got := commitSubject(tc.command); got != tc.want {
+			t.Errorf("commitSubject(%q) = %q, want %q", tc.command, got, tc.want)
+		}
 	}
 }
