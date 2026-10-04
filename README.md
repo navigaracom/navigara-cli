@@ -1,71 +1,59 @@
 # Navigara CLI
 
-Export local Claude Code and Codex token usage as OTLP/HTTP JSON for Navigara.
+Backfill local Claude Code and Codex sessions into Navigara. The CLI rebuilds the
+OpenTelemetry the tools would have sent live, so a backfilled session looks the same in
+Navigara as a live one.
 
 ```sh
-navigara --help
-navigara --version
-navigara sessions upload --source all --output ./navigara-backfill
+navigara sessions upload --last 30d                 # write OTLP request bodies, send nothing
+navigara sessions upload --last 30d --send \
+  --url https://app.navigara.com --token "$NAVIGARA_TOKEN"
 ```
 
-`sessions upload` creates a new directory with mode 0700, containing bounded
-`metrics-000001.json`, `metrics-000002.json`, … request bodies with mode 0600.
-Existing output paths and symlinks are refused; parent directories must exist.
-Each body is at most 4 MiB and can be POSTed unchanged to the existing
-`/otlp/v1/metrics` endpoint. The command performs no network requests or authentication. Token metrics are
-supported; session events are not yet exported.
+The token is an API key with the analytics ingestor role. `NAVIGARA_TOKEN` is the default.
 
-```sh
-curl --fail -H "Authorization: Bearer $NAVIGARA_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data-binary @navigara-backfill/metrics-000001.json \
-  "$NAVIGARA_URL/otlp/v1/metrics"
-```
+## What it sends
 
-Send each generated body separately using credentials accepted by that endpoint.
+Per session, the same records the tools send live:
 
-Flags follow `upload` using standard Go flag syntax. `--dry-run` defaults to true;
-`--dry-run=false` is unsupported. Source values are `all` (default), `claude`, and
-`codex`. Output defaults to `./navigara-backfill`.
+| Claude Code | Codex |
+| -- | -- |
+| `user_prompt`, `api_request`, `tool_decision`, `tool_result`, `skill_activated`, `subagent_completed`, Stop hooks | `codex.conversation_starts`, `codex.user_prompt`, `codex.tool_result` (with `mcp_server`) |
+| `claude_code.cost.usage`, `claude_code.token.usage` | `codex.turn.token_usage` |
 
-`--claude-home DIR` and `--codex-home DIR` override tool homes. Claude histories
-live under `projects/`; Codex histories live under `sessions/` and
-`archived_sessions/`. Local discovery defaults to `~/.claude` and `~/.codex`.
-An existing home without these history directories yields an empty inventory;
-an explicitly supplied missing home yields a scan error. Explicitly empty paths
-are invalid. Help and version use stdout;
-diagnostics use stderr. Exit codes: 0 success, 1 extraction/output failure or
-incomplete scan, 2 invalid invocation.
+Every record carries the session id, the signed-in email and the repository URL. Requests
+carry the resource attribute `navigara.backfill=true`. Prompt text, tool input and output are
+never sent.
 
-`--last DURATION` limits exported mapped points to an inclusive window ending when
-the command starts. Standard Go durations such as `24h` are accepted, plus whole
-days such as `7d`. The session is still mapped from its full recorded history, so
-Codex baselines and repository context before the window remain available.
+* **Identity**: the email, `user.id` and account ids from `~/.claude.json`, and the email of the
+  Codex sign-in. `--email` overrides both. Without an email the CLI refuses to export, unless
+  `--allow-anonymous` is set.
+* **Cost**: Claude Code writes its own per-model totals (`cost-state`) when a session ends; the
+  CLI matches them exactly, background calls included. A session without them (still running,
+  or cut by `--until`) is priced from a table and flagged `cost=estimated`. Codex is priced by
+  Navigara from the tokens.
+* **Subagents and teammates**: their transcripts (`<session>/subagents/`) count in the parent
+  session, like live. Codex child threads are sessions of their own, like live.
+* **Repository**: Claude Code transcripts record only the working directory; the CLI reads that
+  directory's `origin` remote. Credentials are stripped.
 
-Claude message counters become delta sums; identical repeated snapshots contribute
-once, and conflicting snapshots remain ambiguous. Codex requires adjacent totals
-whose difference matches the current last-usage snapshot, with unchanged model
-and turn context. Its first snapshot is a baseline and emits no points. Missing
-context, resets, unsafe values, and ambiguous usage are omitted and counted. Explicit zeros
-are retained. No cumulative start time, identity, cost, or complete billing
-coverage is inferred. OTLP bodies contain only mapped usage and recorded repository
-URLs, excluding local paths and message content.
-Overlap with previously ingested live telemetry is not yet reconciled.
+## Flags
 
-Recorded repository URLs are attached to usage when available. Credentials,
-queries, and local paths are stripped. No current git state is inferred.
+| Flag | Meaning |
+| -- | -- |
+| `--source all\|claude\|codex` | Which tool to read. |
+| `--last 30d`, `--since`, `--until` | Time window, by duration or RFC 3339 time. |
+| `--session ID` | Only this session; repeat for more. Useful to compare one session with live data. |
+| `--output DIR` | New directory for the request bodies (`logs-000001.json`, `metrics-000001.json`, …). |
+| `--send`, `--url`, `--token` | Post the bodies, logs first. Retries throttling and server errors. |
+| `--claude-home`, `--codex-home` | Tool homes, default `~/.claude` and `~/.codex`. |
 
-Stdout shows discovered and selected session counts, duplicate/skipped/failed
-counts, completeness, sorted source/native IDs, point and batch counts, and
-mapped/repeated/ambiguous/unmapped observation counts. Native IDs are not invented.
-Copies with identical complete recorded metadata for a source/ID count once;
-conflicting copies exclude the entire group and count all copies as failed.
+Sending the same backfill twice changes nothing: Navigara drops identical records.
 
-Malformed files and root/directory errors produce exit 1 with an incomplete
-summary, while valid usage is still exported. Root errors do not increase failed
-file counts. Empty complete scans create an empty output directory and exit 0.
-Memory scales with retained observations and bounded encoding batches. Each
-history is read only up to its initial size, excluding later appends. Output
-failures return 1; completed batches remain if a later batch fails. A failed
-individual file write removes that incomplete file. Stdout failure preserves
-completed output.
+## Limits
+
+* Claude Code deletes transcripts after its cleanup period (30 days by default).
+* A slash command typed last, such as `/exit`, never reaches the transcript.
+* Claude Code background calls without a transcript row (`prompt_suggestion`, `agent_summary`)
+  count in cost and tokens at the session end, not when they happened.
+* One-shot `codex exec` runs that keep no rollout file cannot be backfilled.
