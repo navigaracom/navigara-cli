@@ -942,14 +942,33 @@ func commitCalls(cwd, command string) []commitCall {
 // gitInvocation is git at the start of a shell command, not an argument (echo git commit).
 var gitInvocation = regexp.MustCompile(`(?:^|[;&|(\n])\s*git\s`)
 
-// dirBefore is where a command stands after the "cd" steps of its prefix.
+// dirBefore is where a command stands after the "cd" steps of its prefix. A subshell's "cd" holds
+// only inside its parentheses.
 func dirBefore(cwd, prefix string) string {
 	dir := cwd
-	for _, step := range strings.FieldsFunc(prefix, func(r rune) bool { return r == '&' || r == ';' || r == '\n' || r == '|' }) {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(step), "cd "); ok {
+	var saved []string
+	step := func(text string) {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(text), "cd "); ok {
 			dir = moveDir(dir, strings.TrimSpace(rest))
 		}
 	}
+	start := 0
+	for i, r := range prefix {
+		switch r {
+		case '&', ';', '|', '\n', '(', ')':
+			step(prefix[start:i])
+			start = i + 1
+			switch r {
+			case '(':
+				saved = append(saved, dir)
+			case ')':
+				if n := len(saved); n > 0 {
+					dir, saved = saved[n-1], saved[:n-1]
+				}
+			}
+		}
+	}
+	step(prefix[start:])
 	return dir
 }
 
@@ -1113,7 +1132,7 @@ func shellWord(s string) (string, bool) {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
-		case c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|':
+		case c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '(' || c == ')':
 			return b.String(), b.Len() > 0
 		case c == '\'':
 			end := strings.IndexByte(s[i+1:], '\'')

@@ -368,6 +368,8 @@ func TestCommitCalls(t *testing.T) {
 		{`git -C sub -c user.name=x commit -m x`, []commitCall{{"/repo/sub", "x", false}}},
 		{`git commit -m one && git commit --allow-empty -m two`, []commitCall{{"/repo", "one", false}, {"/repo", "two", false}}},
 		{`git commit --amend --no-edit`, []commitCall{{"/repo", "", true}}},
+		{`(cd ../other && git commit -m fix)`, []commitCall{{"/other", "fix", false}}},
+		{`(cd ../other && git status) && git commit -m back`, []commitCall{{"/repo", "back", false}}},
 		{`git commit -m fix && git commit --amend --no-edit`, []commitCall{{"/repo", "fix", true}}},
 		{"git commit -q -F - <<'EOF'\nfeat: x\n\ngit hooks now run\ngit commit is fine\nEOF", []commitCall{{"/repo", "feat: x", false}}},
 		{`git merge main && git rebase main`, nil},
@@ -605,5 +607,32 @@ func TestBuildClaudeReportsAStandaloneAmend(t *testing.T) {
 	results := events(s, "tool_result")
 	if len(results) != 1 || results[0].Attrs["vcs.ref.head.revision"] != amended.SHA {
 		t.Errorf("results = %v, want the amend's new commit", results)
+	}
+}
+
+func TestBuildClaudeLooksUpASubshellCommitInItsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "(cd ../other && git commit -m fix)"})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1")}),
+	)
+	var dirs []string
+	commit := Commit{SHA: strings.Repeat("c", 40), Subject: "fix", Reachable: true}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(cwd string, _, _ time.Time) []Commit {
+		dirs = append(dirs, cwd)
+		if cwd == "/other" {
+			return []Commit{commit}
+		}
+		return nil
+	}}, Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := events(s, "tool_result")
+	if len(dirs) != 1 || dirs[0] != "/other" || len(results) != 1 || results[0].Attrs["vcs.ref.head.revision"] != commit.SHA {
+		t.Errorf("lookups in %v, results %v; want the subshell's directory and its commit", dirs, results)
 	}
 }
