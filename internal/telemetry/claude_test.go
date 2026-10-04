@@ -322,7 +322,7 @@ func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
 	writeLines(t, root,
 		user("2026-10-01T10:00:00Z", "p1", "commit it"),
 		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
-			toolUse("t1", "Bash", map[string]any{"command": "git add -A && git commit -q -m fix"}),
+			toolUse("t1", "Bash", map[string]any{"command": "git add -A && git merge -q feature"}),
 			toolUse("t2", "Bash", map[string]any{"command": "ls"})),
 		withBranch(user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")})),
 	)
@@ -345,7 +345,7 @@ func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
 		}
 	}
 	if len(revisions) != 2 || len(asked) != 2 {
-		t.Fatalf("revisions = %v, lookups = %v; want both commits of the git commit call only", revisions, asked)
+		t.Fatalf("revisions = %v, lookups = %v; want both commits of the merge, and no lookup for ls", revisions, asked)
 	}
 	if !asked[0].Equal(time.Date(2026, 10, 1, 10, 0, 4, 0, time.UTC)) || !asked[1].Equal(time.Date(2026, 10, 1, 10, 0, 10, 0, time.UTC)) {
 		t.Errorf("commit window = %v..%v, want the tool call with a second of slack", asked[0], asked[1])
@@ -367,7 +367,7 @@ func TestCommitStep(t *testing.T) {
 		{"git status && git log", "", false},
 		{"echo git commit", "", false},
 	} {
-		got, ok := commitStep("/repo", tc.command)
+		got, _, ok := commitStep("/repo", tc.command)
 		if got != tc.want || ok != tc.ok {
 			t.Errorf("commitStep(%q) = %q, %v; want %q, %v", tc.command, got, ok, tc.want, tc.ok)
 		}
@@ -431,9 +431,42 @@ func TestCommitSubject(t *testing.T) {
 		{`git commit -q -m 'chore: x' && git push`, "chore: x"},
 		{"git commit -q -m \"$(cat <<'EOF'\nfeat: two\n\nBody.\nEOF\n)\"", "feat: two"},
 		{"git commit --amend --no-edit", ""},
+		{`git commit -m 'say "hi"'`, `say "hi"`},
+		{`git commit -m "say \"hi\""`, `say "hi"`},
+		{`git commit -m "$MSG"`, ""},
+		{`git commit --message=plain && git push`, "plain"},
 	} {
 		if got := commitSubject(tc.command); got != tc.want {
 			t.Errorf("commitSubject(%q) = %q, want %q", tc.command, got, tc.want)
 		}
+	}
+}
+
+func TestBuildClaudeLeavesAmbiguousParallelCommitsUnassigned(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit both"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": `git commit -m "fix"`}),
+			toolUse("t2", "Bash", map[string]any{"command": `git commit -m 'fix'`}),
+			toolUse("t3", "Bash", map[string]any{"command": `git commit -m 'say "hi"'`})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2"), toolResult("t3")}),
+	)
+	found := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix"}, {SHA: strings.Repeat("2", 40), Subject: "fix"},
+		{SHA: strings.Repeat("3", 40), Subject: `say "hi"`}}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return found }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range events(s, "tool_result") {
+		if rev, ok := e.Attrs["vcs.ref.head.revision"].(string); ok {
+			got[e.Attrs["tool_use_id"].(string)] = rev[:1]
+		}
+	}
+	if len(got) != 1 || got["t3"] != "3" {
+		t.Errorf("revisions per call = %v; want only t3:3 (same-subject parallel commits are ambiguous)", got)
 	}
 }

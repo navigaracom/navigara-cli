@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -540,8 +539,8 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 			Command string `json:"command"`
 		}
 		_ = json.Unmarshal(tool.input, &input)
-		if dir, ok := commitStep(r.Cwd, input.Command); ok {
-			commits = s.claimCommits(s.commits(dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), commitSubject(input.Command))
+		if dir, single, ok := commitStep(r.Cwd, input.Command); ok {
+			commits = s.claimCommits(s.commits(dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), commitSubject(input.Command), single)
 		}
 	}
 	if len(commits) > 0 {
@@ -897,8 +896,8 @@ var committingSubcommands = map[string]bool{"commit": true, "merge": true, "cher
 
 // commitStep finds the first step of a shell command that creates commits and the directory it
 // runs in: the recorded working directory, moved by every "cd DIR" before it and by "git -C DIR".
-func commitStep(cwd, command string) (string, bool) {
-	dir := cwd
+func commitStep(cwd, command string) (dir string, single bool, ok bool) {
+	dir = cwd
 	move := func(base, to string) string {
 		to = strings.Trim(to, `"'`)
 		switch {
@@ -935,13 +934,13 @@ func commitStep(cwd, command string) (string, bool) {
 			case strings.HasPrefix(f, "-"):
 			default:
 				if committingSubcommands[f] {
-					return at, true
+					return at, f == "commit", true
 				}
 				i = len(fields)
 			}
 		}
 	}
-	return "", false
+	return "", false, false
 }
 
 // Commit is one commit of the signed-in user.
@@ -951,37 +950,89 @@ type Commit struct {
 }
 
 // claimCommits picks the call's commits from those made during it. Parallel calls share a time
-// window, so a call that names its message keeps only the commits with that subject, and each
-// commit belongs to one call only.
-func (s *Session) claimCommits(found []Commit, subject string) []string {
-	var out []string
+// window, and each commit belongs to one call only. A plain "git commit" makes one commit: it
+// claims a commit only when exactly one unclaimed commit with its message fits, and none when the
+// match is ambiguous. Merge, rebase and the like keep every unclaimed commit of the window.
+func (s *Session) claimCommits(found []Commit, subject string, single bool) []string {
+	var fit []string
 	for _, c := range found {
-		if s.seen.commits[c.SHA] || (subject != "" && c.Subject != subject) {
-			continue
+		if !s.seen.commits[c.SHA] && (subject == "" || c.Subject == subject) {
+			fit = append(fit, c.SHA)
 		}
-		s.seen.commits[c.SHA] = true
-		out = append(out, c.SHA)
 	}
-	return out
+	if single && len(fit) != 1 {
+		return nil
+	}
+	for _, sha := range fit {
+		s.seen.commits[sha] = true
+	}
+	return fit
 }
 
-var commitMessage = regexp.MustCompile(`(?s)git\b[^&;|]*?\bcommit\b.*?\s(?:-m|--message)(?:\s+|=)("(?:[^"\\]|\\.)*"|'[^']*'|\S+)`)
-
-// commitSubject is the first line of the message a git commit command passes with -m, also through
-// a "$(cat <<'EOF' ... EOF)" heredoc; "" when the command does not say.
+// commitSubject is the first line of the message a git commit command passes with -m or --message,
+// unquoted as the shell would, also through a "$(cat <<'EOF' ... EOF)" heredoc. It is "" when the
+// command does not say or the message is not a literal (a variable, another substitution).
 func commitSubject(command string) string {
-	m := commitMessage.FindStringSubmatch(command)
-	if m == nil {
-		return ""
-	}
-	msg := strings.Trim(m[1], `"'`)
-	if strings.HasPrefix(msg, "$(cat <<") {
-		_, body, ok := strings.Cut(command[strings.Index(command, msg[:8]):], "\n")
+	for _, arg := range []string{" -m", " --message"} {
+		i := strings.Index(command, arg)
+		if i < 0 || !strings.Contains(command[:i], "commit") {
+			continue
+		}
+		rest := strings.TrimLeft(command[i+len(arg):], " =")
+		if strings.HasPrefix(rest, `"$(cat <<`) {
+			_, body, ok := strings.Cut(rest, "\n")
+			if !ok {
+				return ""
+			}
+			line, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
+			return strings.TrimSpace(line)
+		}
+		msg, ok := shellWord(rest)
 		if !ok {
 			return ""
 		}
-		msg = body
+		line, _, _ := strings.Cut(strings.TrimSpace(msg), "\n")
+		return strings.TrimSpace(line)
 	}
-	line, _, _ := strings.Cut(strings.TrimSpace(msg), "\n")
-	return strings.TrimSpace(line)
+	return ""
+}
+
+// shellWord reads one shell word with its quotes removed; ok is false when the word holds an
+// expansion whose value only the shell knows.
+func shellWord(s string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|':
+			return b.String(), b.Len() > 0
+		case c == '\'':
+			end := strings.IndexByte(s[i+1:], '\'')
+			if end < 0 {
+				return "", false
+			}
+			b.WriteString(s[i+1 : i+1+end])
+			i += end + 1
+		case c == '"':
+			for i++; i < len(s) && s[i] != '"'; i++ {
+				switch {
+				case s[i] == '$' || s[i] == '`':
+					return "", false
+				case s[i] == '\\' && i+1 < len(s) && strings.IndexByte("\"\\$`\n", s[i+1]) >= 0:
+					i++
+				}
+				b.WriteByte(s[i])
+			}
+			if i >= len(s) {
+				return "", false
+			}
+		case c == '$' || c == '`':
+			return "", false
+		case c == '\\' && i+1 < len(s):
+			i++
+			b.WriteByte(s[i])
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), b.Len() > 0
 }
