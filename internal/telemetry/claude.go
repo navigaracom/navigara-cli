@@ -408,7 +408,8 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 			if json.Unmarshal(r.Message, &m) != nil {
 				continue
 			}
-			if m.Usage != nil && r.RequestID != "" && (requests[r.RequestID] != nil || !s.seen.requests[r.RequestID]) {
+			// "<synthetic>" rows are Claude Code's own messages (errors, interruptions), not API calls.
+			if m.Usage != nil && r.RequestID != "" && m.Model != "<synthetic>" && (requests[r.RequestID] != nil || !s.seen.requests[r.RequestID]) {
 				s.seen.requests[r.RequestID] = true
 				req := requests[r.RequestID]
 				if req == nil {
