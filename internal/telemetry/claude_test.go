@@ -267,3 +267,40 @@ func TestBuildClaudeUntilDropsLaterRecords(t *testing.T) {
 		t.Errorf("a cut session must not take the whole session's cost-state total")
 	}
 }
+
+func TestBuildClaudeSettlesEachProcessRun(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "a"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5),
+		// The first process exits here; its totals cover only r1.
+		map[string]any{"type": "cost-state", "sessionId": sid, "startTime": 1790762300000,
+			"modelUsage": map[string]any{"claude-opus-5-5": map[string]any{"inputTokens": 10, "outputTokens": 5, "cacheReadInputTokens": 1000, "cacheCreationInputTokens": 100, "costUSD": 3.0}}},
+		// The session is resumed the next day without a new cost-state row.
+		user("2026-10-02T10:00:00Z", "p2", "b"),
+		assistant("2026-10-02T10:00:05Z", "r2", "claude-opus-5-5", 5),
+	)
+	s, err := BuildClaude(ClaudeInput{Path: root}, Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first, second float64
+	for _, p := range s.Points {
+		if p.Metric != "cost.usage" {
+			continue
+		}
+		if p.Time.Before(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) {
+			first += p.Value
+		} else {
+			second += p.Value
+		}
+	}
+	want, _ := claudeUsage{input: 10, output: 5, cacheRead: 1000, cacheWrite1h: 100}.cost("claude-opus-5-5")
+	if math.Abs(first-3.0) > 1e-9 || math.Abs(second-want) > 1e-9 {
+		t.Errorf("run costs = %v, %v; want 3.0 from the first run's row and %v from the price table for the resumed run", first, second, want)
+	}
+	if !s.Estimated {
+		t.Error("a resumed run without its own cost-state is estimated")
+	}
+}
