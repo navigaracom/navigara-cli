@@ -203,7 +203,7 @@ func TestWriteUploadNativeUsage(t *testing.T) {
 	if code := run([]string{"sessions", "upload", "--output", path, "--claude-home", claude, "--codex-home", codex}, &stdout, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "points=10 batches=2 mapped=2 repeated=1 ambiguous=0 unmapped=1") {
+	if !strings.Contains(stdout.String(), "points=10 batches=2 mapped=2 repeated=1 ambiguous=0 unmapped=1 filtered=0") {
 		t.Fatalf("summary=%q", stdout.String())
 	}
 	for i, want := range [][]int64{{2, 348, 27495, 42816}, {38558, 289, 28928, 0, 7, 38847}} {

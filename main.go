@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 var version = "dev"
@@ -13,6 +14,7 @@ type options struct {
 	dryRun                bool
 	source, output        string
 	claudeHome, codexHome string
+	since, until          time.Time
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -63,6 +65,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&opts.output, "output", "./navigara-backfill", "new directory for OTLP request bodies")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home containing projects/ (default ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home containing sessions/ (default ~/.codex)")
+	var last time.Duration
+	fs.Func("last", "only export points from the last duration (for example 24h or 7d)", func(value string) error {
+		parsed, err := parseLast(value)
+		if err != nil {
+			return err
+		}
+		last = parsed
+		return nil
+	})
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -92,6 +103,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if !opts.dryRun {
 		return invalid("--dry-run=false is unsupported; network upload is not implemented")
+	}
+	if last > 0 {
+		opts.until = time.Now().UTC()
+		opts.since = opts.until.Add(-last)
 	}
 	return upload(opts, stdout, stderr)
 }

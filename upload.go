@@ -68,7 +68,7 @@ func writeUpload(opts options, result session.Result, stdout, stderr io.Writer) 
 		return 1
 	}
 	mapped := otel.Result{}
-	points, batches := 0, 0
+	points, filtered, batches := 0, 0, 0
 	encoder := otel.NewEncoder(func(data []byte) error {
 		path := filepath.Join(opts.output, fmt.Sprintf("metrics-%06d.json", batches+1))
 		if err := writeRequest(path, data); err != nil {
@@ -80,12 +80,14 @@ func writeUpload(opts options, result session.Result, stdout, stderr io.Writer) 
 	var err error
 	for _, s := range sessions {
 		r := otel.Map(s)
-		points += len(r.Points)
 		mapped.Mapped += r.Mapped
 		mapped.Repeated += r.Repeated
 		mapped.Ambiguous += r.Ambiguous
 		mapped.Unmapped += r.Unmapped
-		if err = encoder.Add(r.Points); err != nil {
+		selected, dropped := filterPoints(r.Points, opts.since, opts.until)
+		points += len(selected)
+		filtered += dropped
+		if err = encoder.Add(selected); err != nil {
 			break
 		}
 	}
@@ -102,7 +104,7 @@ func writeUpload(opts options, result session.Result, stdout, stderr io.Writer) 
 	}
 	var text bytes.Buffer
 	fmt.Fprintf(&text, "discovered=%d sessions=%d duplicates=%d skipped=%d failed=%d %s\n", result.Files, len(sessions), duplicates, result.Skipped, failed, status)
-	fmt.Fprintf(&text, "points=%d batches=%d mapped=%d repeated=%d ambiguous=%d unmapped=%d\n", points, batches, mapped.Mapped, mapped.Repeated, mapped.Ambiguous, mapped.Unmapped)
+	fmt.Fprintf(&text, "points=%d batches=%d mapped=%d repeated=%d ambiguous=%d unmapped=%d filtered=%d\n", points, batches, mapped.Mapped, mapped.Repeated, mapped.Ambiguous, mapped.Unmapped, filtered)
 	for _, s := range sessions {
 		fmt.Fprintf(&text, "%s %q\n", s.Source, s.SessionID)
 	}

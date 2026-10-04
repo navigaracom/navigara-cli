@@ -37,6 +37,11 @@ are invalid. Help and version use stdout;
 diagnostics use stderr. Exit codes: 0 success, 1 extraction/output failure or
 incomplete scan, 2 invalid invocation.
 
+`--last DURATION` limits exported mapped points to an inclusive window ending when
+the command starts. Standard Go durations such as `24h` are accepted, plus whole
+days such as `7d`. The session is still mapped from its full recorded history, so
+Codex baselines and repository context before the window remain available.
+
 Claude message counters become delta sums; identical repeated snapshots contribute
 once, and conflicting snapshots remain ambiguous. Codex requires adjacent totals
 whose difference matches the current last-usage snapshot, with unchanged model
