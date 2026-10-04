@@ -2,7 +2,6 @@
 package otel
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,7 +35,7 @@ func (e *Encoder) Add(points []Point) error {
 		if len(prefix(source))+len(encoded)+len(suffix(source)) > maxBodyBytes {
 			return e.fail(fmt.Errorf("OTLP datapoint exceeds %d-byte body limit", maxBodyBytes))
 		}
-		if e.source != "" && e.source != source {
+		if e.source != "" && (e.source != source || len(e.body)+1+len(encoded)+len(suffix(source)) > maxBodyBytes) {
 			if err := e.flush(); err != nil {
 				return err
 			}
@@ -44,19 +43,7 @@ func (e *Encoder) Add(points []Point) error {
 		if e.source == "" {
 			e.source = source
 			e.body = append(e.body[:0], prefix(source)...)
-		}
-		separator := 0
-		if !bytes.HasSuffix(e.body, []byte("[")) {
-			separator = 1
-		}
-		if len(e.body)+separator+len(encoded)+len(suffix(source)) > maxBodyBytes {
-			if err := e.flush(); err != nil {
-				return err
-			}
-			e.source = source
-			e.body = append(e.body[:0], prefix(source)...)
-		}
-		if !bytes.HasSuffix(e.body, []byte("[")) {
+		} else {
 			e.body = append(e.body, ',')
 		}
 		e.body = append(e.body, encoded...)
