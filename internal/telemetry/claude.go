@@ -543,7 +543,7 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 		_ = json.Unmarshal(tool.input, &input)
 		calls := commitCalls(r.Cwd, input.Command)
 		for i, call := range calls {
-			sha := s.claimCommit(s.commits(call.dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), call.subject)
+			sha := s.claimCommit(s.commits(call.dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), call)
 			// The head after the command is the last step's commit: unknown when that step does not match.
 			if i == len(calls)-1 && sha != "" {
 				commits = []string{sha}
@@ -891,16 +891,22 @@ func firstAfter(rows []parsedRow, t time.Time) time.Time {
 }
 
 // commitCall is one "git commit" in a shell command: where it runs and its message's subject.
-type commitCall struct{ dir, subject string }
+type commitCall struct {
+	dir, subject string
+	// amend: the step replaced a commit of the same command, which the reflog still holds.
+	amend bool
+}
 
 // commitCalls finds every "git commit" of a shell command. The directory is the recorded working
 // directory moved by each "cd DIR" before it and by "git -C DIR". The subject is "" when the message
 // is not a literal the shell would pass unchanged.
 func commitCalls(cwd, command string) []commitCall {
 	var calls []commitCall
-	for _, at := range gitInvocation.FindAllStringIndex(command, -1) {
-		dir := dirBefore(cwd, command[:at[0]])
-		fields := strings.Fields(command[at[1]:])
+	// Search the shell text only: a heredoc message may hold lines that start with "git".
+	shell := maskHeredocs(command)
+	for _, at := range gitInvocation.FindAllStringIndex(shell, -1) {
+		dir := dirBefore(cwd, shell[:at[0]])
+		fields := strings.Fields(shell[at[1]:])
 		for i := 0; i < len(fields); i++ {
 			f := fields[i]
 			switch {
@@ -915,14 +921,14 @@ func commitCalls(cwd, command string) []commitCall {
 				continue
 			case f == "commit":
 				end := len(command)
-				if next := gitInvocation.FindStringIndex(command[at[1]:]); next != nil {
+				if next := gitInvocation.FindStringIndex(shell[at[1]:]); next != nil {
 					end = at[1] + next[0]
 				}
 				call := commitCall{dir: dir, subject: commitSubject(command[at[1]:end])}
 				// An amend without a message keeps the message of the commit it replaces.
 				if n := len(calls); n > 0 && call.subject == "" && wordSpan.MatchString(command[at[1]:end]) &&
 					strings.Contains(" "+command[at[1]:end]+" ", " --amend ") && calls[n-1].dir == dir {
-					call.subject = calls[n-1].subject
+					call.subject, call.amend = calls[n-1].subject, true
 					calls = calls[:n-1]
 				}
 				calls = append(calls, call)
@@ -1028,16 +1034,16 @@ func heredocBody(command string) string {
 }
 
 // claimCommit picks the one commit a "git commit" made: the only unclaimed commit with its subject
-// made during the call. An amend leaves the replaced commit behind with the same subject, so a single
-// reachable candidate wins over unreachable ones; a commit of a since deleted branch is unreachable
-// but alone. An unknown subject or a tie leaves the call without a revision.
-func (s *Session) claimCommit(found []Commit, subject string) string {
-	if subject == "" {
+// made during the call. An unknown subject or a tie leaves the call without a revision, since a
+// parallel call or another session may have made the other commit. Only an amend breaks a tie: the
+// commit it replaced stays in the reflog with the same subject but is no longer reachable.
+func (s *Session) claimCommit(found []Commit, call commitCall) string {
+	if call.subject == "" {
 		return ""
 	}
 	var fit, reachable []string
 	for _, c := range found {
-		if s.seen.commits[c.SHA] || strings.Join(strings.Fields(c.Subject), " ") != subject {
+		if s.seen.commits[c.SHA] || strings.Join(strings.Fields(c.Subject), " ") != call.subject {
 			continue
 		}
 		fit = append(fit, c.SHA)
@@ -1047,13 +1053,49 @@ func (s *Session) claimCommit(found []Commit, subject string) string {
 	}
 	switch {
 	case len(fit) == 1:
-	case len(reachable) == 1:
+	case call.amend && len(fit) == 2 && len(reachable) == 1:
 		fit = reachable
 	default:
 		return ""
 	}
 	s.seen.commits[fit[0]] = true
 	return fit[0]
+}
+
+// maskHeredocs blanks heredoc bodies, keeping every offset, so only shell text is searched.
+func maskHeredocs(command string) string {
+	b := []byte(command)
+	from := 0
+	for {
+		m := heredocStart.FindStringSubmatchIndex(command[from:])
+		if m == nil {
+			return string(b)
+		}
+		tag := command[from+m[2] : from+m[3]]
+		nl := strings.IndexByte(command[from+m[1]:], '\n')
+		if nl < 0 {
+			return string(b)
+		}
+		start := from + m[1] + nl + 1
+		end := len(command)
+		for pos := start; pos < len(command); {
+			lineEnd := strings.IndexByte(command[pos:], '\n')
+			if lineEnd < 0 {
+				lineEnd = len(command) - pos
+			}
+			if strings.TrimSpace(command[pos:pos+lineEnd]) == tag {
+				end = pos
+				break
+			}
+			pos += lineEnd + 1
+		}
+		for k := start; k < end; k++ {
+			if b[k] != '\n' {
+				b[k] = ' '
+			}
+		}
+		from = end
+	}
 }
 
 // Commit is one commit of the signed-in user.

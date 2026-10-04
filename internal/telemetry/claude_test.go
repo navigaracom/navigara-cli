@@ -361,13 +361,14 @@ func TestCommitCalls(t *testing.T) {
 		command string
 		want    []commitCall
 	}{
-		{`git commit -m "x"`, []commitCall{{"/repo", "x"}}},
-		{`cd ../other && git add -A && git commit -m x`, []commitCall{{"/other", "x"}}},
-		{`git add -A && cd ../other && git commit -m x`, []commitCall{{"/other", "x"}}},
-		{`git -C /other/repo commit -m fix`, []commitCall{{"/other/repo", "fix"}}},
-		{`git -C sub -c user.name=x commit -m x`, []commitCall{{"/repo/sub", "x"}}},
-		{`git commit -m one && git commit --allow-empty -m two`, []commitCall{{"/repo", "one"}, {"/repo", "two"}}},
-		{`git commit -m fix && git commit --amend --no-edit`, []commitCall{{"/repo", "fix"}}},
+		{`git commit -m "x"`, []commitCall{{"/repo", "x", false}}},
+		{`cd ../other && git add -A && git commit -m x`, []commitCall{{"/other", "x", false}}},
+		{`git add -A && cd ../other && git commit -m x`, []commitCall{{"/other", "x", false}}},
+		{`git -C /other/repo commit -m fix`, []commitCall{{"/other/repo", "fix", false}}},
+		{`git -C sub -c user.name=x commit -m x`, []commitCall{{"/repo/sub", "x", false}}},
+		{`git commit -m one && git commit --allow-empty -m two`, []commitCall{{"/repo", "one", false}, {"/repo", "two", false}}},
+		{`git commit -m fix && git commit --amend --no-edit`, []commitCall{{"/repo", "fix", true}}},
+		{"git commit -q -F - <<'EOF'\nfeat: x\n\ngit hooks now run\ngit commit is fine\nEOF", []commitCall{{"/repo", "feat: x", false}}},
 		{`git merge main && git rebase main`, nil},
 		{`git status && echo git commit`, nil},
 	} {
@@ -559,5 +560,28 @@ func TestBuildClaudeRevisionIsTheLastStepsCommit(t *testing.T) {
 	}
 	if got["t1"] != nil || got["t2"] != strings.Repeat("f", 40) {
 		t.Errorf("revisions = %v; want none when the last message is unknown, and the amended commit", got)
+	}
+}
+
+func TestBuildClaudeLeavesParallelSameSubjectCommitsUnassignedWhateverTheirReachability(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit in two worktrees"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": `cd ../a && git commit -m fix`}),
+			toolUse("t2", "Bash", map[string]any{"command": `cd ../b && git commit -m fix`})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	found := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix", Reachable: true}, {SHA: strings.Repeat("2", 40), Subject: "fix"}}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return found }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events(s, "tool_result") {
+		if rev := e.Attrs["vcs.ref.head.revision"]; rev != nil {
+			t.Errorf("%v got revision %v; a tie between parallel calls stays unassigned", e.Attrs["tool_use_id"], rev)
+		}
 	}
 }
