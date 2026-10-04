@@ -345,8 +345,11 @@ func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
 			revisions = append(revisions, rev)
 		}
 	}
-	if len(revisions) != 2 || len(asked) != 4 {
-		t.Fatalf("revisions = %v, lookups = %v; want one commit per git commit step, and no lookup for ls", revisions, asked)
+	if n := len(events(s, "tool_result")); n != 2 {
+		t.Fatalf("tool results = %d, want one per call", n)
+	}
+	if len(revisions) != 1 || revisions[0] != strings.Repeat("b", 40) || len(asked) != 4 {
+		t.Fatalf("revisions = %v, lookups = %v; want the call's last commit, one lookup per git commit step and none for ls", revisions, asked)
 	}
 	if !asked[0].Equal(time.Date(2026, 10, 1, 10, 0, 4, 0, time.UTC)) || !asked[1].Equal(time.Date(2026, 10, 1, 10, 0, 10, 0, time.UTC)) {
 		t.Errorf("commit window = %v..%v, want the tool call with a second of slack", asked[0], asked[1])

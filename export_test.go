@@ -169,3 +169,28 @@ func TestCommitIndexMatchesAuthorEmailInAnyCase(t *testing.T) {
 		}
 	}
 }
+
+func TestCommitIndexKeepsTheAmendedCommit(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_EMAIL=dev@example.com",
+			"GIT_AUTHOR_NAME=Dev", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "fix")
+	git("commit", "-q", "--allow-empty", "--amend", "--no-edit", "--date=2026-10-01T10:00:00Z")
+	head := git("rev-parse", "HEAD")
+	idx := &commitIndex{email: "dev@example.com", byRepo: map[string][]commit{}}
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	got := idx.between(repo, at.Add(-time.Second), at.Add(time.Second))
+	if len(got) != 1 || got[0].SHA != head {
+		t.Fatalf("commits = %v, want only the amended head %s", got, head)
+	}
+}

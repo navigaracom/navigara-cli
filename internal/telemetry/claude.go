@@ -545,19 +545,11 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 			commits = append(commits, s.claimCommit(s.commits(call.dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), call.subject)...)
 		}
 	}
+	// Like live, one revision per result: the head after the command, its last commit.
 	if len(commits) > 0 {
-		attrs["vcs.ref.head.revision"] = commits[0]
+		attrs["vcs.ref.head.revision"] = commits[len(commits)-1]
 	}
 	s.event("tool_result", r.at, attrs)
-	// Claude Code reports one revision per result; a command that made several reports each.
-	for _, sha := range commits[min(1, len(commits)):] {
-		extra := map[string]any{}
-		for k, v := range attrs {
-			extra[k] = v
-		}
-		extra["vcs.ref.head.revision"] = sha
-		s.event("tool_result", r.at, extra)
-	}
 
 	if (tool.name == "Agent" || tool.name == "Task") && !result.IsAsync && result.Status != "async_launched" && result.Status != "teammate_spawned" {
 		var input struct {

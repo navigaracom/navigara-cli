@@ -279,7 +279,8 @@ type commit struct {
 }
 
 // commitIndex lists the signed-in user's commits per repository, once, from local refs; a
-// repository's worktrees share them, so a commit made in another worktree is found too.
+// repository's worktrees share them, so a commit made in another worktree is found too. Only
+// reachable commits count: an amend or rebase replaces the commit a session first made.
 type commitIndex struct {
 	email  string
 	byRepo map[string][]commit
@@ -300,7 +301,7 @@ func (c *commitIndex) between(cwd string, from, to time.Time) []telemetry.Commit
 	list, ok := c.byRepo[key]
 	if !ok {
 		// Authors write their email in any case; match it literally, ignoring case.
-		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--format=%H%x1f%ct%x1f%ae%x1f%s").Output()
+		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--format=%H%x1f%ct%x1f%ae%x1f%s").Output()
 		if err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				fields := strings.Split(line, "\x1f")
