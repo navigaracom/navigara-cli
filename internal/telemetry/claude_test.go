@@ -367,6 +367,7 @@ func TestCommitCalls(t *testing.T) {
 		{`git -C /other/repo commit -m fix`, []commitCall{{"/other/repo", "fix", false}}},
 		{`git -C sub -c user.name=x commit -m x`, []commitCall{{"/repo/sub", "x", false}}},
 		{`git commit -m one && git commit --allow-empty -m two`, []commitCall{{"/repo", "one", false}, {"/repo", "two", false}}},
+		{`git commit --amend --no-edit`, []commitCall{{"/repo", "", true}}},
 		{`git commit -m fix && git commit --amend --no-edit`, []commitCall{{"/repo", "fix", true}}},
 		{"git commit -q -F - <<'EOF'\nfeat: x\n\ngit hooks now run\ngit commit is fine\nEOF", []commitCall{{"/repo", "feat: x", false}}},
 		{`git merge main && git rebase main`, nil},
@@ -583,5 +584,26 @@ func TestBuildClaudeLeavesParallelSameSubjectCommitsUnassignedWhateverTheirReach
 		if rev := e.Attrs["vcs.ref.head.revision"]; rev != nil {
 			t.Errorf("%v got revision %v; a tie between parallel calls stays unassigned", e.Attrs["tool_use_id"], rev)
 		}
+	}
+}
+
+func TestBuildClaudeReportsAStandaloneAmend(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "amend"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git add -A && git commit --amend --no-edit"})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1")}),
+	)
+	amended := Commit{SHA: strings.Repeat("e", 40), Subject: "fix", Reachable: true}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return []Commit{amended} }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := events(s, "tool_result")
+	if len(results) != 1 || results[0].Attrs["vcs.ref.head.revision"] != amended.SHA {
+		t.Errorf("results = %v, want the amend's new commit", results)
 	}
 }

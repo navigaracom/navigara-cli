@@ -924,11 +924,11 @@ func commitCalls(cwd, command string) []commitCall {
 				if next := gitInvocation.FindStringIndex(shell[at[1]:]); next != nil {
 					end = at[1] + next[0]
 				}
-				call := commitCall{dir: dir, subject: commitSubject(command[at[1]:end])}
+				call := commitCall{dir: dir, subject: commitSubject(command[at[1]:end]),
+					amend: strings.Contains(" "+shell[at[1]:end]+" ", " --amend ")}
 				// An amend without a message keeps the message of the commit it replaces.
-				if n := len(calls); n > 0 && call.subject == "" && wordSpan.MatchString(command[at[1]:end]) &&
-					strings.Contains(" "+command[at[1]:end]+" ", " --amend ") && calls[n-1].dir == dir {
-					call.subject, call.amend = calls[n-1].subject, true
+				if n := len(calls); n > 0 && call.amend && call.subject == "" && calls[n-1].dir == dir {
+					call.subject = calls[n-1].subject
 					calls = calls[:n-1]
 				}
 				calls = append(calls, call)
@@ -1038,12 +1038,13 @@ func heredocBody(command string) string {
 // parallel call or another session may have made the other commit. Only an amend breaks a tie: the
 // commit it replaced stays in the reflog with the same subject but is no longer reachable.
 func (s *Session) claimCommit(found []Commit, call commitCall) string {
-	if call.subject == "" {
+	// A standalone amend without a message is identified by being the call's only new commit.
+	if call.subject == "" && !call.amend {
 		return ""
 	}
 	var fit, reachable []string
 	for _, c := range found {
-		if s.seen.commits[c.SHA] || strings.Join(strings.Fields(c.Subject), " ") != call.subject {
+		if s.seen.commits[c.SHA] || (call.subject != "" && strings.Join(strings.Fields(c.Subject), " ") != call.subject) {
 			continue
 		}
 		fit = append(fit, c.SHA)
@@ -1052,8 +1053,8 @@ func (s *Session) claimCommit(found []Commit, call commitCall) string {
 		}
 	}
 	switch {
-	case len(fit) == 1:
-	case call.amend && len(fit) == 2 && len(reachable) == 1:
+	case len(fit) == 1 && (call.subject != "" || len(reachable) == 1):
+	case call.amend && call.subject != "" && len(fit) == 2 && len(reachable) == 1:
 		fit = reachable
 	default:
 		return ""
