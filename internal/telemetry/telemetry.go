@@ -41,6 +41,18 @@ type Session struct {
 	Estimated bool
 	// Missing counts records the builder could not map, by reason.
 	Missing map[string]int
+
+	seen *seen
+}
+
+// seen dedupes records across a session's transcripts: subagent and fork transcripts repeat
+// the parent's rows, requests and tool calls.
+type seen struct {
+	rows, requests, tools, results map[string]bool
+}
+
+func newSeen() *seen {
+	return &seen{rows: map[string]bool{}, requests: map[string]bool{}, tools: map[string]bool{}, results: map[string]bool{}}
 }
 
 func (s *Session) event(name string, at time.Time, attrs map[string]any) {

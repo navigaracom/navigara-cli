@@ -98,6 +98,7 @@ type claudeBlock struct {
 	Input     json.RawMessage `json:"input"`
 	ToolUseID string          `json:"tool_use_id"`
 	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
 	Text      string          `json:"text"`
 	Signature string          `json:"signature"`
 }
@@ -200,7 +201,7 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 		}
 		rows = kept
 	}
-	s := &Session{Source: "claude_code", Service: "claude-code"}
+	s := &Session{Source: "claude_code", Service: "claude-code", seen: newSeen()}
 	for _, r := range rows {
 		if r.SessionID != "" && !r.IsSidechain {
 			s.SessionID = r.SessionID
@@ -227,6 +228,11 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 		s.Common["vcs.repository.url.full"] = url
 	}
 
+	for _, r := range rows {
+		if r.UUID != "" {
+			s.seen.rows[r.UUID] = true
+		}
+	}
 	prompts := s.walkClaude(rows, false, nil)
 	syncAgents := map[string]bool{}
 	for _, e := range s.Events {
@@ -309,6 +315,7 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 	requests := map[string]*claudeRequest{}
 	var order []*claudeRequest
 	tools := map[string]*pendingTool{}
+	var toolOrder []string
 	emitted := map[string]bool{}
 	seenPrompt := map[string]bool{}
 	current := ""
@@ -320,6 +327,10 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 
 	for line, r := range rows {
 		if r.IsSidechain && !subagent {
+			continue
+		}
+		// A fork's transcript starts with a copy of the parent conversation.
+		if subagent && r.UUID != "" && s.seen.rows[r.UUID] {
 			continue
 		}
 		if r.PromptID != "" {
@@ -345,8 +356,9 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 				}
 				head := queued[0]
 				queued = queued[1:]
-				// A queued slash command reports its own prompt when it leaves the queue.
-				if strings.HasPrefix(head, "/") {
+				// A queued slash command that becomes a model turn reports its own prompt when it
+				// leaves the queue; a local command (/plugin, /reload-plugins) does not.
+				if name, _, _ := strings.Cut(strings.TrimPrefix(head, "/"), " "); strings.HasPrefix(head, "/") && !localCommand(rows, line, name) {
 					id := syntheticID(s.SessionID, r.Timestamp)
 					s.event("user_prompt", r.at, map[string]any{"prompt.id": id, "prompt_length": fmt.Sprint(len(head))})
 					timeline = append(timeline, struct {
@@ -369,7 +381,10 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 			for _, b := range blocks {
 				if b.Type == "tool_result" {
 					results++
-					s.toolResult(r, b, tools[b.ToolUseID], current)
+					if !s.seen.results[b.ToolUseID] {
+						s.seen.results[b.ToolUseID] = true
+						s.toolResult(r, b, tools[b.ToolUseID], current)
+					}
 				}
 			}
 			if results == 0 && !subagent && r.PromptID != "" && !seenPrompt[r.PromptID] {
@@ -396,7 +411,8 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 			if json.Unmarshal(r.Message, &m) != nil {
 				continue
 			}
-			if m.Usage != nil && r.RequestID != "" {
+			if m.Usage != nil && r.RequestID != "" && (requests[r.RequestID] != nil || !s.seen.requests[r.RequestID]) {
+				s.seen.requests[r.RequestID] = true
 				req := requests[r.RequestID]
 				if req == nil {
 					req = &claudeRequest{first: r.at, promptID: current, source: querySource, id: r.RequestID}
@@ -431,17 +447,13 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 				}
 			}
 			for _, b := range blocks {
-				if b.Type != "tool_use" || emitted[b.ID] {
+				if b.Type != "tool_use" || emitted[b.ID] || s.seen.tools[b.ID] {
 					continue
 				}
 				emitted[b.ID] = true
+				s.seen.tools[b.ID] = true
 				tools[b.ID] = &pendingTool{name: b.Name, input: b.Input, at: r.at, promptID: current}
-				if !userTurnTools[b.Name] {
-					s.event("tool_decision", r.at, map[string]any{
-						"prompt.id": current, "tool_name": liveToolName(b.Name), "tool_use_id": b.ID,
-						"decision": "accept", "source": "config",
-					})
-				}
+				toolOrder = append(toolOrder, b.ID)
 				if b.Name == "Skill" {
 					var input struct {
 						Skill string `json:"skill"`
@@ -457,6 +469,13 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 	}
 	for _, req := range order {
 		s.apiRequest(req)
+	}
+	// A call without a result (interrupted, or the session ended) was still decided.
+	for _, id := range toolOrder {
+		if t := tools[id]; !s.seen.results[id] && !userTurnTools[t.name] {
+			s.event("tool_decision", t.at, map[string]any{"prompt.id": t.promptID, "tool_name": liveToolName(t.name),
+				"tool_use_id": id, "decision": "accept", "source": "config"})
+		}
 	}
 	return timeline
 }
@@ -477,11 +496,19 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 	if promptID == "" {
 		promptID = current
 	}
+	decision := map[string]any{"prompt.id": promptID, "tool_name": liveToolName(tool.name), "tool_use_id": b.ToolUseID,
+		"decision": "accept", "source": "config"}
+	if denied(b) {
+		// A denied call never runs: Claude Code reports the rejection and no result.
+		decision["decision"], decision["source"] = "reject", "classifier"
+		s.event("tool_decision", r.at, decision)
+		return
+	}
 	if userTurnTools[tool.name] {
-		s.event("tool_decision", r.at, map[string]any{
-			"prompt.id": promptID, "tool_name": tool.name, "tool_use_id": b.ToolUseID,
-			"decision": "accept", "source": "user_temporary",
-		})
+		decision["source"] = "user_temporary"
+		s.event("tool_decision", r.at, decision)
+	} else {
+		s.event("tool_decision", tool.at, decision)
 	}
 	attrs := map[string]any{
 		"prompt.id": promptID, "tool_name": liveToolName(tool.name), "tool_use_id": b.ToolUseID,
@@ -632,51 +659,75 @@ func slashSkills(text string, blocks []claudeBlock) []string {
 }
 
 // reconcileCost rescales per-request cost to the session's own cost-state totals, which also
-// cover background calls the transcript never records, and adds those calls' residue.
+// cover background calls the transcript never records, and adds those calls' residue. Claude Code
+// writes a cost-state row when a process exits, for that process only: each row settles the
+// requests since the previous process's row. Requests after the last row keep the price table.
 func (s *Session) reconcileCost(rows []parsedRow) {
-	runs := map[int64]parsedRow{}
+	type run struct {
+		start int64
+		end   time.Time
+		usage map[string]claudeModelCost
+	}
+	var runs []run
+	var lastAt time.Time
 	for _, r := range rows {
-		if r.Type == "cost-state" && r.ModelUsage != nil {
-			runs[r.StartTime] = r
+		if !r.at.IsZero() {
+			lastAt = r.at
 		}
+		if r.Type != "cost-state" || r.ModelUsage == nil {
+			continue
+		}
+		// A process rewrites its row; the last copy of a start time is the final one.
+		if n := len(runs); n > 0 && runs[n-1].start == r.StartTime {
+			runs[n-1] = run{start: r.StartTime, end: lastAt, usage: r.ModelUsage}
+			continue
+		}
+		runs = append(runs, run{start: r.StartTime, end: lastAt, usage: r.ModelUsage})
 	}
 	if len(runs) == 0 {
 		s.Estimated = true
 		return
 	}
-	// Each process run starts before its first prompt (settings, hooks, MCP connections).
-	for start := range runs {
-		if start > 0 {
-			s.event("session_start", time.UnixMilli(start).UTC(), map[string]any{})
-		}
+	// The last process's row, with nothing after it, covers everything up to the session end.
+	if last := &runs[len(runs)-1]; !last.end.Before(lastAt) {
+		last.end = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
-	totals := map[string]claudeModelCost{}
-	for _, run := range runs {
-		for model, c := range run.ModelUsage {
-			t := totals[model]
-			t.InputTokens += c.InputTokens
-			t.OutputTokens += c.OutputTokens
-			t.CacheReadInputTokens += c.CacheReadInputTokens
-			t.CacheCreationInputTokens += c.CacheCreationInputTokens
-			t.CostUSD += c.CostUSD
-			totals[model] = t
+	for _, r := range runs {
+		if r.start > 0 {
+			s.event("session_start", time.UnixMilli(r.start).UTC(), map[string]any{})
 		}
 	}
 	// Metrics name the context variant ("claude-opus-5-5[1m]"); events name the base model.
-	metricModel := func(model string) string {
-		if _, ok := totals[model]; ok {
-			return model
+	names := map[string]bool{}
+	for _, r := range runs {
+		for model := range r.usage {
+			names[model] = true
 		}
-		if _, ok := totals[model+"[1m]"]; ok {
-			return model + "[1m]"
-		}
-		return model
 	}
+	for i := range s.Points {
+		if m := s.Points[i].Model; !names[m] && names[m+"[1m]"] {
+			s.Points[i].Model = m + "[1m]"
+		}
+	}
+	var from time.Time
+	for _, r := range runs {
+		s.settleRun(from, r.end, r.usage)
+		from = r.end
+	}
+	if s.End.After(from) {
+		s.Estimated = true
+	}
+}
+
+// settleRun reconciles the points in (from, to] to one process's cost-state totals.
+func (s *Session) settleRun(from, to time.Time, totals map[string]claudeModelCost) {
+	in := func(p Point) bool { return p.Time.After(from) && !p.Time.After(to) }
 	type sums struct{ cost, input, output, cacheRead, cacheCreation float64 }
 	seen := map[string]*sums{}
-	for i := range s.Points {
-		p := &s.Points[i]
-		p.Model = metricModel(p.Model)
+	for _, p := range s.Points {
+		if !in(p) {
+			continue
+		}
 		x := seen[p.Model]
 		if x == nil {
 			x = &sums{}
@@ -695,17 +746,20 @@ func (s *Session) reconcileCost(rows []parsedRow) {
 			x.cacheCreation += p.Value
 		}
 	}
+	at := to.Add(time.Millisecond)
+	if to.Year() == 9999 {
+		at = s.End.Add(time.Millisecond)
+	}
 	for model, t := range totals {
 		x := seen[model]
 		if x == nil {
 			x = &sums{}
 		}
-		at := s.End.Add(time.Millisecond)
 		if x.cost > 0 {
 			scale := t.CostUSD / x.cost
 			for i := range s.Points {
-				if s.Points[i].Model == model && s.Points[i].Metric == "cost.usage" {
-					s.Points[i].Value *= scale
+				if p := &s.Points[i]; p.Model == model && p.Metric == "cost.usage" && in(*p) {
+					p.Value *= scale
 				}
 			}
 		} else if t.CostUSD > 0 {
@@ -723,7 +777,7 @@ func (s *Session) reconcileCost(rows []parsedRow) {
 			case float64(r.want) < r.have && r.have > 0:
 				scale := float64(r.want) / r.have
 				for i := range s.Points {
-					if p := &s.Points[i]; p.Model == model && p.Metric == "token.usage" && p.Type == r.kind {
+					if p := &s.Points[i]; p.Model == model && p.Metric == "token.usage" && p.Type == r.kind && in(*p) {
 						p.Value *= scale
 					}
 				}
@@ -761,4 +815,44 @@ func syntheticID(sessionID, at string) string {
 	sum := sha256.Sum256([]byte(sessionID + "|" + at))
 	h := hex.EncodeToString(sum[:16])
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
+// localCommand reports whether the next row that runs the named slash command is a local
+// command: Claude Code records those with a local-command caveat or output in the same prompt.
+func localCommand(rows []parsedRow, from int, name string) bool {
+	tag := "<command-name>/" + name + "</command-name>"
+	for i := from; i < len(rows); i++ {
+		r := rows[i]
+		if r.Type != "user" || !strings.Contains(string(r.Message), tag) {
+			continue
+		}
+		for _, other := range rows {
+			if other.PromptID == r.PromptID && other.Type == "user" &&
+				(strings.Contains(string(other.Message), "<local-command-caveat>") || strings.Contains(string(other.Message), "<local-command-stdout>")) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// denied reports a tool result that is a permission refusal rather than an outcome.
+func denied(b claudeBlock) bool {
+	if !b.IsError {
+		return false
+	}
+	var text string
+	if json.Unmarshal(b.Content, &text) != nil {
+		var parts []struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(b.Content, &parts)
+		for _, p := range parts {
+			text += p.Text
+		}
+	}
+	return strings.Contains(text, "Permission for this action was denied") ||
+		strings.Contains(text, "doesn't want to proceed with this tool use") ||
+		strings.Contains(text, "tool use was rejected")
 }
