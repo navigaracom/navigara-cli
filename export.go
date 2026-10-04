@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	want := func(id string) bool { return len(pinned) == 0 || pinned[id] }
 
 	repos := repositoryResolver()
+	commits := &commitIndex{email: ident.Email, byRepo: map[string][]commit{}}
 	var sessions []*telemetry.Session
 	failed := 0
 	keep := func(s *telemetry.Session, err error, id string) {
@@ -75,7 +77,8 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 				continue
 			}
 			seen[id] = true
-			s, err := telemetry.BuildClaude(telemetry.ClaudeInput{Path: r.Path, Subagents: telemetry.ClaudeSubagents(r.Path), Until: opts.until}, ident, repos)
+			s, err := telemetry.BuildClaude(telemetry.ClaudeInput{Path: r.Path, Subagents: telemetry.ClaudeSubagents(r.Path),
+				Until: opts.until, Commits: commits.between}, ident, repos)
 			keep(s, err, id)
 		}
 	}
@@ -249,4 +252,53 @@ func writeRequest(path string, data []byte) error {
 		_ = os.Remove(path)
 	}
 	return err
+}
+
+type commit struct {
+	at  time.Time
+	sha string
+}
+
+// commitIndex lists the signed-in user's commits per repository, once, from local refs; a
+// repository's worktrees share them, so a commit made in another worktree is found too.
+type commitIndex struct {
+	email  string
+	byRepo map[string][]commit
+}
+
+func (c *commitIndex) between(cwd string, from, to time.Time) []string {
+	if cwd == "" || c.email == "" {
+		return nil
+	}
+	root, err := exec.Command("git", "-C", cwd, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		return nil
+	}
+	key := strings.TrimSpace(string(root))
+	if !filepath.IsAbs(key) {
+		key = filepath.Join(cwd, key)
+	}
+	list, ok := c.byRepo[key]
+	if !ok {
+		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog",
+			"--author="+c.email, "--format=%H %ct").Output()
+		if err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				sha, ts, ok := strings.Cut(line, " ")
+				if secs, err := strconv.ParseInt(ts, 10, 64); ok && err == nil {
+					list = append(list, commit{at: time.Unix(secs, 0).UTC(), sha: sha})
+				}
+			}
+		}
+		c.byRepo[key] = list
+	}
+	var shas []string
+	seen := map[string]bool{}
+	for _, cm := range list {
+		if !cm.at.Before(from.Truncate(time.Second)) && !cm.at.After(to) && !seen[cm.sha] {
+			seen[cm.sha] = true
+			shas = append(shas, cm.sha)
+		}
+	}
+	return shas
 }

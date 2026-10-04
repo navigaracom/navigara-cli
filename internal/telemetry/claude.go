@@ -20,6 +20,8 @@ type ClaudeInput struct {
 	Subagents []string
 	// Until drops records after this time; the session's own cost totals then no longer apply.
 	Until time.Time
+	// Commits lists the full ids of the commits made in a working directory's repository in [from, to].
+	Commits func(cwd string, from, to time.Time) []string
 }
 
 // ClaudeSubagents lists the subagent transcripts Claude Code keeps next to a root transcript.
@@ -201,7 +203,7 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 		}
 		rows = kept
 	}
-	s := &Session{Source: "claude_code", Service: "claude-code", seen: newSeen()}
+	s := &Session{Source: "claude_code", Service: "claude-code", seen: newSeen(), commits: in.Commits}
 	for _, r := range rows {
 		if r.SessionID != "" && !r.IsSidechain {
 			s.SessionID = r.SessionID
@@ -527,7 +529,33 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 	if strings.HasPrefix(tool.name, "mcp__") {
 		attrs["mcp_server_scope"] = "local"
 	}
+	if r.GitBranch != "" && r.GitBranch != "HEAD" {
+		attrs["vcs.ref.head.name"] = r.GitBranch
+	}
+	var commits []string
+	if tool.name == "Bash" && s.commits != nil && !b.IsError {
+		var input struct {
+			Command string `json:"command"`
+		}
+		_ = json.Unmarshal(tool.input, &input)
+		if strings.Contains(input.Command, "git commit") || strings.Contains(input.Command, "git merge") ||
+			strings.Contains(input.Command, "git cherry-pick") || strings.Contains(input.Command, "git rebase") {
+			commits = s.commits(r.Cwd, tool.at.Add(-time.Second), r.at.Add(time.Second))
+		}
+	}
+	if len(commits) > 0 {
+		attrs["vcs.ref.head.revision"] = commits[0]
+	}
 	s.event("tool_result", r.at, attrs)
+	// Claude Code reports one revision per result; a command that made several reports each.
+	for _, sha := range commits[min(1, len(commits)):] {
+		extra := map[string]any{}
+		for k, v := range attrs {
+			extra[k] = v
+		}
+		extra["vcs.ref.head.revision"] = sha
+		s.event("tool_result", r.at, extra)
+	}
 
 	if (tool.name == "Agent" || tool.name == "Task") && !result.IsAsync && result.Status != "async_launched" && result.Status != "teammate_spawned" {
 		var input struct {

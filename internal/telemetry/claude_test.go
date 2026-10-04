@@ -311,3 +311,43 @@ func TestBuildClaudeSettlesEachProcessRun(t *testing.T) {
 		t.Errorf("session starts = %v, want the first process's start and the resumed run's first row", starts)
 	}
 }
+
+func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	withBranch := func(row map[string]any) map[string]any {
+		row["gitBranch"] = "feature/x"
+		return row
+	}
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit it"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git add -A && git commit -q -m fix"}),
+			toolUse("t2", "Bash", map[string]any{"command": "ls"})),
+		withBranch(user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")})),
+	)
+	var asked []time.Time
+	commits := func(cwd string, from, to time.Time) []string {
+		asked = append(asked, from, to)
+		return []string{strings.Repeat("a", 40), strings.Repeat("b", 40)}
+	}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: commits}, Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revisions []string
+	for _, e := range events(s, "tool_result") {
+		if e.Attrs["vcs.ref.head.name"] != "feature/x" {
+			t.Errorf("result branch = %v", e.Attrs["vcs.ref.head.name"])
+		}
+		if rev, ok := e.Attrs["vcs.ref.head.revision"].(string); ok {
+			revisions = append(revisions, rev)
+		}
+	}
+	if len(revisions) != 2 || len(asked) != 2 {
+		t.Fatalf("revisions = %v, lookups = %v; want both commits of the git commit call only", revisions, asked)
+	}
+	if !asked[0].Equal(time.Date(2026, 10, 1, 10, 0, 4, 0, time.UTC)) || !asked[1].Equal(time.Date(2026, 10, 1, 10, 0, 10, 0, time.UTC)) {
+		t.Errorf("commit window = %v..%v, want the tool call with a second of slack", asked[0], asked[1])
+	}
+}
