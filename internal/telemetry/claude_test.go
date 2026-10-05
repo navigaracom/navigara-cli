@@ -32,6 +32,16 @@ func writeLines(t *testing.T, path string, rows ...map[string]any) {
 
 const sid = "11111111-1111-1111-1111-111111111111"
 
+func TestBuildClaudeKeepsFutureSessionIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.jsonl")
+	writeLines(t, path, user("2026-10-03T10:00:00Z", "p", "future"),
+		map[string]any{"type": "cost-state", "sessionId": sid, "startTime": 1791021600000})
+	s, err := BuildClaude(ClaudeInput{Path: path, Until: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)}, Identity{}, func(string) string { return "" })
+	if err != nil || s.SessionID != sid || len(s.Events) != 0 || len(s.Points) != 0 {
+		t.Fatalf("session=%+v err=%v", s, err)
+	}
+}
+
 func user(at, promptID string, content any) map[string]any {
 	return map[string]any{"type": "user", "sessionId": sid, "promptId": promptID, "uuid": "u-" + at, "timestamp": at,
 		"entrypoint": "cli", "cwd": "/repo", "message": map[string]any{"role": "user", "content": content}}
