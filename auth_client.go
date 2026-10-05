@@ -19,6 +19,12 @@ type authClient struct {
 type authHTTPError int
 
 func (e authHTTPError) Error() string {
+	if e == 401 {
+		return "Navigara session is no longer valid (HTTP 401); run navigara login"
+	}
+	if e == 403 {
+		return "Navigara denied access (HTTP 403); ask your organization administrator"
+	}
 	return fmt.Sprintf("Navigara authentication API returned HTTP %d", e)
 }
 
@@ -51,7 +57,7 @@ func (c *authClient) request(ctx context.Context, method, path, token string, bo
 	}
 	resp, err := c.http.Do(r)
 	if err != nil {
-		return errors.New("cannot reach Navigara; check the host, network and TLS settings")
+		return fmt.Errorf("cannot reach Navigara; check the host, network and TLS settings: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -62,4 +68,18 @@ func (c *authClient) request(ctx context.Context, method, path, token string, bo
 		return errors.New("invalid Navigara response")
 	}
 	return nil
+}
+
+type accountUser struct {
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+}
+
+func (c *authClient) session(ctx context.Context, token string) (accountUser, error) {
+	var user accountUser
+	err := c.request(ctx, "GET", "/v1/auth/session", token, nil, &user)
+	if err == nil && (user.UserID == "" || validEmail(user.Email) != nil) {
+		err = errors.New("Navigara returned an invalid account")
+	}
+	return user, err
 }
