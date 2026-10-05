@@ -28,6 +28,7 @@ func TestCanonicalHost(t *testing.T) {
 		"https://app.navigara.com:0", "https://app.navigara.com:99999", "https://app.navigara.com:",
 		"https://app.navigara.com?", "https://app.navigara.com#fragment", "https://app.navigara.com#",
 		"https://app.navigara.com/%", "https://app.navigara.com\n",
+		"https://[fe80::1%25en0]",
 	} {
 		if got, err := canonicalHost(input); err == nil {
 			t.Errorf("canonicalHost(%q) accepted %q", input, got)
@@ -35,10 +36,41 @@ func TestCanonicalHost(t *testing.T) {
 	}
 }
 
+func TestAccountIPv6HostRoundTrip(t *testing.T) {
+	withConfigHome(t)
+	want := accountConfig{Host: "https://[::1]", SessionToken: "token"}
+	if err := saveAccount(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadAccount("")
+	if err != nil || got.Host != want.Host || got.SessionToken != want.SessionToken {
+		t.Fatalf("roundtrip = %#v, %v", got, err)
+	}
+}
+
+func TestSaveAccountRejectsConcurrentWriter(t *testing.T) {
+	dir := withConfigHome(t)
+	if err := ensureAccountDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	release, err := acquireAccountLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAccount(accountConfig{Host: defaultHost}); err == nil || !strings.Contains(err.Error(), "try again") {
+		t.Fatalf("concurrent save error = %v", err)
+	}
+	release()
+	if err := saveAccount(accountConfig{Host: defaultHost}); err != nil {
+		t.Fatalf("save after lock release: %v", err)
+	}
+}
+
 func withConfigHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	base, err := os.UserConfigDir()
 	if err != nil {
 		t.Fatal(err)

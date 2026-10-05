@@ -44,7 +44,7 @@ func canonicalHost(raw string) (string, error) {
 		return "", errors.New("host must use HTTPS")
 	}
 	hostname := strings.ToLower(u.Hostname())
-	if hostname == "" {
+	if hostname == "" || strings.Contains(hostname, "%") {
 		return "", errors.New("host must include a hostname")
 	}
 	port := u.Port()
@@ -172,6 +172,11 @@ func saveAccount(c accountConfig) error {
 	if err := ensureAccountDir(dir); err != nil {
 		return err
 	}
+	releaseLock, err := acquireAccountLock(dir)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
 	before, existed, err := accountSnapshot(path)
 	if err != nil {
 		return err
