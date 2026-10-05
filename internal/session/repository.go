@@ -47,15 +47,15 @@ func observeRepository(b []byte, source, kind string, observedAt *time.Time, lin
 		if json.Unmarshal(git, &fields) != nil {
 			return nil, fmt.Errorf("invalid repository context")
 		}
-		context.Branch, context.CommitHash, context.RepositoryURL = fields.Branch, fields.Commit, repositoryKey(fields.URL)
+		context.Branch, context.CommitHash, context.RepositoryURL = fields.Branch, fields.Commit, RepositoryKey(fields.URL)
 	}
 	context.RecordLine = line
 	context.ObservedAt = observedAt
 	return &context, nil
 }
 
-// repositoryKey provides a credential-free host/path key; provider aliases are backend concerns.
-func repositoryKey(value string) string {
+// RepositoryKey provides a credential-free host/path key; provider aliases are backend concerns.
+func RepositoryKey(value string) string {
 	if strings.ContainsAny(value, "\\\r\n\t") {
 		return ""
 	}

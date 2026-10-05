@@ -1,20 +1,26 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
 var version = "dev"
 
 type options struct {
-	dryRun                bool
 	source, output        string
 	claudeHome, codexHome string
 	since, until          time.Time
+	sessions              []string
+	email                 string
+	allowAnonymous        bool
+	send                  bool
+	url, token            string
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -60,11 +66,38 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {}
 	fs.BoolVar(&help, "help", false, "show upload help")
 	fs.BoolVar(&shortHelp, "h", false, "show upload help")
-	fs.BoolVar(&opts.dryRun, "dry-run", true, "export local OTLP files without network requests")
 	fs.StringVar(&opts.source, "source", "all", "session source: all, claude, codex")
 	fs.StringVar(&opts.output, "output", "./navigara-backfill", "new directory for OTLP request bodies")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home containing projects/ (default ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home containing sessions/ (default ~/.codex)")
+	fs.Func("session", "only export this session id (repeatable)", func(value string) error {
+		if strings.TrimSpace(value) == "" {
+			return errors.New("--session must not be empty")
+		}
+		opts.sessions = append(opts.sessions, value)
+		return nil
+	})
+	fs.Func("since", "only export records from this RFC 3339 time", func(value string) error {
+		t, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			return errors.New("--since must be an RFC 3339 time")
+		}
+		opts.since = t.UTC()
+		return nil
+	})
+	fs.Func("until", "only export records up to this RFC 3339 time", func(value string) error {
+		t, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			return errors.New("--until must be an RFC 3339 time")
+		}
+		opts.until = t.UTC()
+		return nil
+	})
+	fs.StringVar(&opts.email, "email", "", "email to attribute the sessions to (default: the signed-in account)")
+	fs.BoolVar(&opts.allowAnonymous, "allow-anonymous", false, "export without a user email")
+	fs.BoolVar(&opts.send, "send", false, "post the request bodies to --url after writing them")
+	fs.StringVar(&opts.url, "url", "", "Navigara base URL, for example https://app.navigara.com")
+	fs.StringVar(&opts.token, "token", os.Getenv("NAVIGARA_TOKEN"), "API key with the analytics ingestor role (default $NAVIGARA_TOKEN)")
 	var last time.Duration
 	fs.Func("last", "only export points from the last duration (for example 24h or 7d)", func(value string) error {
 		parsed, err := parseLast(value)
@@ -101,12 +134,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fs.PrintDefaults()
 		return 0
 	}
-	if !opts.dryRun {
-		return invalid("--dry-run=false is unsupported; network upload is not implemented")
-	}
 	if last > 0 {
-		opts.until = time.Now().UTC()
+		if opts.until.IsZero() {
+			opts.until = time.Now().UTC()
+		}
 		opts.since = opts.until.Add(-last)
 	}
-	return upload(opts, stdout, stderr)
+	return exportSessions(opts, stdout, stderr)
 }

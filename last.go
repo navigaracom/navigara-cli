@@ -5,8 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/navigaracom/navigara-cli/internal/otel"
 )
 
 var errLast = errors.New("--last must be a positive duration")
@@ -24,15 +22,4 @@ func parseLast(value string) (time.Duration, error) {
 		return 0, errLast
 	}
 	return duration, nil
-}
-
-func filterPoints(points []otel.Point, since, until time.Time) ([]otel.Point, int) {
-	kept := points[:0]
-	for _, point := range points {
-		if (!since.IsZero() && point.Time.Before(since)) || (!until.IsZero() && point.Time.After(until)) {
-			continue
-		}
-		kept = append(kept, point)
-	}
-	return kept, len(points) - len(kept)
 }
