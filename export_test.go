@@ -119,8 +119,15 @@ func TestUploadStopsOnRejectedKey(t *testing.T) {
 
 func TestUploadNeedsAnIdentity(t *testing.T) {
 	root := t.TempDir()
+	// Valid but empty tool homes: they pass home validation yet hold no signed-in identity.
+	claudeHome, codexHome := filepath.Join(root, ".claude"), filepath.Join(root, ".codex")
+	for _, home := range []string{claudeHome, codexHome} {
+		if err := os.Mkdir(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sessions", "upload", "--claude-home", filepath.Join(root, ".claude"), "--codex-home", filepath.Join(root, ".codex"),
+	code := run([]string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
 		"--output", filepath.Join(root, "out")}, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "--email") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
