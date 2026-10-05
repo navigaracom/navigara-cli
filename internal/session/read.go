@@ -14,6 +14,8 @@ import (
 // An empty SessionID with no error denotes a recognized child-only history.
 type Record struct {
 	Session Session
+	// Path identifies local provenance and is excluded from the request payload.
+	Path string
 }
 
 // Read extracts recorded root metadata from JSONL. Memory scales with the largest
