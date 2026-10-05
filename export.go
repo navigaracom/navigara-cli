@@ -31,6 +31,29 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		}
 	}
 	claudeHome, codexHome := toolHome(opts.claudeHome, ".claude"), toolHome(opts.codexHome, ".codex")
+	wantClaude := opts.source == "all" || opts.source == "claude"
+	wantCodex := opts.source == "all" || opts.source == "codex"
+	for _, tool := range []struct {
+		name, home string
+		selected   bool
+		explicit   bool
+	}{
+		{"Claude Code", claudeHome, wantClaude, opts.claudeHome != ""},
+		{"Codex", codexHome, wantCodex, opts.codexHome != ""},
+	} {
+		if !tool.selected || !tool.explicit {
+			continue
+		}
+		info, err := os.Stat(tool.home)
+		if err != nil {
+			fmt.Fprintf(stderr, "navigara: %s home %q: %v\n", tool.name, tool.home, err)
+			return 1
+		}
+		if !info.IsDir() {
+			fmt.Fprintf(stderr, "navigara: %s home %q: not a directory\n", tool.name, tool.home)
+			return 1
+		}
+	}
 	ident := telemetry.ReadIdentity(claudeHome, codexHome)
 	if opts.email != "" {
 		ident = ident.WithEmail(opts.email)
@@ -38,8 +61,6 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	// Each tool needs its own signed-in email: one tool's account says nothing about the other's.
 	claudeOK := ident.Email != "" || opts.allowAnonymous
 	codexOK := ident.CodexEmail != "" || opts.allowAnonymous
-	wantClaude := opts.source == "all" || opts.source == "claude"
-	wantCodex := opts.source == "all" || opts.source == "codex"
 	if (!wantClaude || !claudeOK) && (!wantCodex || !codexOK) {
 		fmt.Fprintln(stderr, "navigara: no signed-in email found; pass --email or --allow-anonymous")
 		return 2
@@ -52,18 +73,6 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara: skipping Codex: no signed-in email; pass --email or --allow-anonymous")
 		wantCodex = false
 	}
-	if wantCodex && opts.codexHome != "" {
-		info, err := os.Stat(codexHome)
-		if err != nil {
-			fmt.Fprintf(stderr, "navigara: Codex home %q: %v\n", codexHome, err)
-			return 1
-		}
-		if !info.IsDir() {
-			fmt.Fprintf(stderr, "navigara: Codex home %q: not a directory\n", codexHome)
-			return 1
-		}
-	}
-
 	pinned := map[string]bool{}
 	for _, id := range opts.sessions {
 		pinned[id] = true
