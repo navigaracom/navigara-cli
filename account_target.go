@@ -105,7 +105,7 @@ func ensureIngestion(ctx context.Context, c *accountConfig) error {
 	updated := *c
 	updated.IngestToken = response.PlainTextKey
 	updated.IngestExpiresAt = response.APIKey.ExpiresAt
-	if err := saveAccount(updated); err != nil {
+	if err := writeAccount(updated, c); err != nil {
 		return fmt.Errorf("save ingestion key: %w", err)
 	}
 	*c = updated
