@@ -10,10 +10,20 @@ Navigara as a live one.
 navigara setup
 ```
 
-On macOS and Linux, the wizard selects Claude Code/Codex, asks for your Navigara
-API base URL and analytics ingestor token, confirms contributor email and history
-window, and previews the import before applying changes. Token input is hidden
-on terminals. Close running tool sessions before taking the preview.
+On macOS and Linux, the wizard checks your saved login and opens the browser when
+sign-in is needed. Choose your organization, then select Claude Code/Codex,
+contributor email, and history window. Review the preview before applying changes.
+Close running tool sessions before taking the preview.
+
+The default host is `https://app.navigara.com`. For an on-prem instance:
+
+```sh
+navigara setup --host https://navigara.example.com
+```
+
+The selected host and organization are saved privately. To sign in or select a
+different organization without running setup, use `navigara login [--host ORIGIN]`.
+An organization administrator must authorize creation of an analytics ingestor key.
 
 Setup preserves unrelated settings and saves private backups beside changed files.
 Claude uses user settings; Codex uses its configuration plus a bash/zsh identity
@@ -29,17 +39,33 @@ Uploads reuse the exact preview files. If interrupted, retry the printed directo
 navigara setup --resume '/path/to/saved/payload'
 ```
 
-Resume asks for the token again and verifies saved file hashes before uploading.
-The token is stored in private tool settings for ongoing telemetry, not in the
-saved upload manifest.
+Resume verifies saved file hashes and requires the original host and organization.
+Older manifests without an organization still ask for a token. Credentials are
+stored privately in the account and tool settings, never in the upload manifest.
+
+## Configure streaming only
+
+```sh
+navigara sessions config patch           # preview tool settings
+navigara sessions config patch --apply   # apply for the saved host and organization
+```
+
+This command checks your login and organization without reading session history.
+Preview creates no key and sends no telemetry. Apply verifies the receiver using
+an empty request, then updates the selected tools (`--source all|claude|codex`).
+
+## Backfill sessions
 
 ```sh
 navigara sessions upload --last 30d                 # write OTLP request bodies, send nothing
+navigara sessions upload --last 30d --send          # use saved login and organization
 navigara sessions upload --last 30d --send \
-  --url https://app.navigara.com --token "$NAVIGARA_TOKEN"
+  --url https://app.navigara.com/api --token "$NAVIGARA_TOKEN"
 ```
 
-The token is an API key with the analytics ingestor role. `NAVIGARA_TOKEN` is the default.
+Explicit transport requires both an API base URL and an analytics ingestor key;
+`NAVIGARA_TOKEN` supplies the token when set. Omit both to use the saved account.
+Dry runs remain offline and use the local tool identity unless `--email` is supplied.
 
 ## What it sends
 
