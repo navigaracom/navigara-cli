@@ -67,6 +67,7 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	settings["env"] = raw
 	return json.MarshalIndent(settings, "", "  ")
 }
+
 func codexSettings(data []byte, endpoint, token string) ([]byte, error) {
 	if err := validValue("endpoint", endpoint); err != nil {
 		return nil, err
@@ -87,14 +88,10 @@ func codexSettings(data []byte, endpoint, token string) ([]byte, error) {
 		if !managedSuffixSafe(data[end:]) {
 			return nil, errors.New("Navigara managed TOML block is followed by root keys; move those keys before the block or into a table")
 		}
-		return append(append(append([]byte(nil), data[:start]...), block...), data[end:]...), nil
 	}
-	out := append([]byte(nil), data...)
-	if len(out) > 0 && out[len(out)-1] != '\n' {
-		out = append(out, '\n')
-	}
-	return append(out, block...), nil
+	return spliceManaged(data, block, start, end), nil
 }
+
 func shellSettings(data []byte, email string) ([]byte, error) {
 	if err := validEmail(email); err != nil {
 		return nil, err
@@ -103,24 +100,44 @@ func shellSettings(data []byte, email string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	block := []byte(telemetryBegin + "\n" +
-		"navigara_attrs= navigara_remaining=${OTEL_RESOURCE_ATTRIBUTES-}\nwhile [ -n \"$navigara_remaining\" ]; do\n  case $navigara_remaining in *,*) navigara_attr=${navigara_remaining%%,*}; navigara_remaining=${navigara_remaining#*,} ;; *) navigara_attr=$navigara_remaining; navigara_remaining= ;; esac\n  case $navigara_attr in enduser.id=*|'') ;; *) navigara_attrs=${navigara_attrs:+$navigara_attrs,}$navigara_attr ;; esac\ndone\nexport OTEL_RESOURCE_ATTRIBUTES=\"${navigara_attrs:+$navigara_attrs,}enduser.id=\"" + shellQuote(email) + "\nunset navigara_attrs navigara_remaining navigara_attr\n" +
-		telemetryEnd + "\n")
+	block := []byte(telemetryBegin + `
+navigara_attrs= navigara_remaining=${OTEL_RESOURCE_ATTRIBUTES-}
+while [ -n "$navigara_remaining" ]; do
+  case $navigara_remaining in *,*) navigara_attr=${navigara_remaining%%,*}; navigara_remaining=${navigara_remaining#*,} ;; *) navigara_attr=$navigara_remaining; navigara_remaining= ;; esac
+  case $navigara_attr in enduser.id=*|'') ;; *) navigara_attrs=${navigara_attrs:+$navigara_attrs,}$navigara_attr ;; esac
+done
+export OTEL_RESOURCE_ATTRIBUTES="${navigara_attrs:+$navigara_attrs,}enduser.id="` + shellQuote(email) + `
+unset navigara_attrs navigara_remaining navigara_attr
+` + telemetryEnd + "\n")
+	return spliceManaged(data, block, start, end), nil
+}
+
+func codexBlock(endpoint, token string) string {
+	q := func(value string) string { b, _ := json.Marshal(value); return string(b) }
+	return telemetryBegin + `
+[otel.metrics_exporter.otlp-http]
+endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/metrics") + `
+protocol = "binary"
+headers = { Authorization = ` + q("Bearer "+token) + ` }
+
+[otel.exporter.otlp-http]
+endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/logs") + `
+protocol = "binary"
+headers = { Authorization = ` + q("Bearer "+token) + ` }
+` + telemetryEnd + "\n"
+}
+
+func spliceManaged(data, block []byte, start, end int) []byte {
 	if start != end {
-		return append(append(append([]byte(nil), data[:start]...), block...), data[end:]...), nil
+		return append(append(append([]byte(nil), data[:start]...), block...), data[end:]...)
 	}
 	out := append([]byte(nil), data...)
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		out = append(out, '\n')
 	}
-	return append(out, block...), nil
+	return append(out, block...)
 }
-func codexBlock(endpoint, token string) string {
-	q := func(value string) string { b, _ := json.Marshal(value); return string(b) }
-	return telemetryBegin + "\n" +
-		"[otel.metrics_exporter.otlp-http]\nendpoint = " + q(strings.TrimSuffix(endpoint, "/")+"/v1/metrics") + "\nprotocol = \"binary\"\nheaders = { Authorization = " + q("Bearer "+token) + " }\n\n" +
-		"[otel.exporter.otlp-http]\nendpoint = " + q(strings.TrimSuffix(endpoint, "/")+"/v1/logs") + "\nprotocol = \"binary\"\nheaders = { Authorization = " + q("Bearer "+token) + " }\n" + telemetryEnd + "\n"
-}
+
 func managedRange(data []byte) (int, int, error) {
 	begin, finish := -1, -1
 	for pos := 0; pos < len(data); {

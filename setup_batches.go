@@ -93,7 +93,7 @@ func sendSetupBatches(dir string, s *sender) error {
 	if err != nil {
 		return err
 	}
-	if s.base != strings.TrimRight(m.URL, "/")+"/otlp" {
+	if s.base != otlpBase(m.URL) {
 		return errors.New("resume destination differs from preview")
 	}
 	for _, b := range m.Batches {
