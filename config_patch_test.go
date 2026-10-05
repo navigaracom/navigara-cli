@@ -37,6 +37,7 @@ func TestCheckPatchHomesRejectsExplicitMissingHome(t *testing.T) {
 
 func TestConfigPatchPreviewReadsAccountWithoutWritingOrPosting(t *testing.T) {
 	var posts int
+	revoked := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			posts++
@@ -45,22 +46,20 @@ func TestConfigPatchPreviewReadsAccountWithoutWritingOrPosting(t *testing.T) {
 		case "/api/v1/auth/session":
 			_ = json.NewEncoder(w).Encode(map[string]string{"userId": "u1", "email": "dev@example.com"})
 		case "/api/v1/auth/organizations":
+			if revoked {
+				w.Write([]byte(`{"organizations":[]}`))
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"organizations": []map[string]string{{"id": "org1", "name": "Acme", "status": "active"}}})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
-	oldHome, oldConfig, oldShell := os.Getenv("HOME"), os.Getenv("XDG_CONFIG_HOME"), os.Getenv("SHELL")
-	defer func() {
-		_ = os.Setenv("HOME", oldHome)
-		_ = os.Setenv("XDG_CONFIG_HOME", oldConfig)
-		_ = os.Setenv("SHELL", oldShell)
-	}()
 	root := t.TempDir()
-	_ = os.Setenv("HOME", root)
-	_ = os.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
-	_ = os.Setenv("SHELL", "/bin/bash")
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	t.Setenv("SHELL", "/bin/bash")
 	claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
 	if err := os.MkdirAll(claude, 0700); err != nil {
 		t.Fatal(err)
@@ -96,6 +95,17 @@ func TestConfigPatchPreviewReadsAccountWithoutWritingOrPosting(t *testing.T) {
 	if !strings.Contains(out.String(), "org1") || strings.Contains(out.String(), "saved-ingest") {
 		t.Fatalf("unsafe or incomplete preview output: %s", out.String())
 	}
+	revoked = true
+	args := []string{"--apply", "--claude-home", claude, "--codex-home", codex}
+	if code := runConfigPatch(args, &out, &errOut); code == 0 || posts != 0 {
+		t.Fatal("revoked membership accepted or posted")
+	}
+	afterClaude, _ = os.ReadFile(claudePath)
+	afterCodex, _ = os.ReadFile(codexPath)
+	if !bytes.Equal(beforeClaude, afterClaude) || !bytes.Equal(beforeCodex, afterCodex) {
+		t.Fatal("revoked membership changed settings")
+	}
+
 }
 
 func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
@@ -107,9 +117,20 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 		case "/api/v1/auth/organizations":
 			_ = json.NewEncoder(w).Encode(map[string]any{"organizations": []map[string]string{{"id": "org1", "name": "Acme", "status": "active"}}})
 		case "/api/v1/organizations/org1/api-keys":
+			if r.Header.Get("Authorization") != "Bearer session-secret" {
+				t.Error("key request needs session auth")
+			}
+			var body struct{ Role string }
+			json.NewDecoder(r.Body).Decode(&body)
+			if body.Role != "roles/analytics.ingestor" {
+				t.Error("wrong key role")
+			}
 			keyPosts++
 			_ = json.NewEncoder(w).Encode(map[string]any{"plainTextKey": "ingest-secret", "apiKey": map[string]any{"organizationId": "org1", "expiresAt": time.Now().Add(time.Hour).Format(time.RFC3339)}})
 		case "/api/otlp/v1/metrics":
+			if r.Header.Get("Authorization") != "Bearer ingest-secret" {
+				t.Error("probe needs scoped ingestion auth")
+			}
 			otlpPosts++
 			w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
 			_, _ = w.Write([]byte(`{}`))
@@ -118,16 +139,10 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	oldHome, oldConfig, oldShell := os.Getenv("HOME"), os.Getenv("XDG_CONFIG_HOME"), os.Getenv("SHELL")
-	defer func() {
-		_ = os.Setenv("HOME", oldHome)
-		_ = os.Setenv("XDG_CONFIG_HOME", oldConfig)
-		_ = os.Setenv("SHELL", oldShell)
-	}()
 	root := t.TempDir()
-	_ = os.Setenv("HOME", root)
-	_ = os.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
-	_ = os.Setenv("SHELL", "/bin/bash")
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	t.Setenv("SHELL", "/bin/bash")
 	claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
 	if err := os.MkdirAll(claude, 0700); err != nil {
 		t.Fatal(err)
@@ -163,6 +178,12 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 	}
 	if code := runConfigPatch(args, &out, &errOut); code != 0 {
 		t.Fatalf("rerun apply code=%d err=%s", code, errOut.String())
+	}
+	if code := runConfigPatch(args[:len(args)-1], &out, &errOut); code != 0 {
+		t.Fatalf("preview after apply failed: %s", &errOut)
+	}
+	if strings.Contains(out.String()+errOut.String(), "secret") {
+		t.Fatal("printed credential")
 	}
 	if keyPosts != 1 {
 		t.Fatalf("ingestion key minted %d times", keyPosts)

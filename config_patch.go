@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -105,7 +104,7 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s config patch for %s (%s, email %s)\n", map[bool]string{true: "Applying", false: "Previewing"}[apply], c.OrganizationName, c.OrganizationID, opts.email)
+	fmt.Fprintf(stdout, "%s config patch for %q (%s, email %s)\n", map[bool]string{true: "Applying", false: "Previewing"}[apply], c.OrganizationName, c.OrganizationID, opts.email)
 	fmt.Fprintf(stdout, "Host: %s\nClaude home: %s\nCodex home: %s\n", c.Host, opts.claudeHome, opts.codexHome)
 	for _, f := range files {
 		fmt.Fprintln(stdout, "Update:", f.path)
@@ -116,47 +115,15 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	s := newSender(opts.url, opts.token)
-	prepared := make([]string, len(files))
-	for i, f := range files {
-		prepared[i], err = f.prepare()
-		if err != nil {
-			cleanupPrepared(prepared)
-			fmt.Fprintln(stderr, "navigara:", err)
-			return 1
-		}
-	}
-	if err = s.checkSetup(); err != nil {
-		cleanupPrepared(prepared)
-		fmt.Fprintln(stderr, "navigara:", err)
+	if err := applySetupFiles(files, s.checkSetup); err != nil {
+		fmt.Fprintln(stderr, "navigara: settings update failed:", err)
 		return 1
 	}
-	installed := make([]*setupFile, 0, len(files))
-	for i, f := range files {
-		if err = f.check(); err != nil {
-			cleanupPrepared(prepared)
-			fmt.Fprintln(stderr, "navigara:", err)
-			return 1
-		}
-		if f.existed && bytes.Equal(f.before, f.after) && patchFilePrivate(f.path) {
-			_ = os.Remove(prepared[i])
-			installed = append(installed, f)
-			continue
-		}
-		if err = f.install(prepared[i]); err != nil {
-			rollbackErr := rollbackPatch(installed)
-			cleanupPrepared(prepared)
-			if rollbackErr != nil {
-				err = fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
-			}
-			fmt.Fprintln(stderr, "navigara: settings update failed:", err)
-			return 1
-		}
-		installed = append(installed, f)
+	for _, f := range files {
 		if f.backup != "" {
 			fmt.Fprintln(stdout, "Backup:", f.backup)
 		}
 	}
-	cleanupPrepared(prepared)
 	fmt.Fprintln(stdout, "Settings applied successfully.")
 	return 0
 }
@@ -210,44 +177,4 @@ func checkPatchHomes(opts *options, claudeExplicit, codexExplicit bool) error {
 		}
 	}
 	return nil
-}
-
-func cleanupPrepared(paths []string) {
-	for _, path := range paths {
-		if path != "" {
-			_ = os.Remove(path)
-		}
-	}
-}
-
-func patchFilePrivate(path string) bool {
-	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm() == 0600
-}
-
-func rollbackPatch(files []*setupFile) error {
-	var rollbackErr error
-	for i := len(files) - 1; i >= 0; i-- {
-		f := files[i]
-		data, exists, err := readSetupFile(f.path)
-		if err != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("inspect %s: %w", f.path, err))
-			continue
-		}
-		if !exists || !bytes.Equal(data, f.after) {
-			continue
-		}
-		if err := os.Remove(f.path); err != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("remove %s: %w", f.path, err))
-			continue
-		}
-		if f.backup != "" {
-			if restored, err := restoreIfAbsent(f.backup, f.path); err != nil {
-				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore %s: %w", f.path, err))
-			} else if !restored {
-				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore %s: concurrent replacement retained", f.path))
-			}
-		}
-	}
-	return rollbackErr
 }
