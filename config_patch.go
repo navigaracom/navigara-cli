@@ -60,6 +60,14 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 			codexExplicit = true
 		}
 	})
+	if claudeExplicit && opts.claudeHome == "" {
+		fmt.Fprintln(stderr, "navigara: --claude-home must not be empty")
+		return 2
+	}
+	if codexExplicit && opts.codexHome == "" {
+		fmt.Fprintln(stderr, "navigara: --codex-home must not be empty")
+		return 2
+	}
 	opts.claudeHome = firstNonEmpty(opts.claudeHome, os.Getenv("CLAUDE_CONFIG_DIR"), filepath.Join(home, ".claude"))
 	opts.codexHome = firstNonEmpty(opts.codexHome, os.Getenv("CODEX_HOME"), filepath.Join(home, ".codex"))
 	if err := checkPatchHomes(&opts, claudeExplicit, codexExplicit); err != nil {
@@ -79,18 +87,12 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
-	if opts.source == "all" || opts.source == "claude" {
-		if opts.claudeHome == "" {
-			opts.claudeHome = filepath.Join(home, ".claude")
-		}
-	}
-	if opts.source == "all" || opts.source == "codex" {
-		if opts.codexHome == "" {
-			opts.codexHome = filepath.Join(home, ".codex")
-		}
-	}
 	if !apply {
-		opts.url, opts.token = c.Host+"/api", previewIngestToken
+		opts.url = c.Host + "/api"
+		opts.token = previewIngestToken
+		if c.IngestToken != "" {
+			opts.token = c.IngestToken
+		}
 	} else {
 		if err := ensureIngestion(context.Background(), &c); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
@@ -103,7 +105,7 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s config patch for %s (organization %s, email %s)\n", map[bool]string{true: "Applying", false: "Previewing"}[apply], c.OrganizationName, c.Email, opts.email)
+	fmt.Fprintf(stdout, "%s config patch for %s (%s, email %s)\n", map[bool]string{true: "Applying", false: "Previewing"}[apply], c.OrganizationName, c.OrganizationID, opts.email)
 	fmt.Fprintf(stdout, "Host: %s\nClaude home: %s\nCodex home: %s\n", c.Host, opts.claudeHome, opts.codexHome)
 	for _, f := range files {
 		fmt.Fprintln(stdout, "Update:", f.path)
@@ -130,14 +132,22 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 	}
 	installed := make([]*setupFile, 0, len(files))
 	for i, f := range files {
+		if err = f.check(); err != nil {
+			cleanupPrepared(prepared)
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
 		if f.existed && bytes.Equal(f.before, f.after) && patchFilePrivate(f.path) {
 			_ = os.Remove(prepared[i])
 			installed = append(installed, f)
 			continue
 		}
 		if err = f.install(prepared[i]); err != nil {
-			rollbackPatch(installed)
+			rollbackErr := rollbackPatch(installed)
 			cleanupPrepared(prepared)
+			if rollbackErr != nil {
+				err = fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
+			}
 			fmt.Fprintln(stderr, "navigara: settings update failed:", err)
 			return 1
 		}
@@ -168,13 +178,19 @@ func checkPatchHomes(opts *options, claudeExplicit, codexExplicit bool) error {
 		}
 		return true, nil
 	}
-	claude, err := check("Claude", opts.claudeHome, claudeExplicit)
-	if err != nil {
-		return err
+	claude, codex := false, false
+	var err error
+	if opts.source == "all" || opts.source == "claude" {
+		claude, err = check("Claude", opts.claudeHome, claudeExplicit)
+		if err != nil {
+			return err
+		}
 	}
-	codex, err := check("Codex", opts.codexHome, codexExplicit)
-	if err != nil {
-		return err
+	if opts.source == "all" || opts.source == "codex" {
+		codex, err = check("Codex", opts.codexHome, codexExplicit)
+		if err != nil {
+			return err
+		}
 	}
 	if opts.source == "claude" && !claude {
 		return errors.New("Claude home was not found; run Claude Code once or pass --claude-home")
@@ -209,15 +225,29 @@ func patchFilePrivate(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Mode().Perm() == 0600
 }
 
-func rollbackPatch(files []*setupFile) {
+func rollbackPatch(files []*setupFile) error {
+	var rollbackErr error
 	for i := len(files) - 1; i >= 0; i-- {
 		f := files[i]
 		data, exists, err := readSetupFile(f.path)
-		if err != nil || !exists || !bytes.Equal(data, f.after) || f.backup == "" {
+		if err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("inspect %s: %w", f.path, err))
 			continue
 		}
-		if err := os.Remove(f.path); err == nil {
-			_, _ = restoreIfAbsent(f.backup, f.path)
+		if !exists || !bytes.Equal(data, f.after) {
+			continue
+		}
+		if err := os.Remove(f.path); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("remove %s: %w", f.path, err))
+			continue
+		}
+		if f.backup != "" {
+			if restored, err := restoreIfAbsent(f.backup, f.path); err != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore %s: %w", f.path, err))
+			} else if !restored {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore %s: concurrent replacement retained", f.path))
+			}
 		}
 	}
+	return rollbackErr
 }
