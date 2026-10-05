@@ -21,19 +21,19 @@ func TestUploadBinary(t *testing.T) {
 		t.Fatalf("build: %v: %s", err, data)
 	}
 	for _, tt := range []struct {
-		name, source, format, summary string
-		code                          int
-		ids                           []string
+		name, source, summary string
+		code                  int
+		ids                   []string
 	}{
-		{"normal", "all", "json", "discovered=4 emitted=2 duplicates=0 skipped=2 failed=0 complete", 0, []string{"claude_code-root", "codex-root"}},
-		{"text", "claude", "text", "discovered=2 emitted=1 duplicates=0 skipped=1 failed=0 complete", 0, []string{"claude_code-root"}},
-		{"codex filter", "codex", "json", "discovered=2 emitted=1 duplicates=0 skipped=1 failed=0 complete", 0, []string{"codex-root"}},
-		{"duplicate", "all", "json", "discovered=5 emitted=2 duplicates=1 skipped=2 failed=0 complete", 0, []string{"claude_code-root", "codex-root"}},
-		{"three-copy conflict", "all", "json", "discovered=6 emitted=1 duplicates=0 skipped=2 failed=3 incomplete", 1, []string{"codex-root"}},
-		{"same ID across sources", "all", "json", "discovered=4 emitted=2 duplicates=0 skipped=2 failed=0 complete", 0, []string{"claude_code-root", "claude_code-root"}},
-		{"malformed", "all", "json", "discovered=5 emitted=2 duplicates=0 skipped=2 failed=1 incomplete", 1, []string{"claude_code-root", "codex-root"}},
-		{"empty", "all", "json", "discovered=0 emitted=0 duplicates=0 skipped=0 failed=0 complete", 0, []string{}},
-		{"missing root", "all", "json", "discovered=0 emitted=0 duplicates=0 skipped=0 failed=0 incomplete", 1, []string{}},
+		{"normal", "all", "discovered=4 sessions=2 duplicates=0 skipped=2 failed=0 complete", 0, []string{"claude_code-root", "codex-root"}},
+		{"text", "claude", "discovered=2 sessions=1 duplicates=0 skipped=1 failed=0 complete", 0, []string{"claude_code-root"}},
+		{"codex filter", "codex", "discovered=2 sessions=1 duplicates=0 skipped=1 failed=0 complete", 0, []string{"codex-root"}},
+		{"duplicate", "all", "discovered=5 sessions=2 duplicates=1 skipped=2 failed=0 complete", 0, []string{"claude_code-root", "codex-root"}},
+		{"three-copy conflict", "all", "discovered=6 sessions=1 duplicates=0 skipped=2 failed=3 incomplete", 1, []string{"codex-root"}},
+		{"same ID across sources", "all", "discovered=4 sessions=2 duplicates=0 skipped=2 failed=0 complete", 0, []string{"claude_code-root", "claude_code-root"}},
+		{"malformed", "all", "discovered=5 sessions=2 duplicates=0 skipped=2 failed=1 incomplete", 1, []string{"claude_code-root", "codex-root"}},
+		{"empty", "all", "discovered=0 sessions=0 duplicates=0 skipped=0 failed=0 complete", 0, []string{}},
+		{"missing root", "all", "discovered=0 sessions=0 duplicates=0 skipped=0 failed=0 incomplete", 1, []string{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -73,7 +73,7 @@ func TestUploadBinary(t *testing.T) {
 			var previous []byte
 			for _, filename := range []string{"first.json", "second.json"} {
 				output := filepath.Join(home, filename)
-				cmd := exec.Command(binary, "sessions", "upload", "--dry-run", "--source", tt.source, "--format", tt.format, "--output", output, "--claude-home", claude, "--codex-home", codex)
+				cmd := exec.Command(binary, "sessions", "upload", "--dry-run", "--source", tt.source, "--output", output, "--claude-home", claude, "--codex-home", codex)
 				var stdout, stderr bytes.Buffer
 				cmd.Stdout, cmd.Stderr = &stdout, &stderr
 				err := cmd.Run()
@@ -88,54 +88,26 @@ func TestUploadBinary(t *testing.T) {
 				if code != tt.code {
 					t.Fatalf("exit=%d want=%d stderr=%q", code, tt.code, stderr.String())
 				}
-				data, err := os.ReadFile(output)
-				if err != nil {
-					t.Fatal(err)
-				}
 				info, err := os.Stat(output)
-				if err != nil || info.Mode().Perm() != 0600 {
-					t.Fatalf("permissions: %v %v", info, err)
+				if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+					t.Fatalf("directory permissions: %v %v", info, err)
 				}
-				var envelope session.Envelope
-				if err := json.Unmarshal(data, &envelope); err != nil {
-					t.Fatal(err)
+				files, err := os.ReadDir(output)
+				if err != nil || len(files) != 0 {
+					t.Fatalf("sessions without usage produced files: %v %v", files, err)
 				}
-				if envelope.SchemaVersion != 2 || envelope.Sessions == nil || len(envelope.Sessions) != len(tt.ids) {
-					t.Fatalf("envelope=%s", data)
+				if !strings.Contains(stdout.String(), tt.summary) || !strings.Contains(stdout.String(), "points=0 batches=0") {
+					t.Fatalf("summary=%q stderr=%q", stdout.String(), stderr.String())
 				}
-				for i, id := range tt.ids {
-					s := envelope.Sessions[i]
-					source := "codex"
-					if id == "claude_code-root" && i == 0 {
-						source = "claude_code"
-					}
-					if s.SessionID != id || s.Source != source {
-						t.Fatalf("session=%+v", s)
-					}
-					version := "0.139.0"
-					if s.Source == "claude_code" {
-						version = "2.1.285"
-					}
-					if s.FirstObservedAt == nil || s.LastObservedAt == nil || s.FirstObservedAt.Format(time.RFC3339) != "2026-01-02T00:00:00Z" || s.LastObservedAt.Format(time.RFC3339) != "2026-01-02T00:02:00Z" || s.SourceVersion != version {
-						t.Fatalf("missing fixture metadata: %+v", s)
+				for _, id := range tt.ids {
+					if !strings.Contains(stdout.String(), fmt.Sprintf("%q", id)) {
+						t.Fatalf("missing ID %q in %q", id, stdout.String())
 					}
 				}
-				if bytes.Contains(data, []byte("/workspace")) || bytes.Contains(data, []byte(home)) || !bytes.HasSuffix(data, []byte("\n")) {
-					t.Fatalf("unexpected payload=%s", data)
+				if previous != nil && !bytes.Equal(previous, stdout.Bytes()) {
+					t.Fatal("unchanged input produced different summary")
 				}
-				if previous != nil && !bytes.Equal(previous, data) {
-					t.Fatal("unchanged input produced different bytes")
-				}
-				previous = data
-				if tt.format == "json" {
-					if !bytes.Equal(stdout.Bytes(), data) || !strings.Contains(stderr.String(), tt.summary) {
-						t.Fatalf("stdout/file mismatch or summary missing: %q", stderr.String())
-					}
-				} else {
-					if !strings.Contains(stdout.String(), tt.summary) || !strings.Contains(stdout.String(), `claude_code "claude_code-root"`) || stderr.Len() != 0 {
-						t.Fatalf("text=%q stderr=%q", stdout.String(), stderr.String())
-					}
-				}
+				previous = append([]byte(nil), stdout.Bytes()...)
 				if tt.name == "three-copy conflict" && !strings.Contains(stderr.String(), `conflicting metadata for "claude_code" "claude_code-root"`) {
 					t.Fatalf("missing conflict diagnosis: %q", stderr.String())
 				}
@@ -201,64 +173,90 @@ type shortWriter struct{}
 func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 
 func TestStdoutShortWritePreservesCompleteOutput(t *testing.T) {
-	for _, format := range []string{"json", "text"} {
-		home := t.TempDir()
-		output := filepath.Join(home, "request.json")
-		var stderr bytes.Buffer
-		if code := run([]string{"sessions", "upload", "--dry-run", "--format", format, "--output", output, "--claude-home", home, "--codex-home", home}, shortWriter{}, &stderr); code != 1 || !strings.Contains(stderr.String(), io.ErrShortWrite.Error()) {
-			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
-		}
-		if data, err := os.ReadFile(output); err != nil || !json.Valid(data) {
-			t.Fatalf("complete file missing: %q %v", data, err)
-		}
+	home := t.TempDir()
+	output := filepath.Join(home, "output")
+	var stderr bytes.Buffer
+	if code := run([]string{"sessions", "upload", "--output", output, "--claude-home", home, "--codex-home", home}, shortWriter{}, &stderr); code != 1 || !strings.Contains(stderr.String(), io.ErrShortWrite.Error()) {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if info, err := os.Stat(output); err != nil || !info.IsDir() {
+		t.Fatalf("complete output missing: %v %v", info, err)
 	}
 }
 
 func TestWriteUploadNativeUsage(t *testing.T) {
-	zero, input, output, cached, written, reasoning, total := int64(0), int64(17), int64(3), int64(5), int64(7), int64(2), int64(20)
-	observed := time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)
-	result := session.Result{Files: 2, Records: []session.Record{
-		{Session: session.Session{Source: "claude_code", SessionID: "claude", UsageObservations: []session.UsageObservation{
-			{RecordLine: 2, ObservedAt: &observed, EventID: "event", MessageID: "message", RequestID: "request", Model: "claude-model", MessageUsage: &session.ClaudeUsage{
-				InputTokens: &input, OutputTokens: &zero, CacheReadInputTokens: &cached, CacheCreationInputTokens: &written,
-				CacheCreation: &session.ClaudeCacheCreation{Ephemeral5mInputTokens: &zero, Ephemeral1hInputTokens: &written},
-			}},
-			{RecordLine: 3, MessageID: "message", MessageUsage: &session.ClaudeUsage{OutputTokens: &output}},
-		}}},
-		{Session: session.Session{Source: "codex", SessionID: "codex", UsageObservations: []session.UsageObservation{
-			{RecordLine: 4, TurnID: "turn", Model: "codex-model", TotalTokenUsage: &session.CodexUsage{
-				InputTokens: &input, OutputTokens: &output, CachedInputTokens: &cached, CacheWriteInputTokens: &written, ReasoningOutputTokens: &reasoning, TotalTokens: &total,
-			}, LastTokenUsage: &session.CodexUsage{InputTokens: &zero}},
-		}}},
-	}}
-	path := filepath.Join(t.TempDir(), "request.json")
+	home := t.TempDir()
+	claude, codex := filepath.Join(home, "claude"), filepath.Join(home, "codex")
+	for _, source := range []string{"claude", "codex"} {
+		data, err := os.ReadFile("internal/session/testdata/" + source + "-usage.jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(codex, "sessions")
+		if source == "claude" {
+			dir = filepath.Join(claude, "projects", "example")
+		}
+		putHistory(t, filepath.Join(dir, source+".jsonl"), data)
+	}
+	path := filepath.Join(t.TempDir(), "output")
 	var stdout, stderr bytes.Buffer
-	if code := writeUpload(options{output: path, format: "json"}, result, &stdout, &stderr); code != 0 {
+	if code := run([]string{"sessions", "upload", "--output", path, "--claude-home", claude, "--codex-home", codex}, &stdout, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	if !strings.Contains(stdout.String(), "points=10 batches=2 mapped=2 repeated=1 ambiguous=0 unmapped=1") {
+		t.Fatalf("summary=%q", stdout.String())
 	}
-	want := `{"schema_version":2,"sessions":[
-		{"source":"claude_code","session_id":"claude","usage_observations":[
-			{"record_line":2,"observed_at":"2026-10-03T08:00:00Z","event_id":"event","message_id":"message","request_id":"request","model":"claude-model","message_usage":{"input_tokens":17,"output_tokens":0,"cache_read_input_tokens":5,"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":7}}},
-			{"record_line":3,"message_id":"message","message_usage":{"output_tokens":3}}]},
-		{"source":"codex","session_id":"codex","usage_observations":[
-			{"record_line":4,"turn_id":"turn","model":"codex-model","total_token_usage":{"input_tokens":17,"output_tokens":3,"cached_input_tokens":5,"cache_write_input_tokens":7,"reasoning_output_tokens":2,"total_tokens":20},"last_token_usage":{"input_tokens":0}}]}]}`
-	var compact, expected bytes.Buffer
-	if err := json.Compact(&compact, data); err != nil {
-		t.Fatal(err)
+	for i, want := range [][]int64{{2, 348, 27495, 42816}, {38558, 289, 28928, 0, 7, 38847}} {
+		file := filepath.Join(path, fmt.Sprintf("metrics-%06d.json", i+1))
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(file)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("permissions: %v %v", info, err)
+		}
+		var body struct {
+			ResourceMetrics []struct {
+				ScopeMetrics []struct {
+					Metrics []struct {
+						Name           string
+						Sum, Histogram struct {
+							DataPoints []struct {
+								AsInt        string
+								Sum          int64
+								TimeUnixNano string
+							}
+						}
+					}
+				}
+			}
+		}
+		if err := json.Unmarshal(data, &body); err != nil {
+			t.Fatal(err)
+		}
+		metric := body.ResourceMetrics[0].ScopeMetrics[0].Metrics[0]
+		points := metric.Sum.DataPoints
+		name := "claude_code.token.usage"
+		if i == 1 {
+			points = metric.Histogram.DataPoints
+			name = "codex.turn.token_usage"
+		}
+		if metric.Name != name || len(points) != len(want) {
+			t.Fatalf("metric=%+v", metric)
+		}
+		for j, point := range points {
+			if point.TimeUnixNano == "" || (i == 0 && point.AsInt != fmt.Sprint(want[j])) || (i == 1 && point.Sum != want[j]) {
+				t.Fatalf("point=%+v want=%d", point, want[j])
+			}
+		}
+		if bytes.Contains(data, []byte("schema_version")) || bytes.Contains(data, []byte("/workspace")) || bytes.Contains(data, []byte("message_id")) {
+			t.Fatalf("unexpected payload=%s", data)
+		}
 	}
-	if err := json.Compact(&expected, []byte(want)); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(compact.Bytes(), expected.Bytes()) || !bytes.Equal(stdout.Bytes(), data) {
-		t.Fatalf("payload=%s stdout=%s", data, stdout.Bytes())
-	}
-	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0600 {
-		t.Fatalf("permissions: %v %v", info, err)
+	entries, err := os.ReadDir(path)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("files=%v err=%v", entries, err)
 	}
 }
 
@@ -284,27 +282,18 @@ func TestWriteUploadCompletePayloadDuplicates(t *testing.T) {
 			result := session.Result{Files: 4, Records: []session.Record{{Session: first}, {Session: other}, {Session: first}, {Session: session.Session{Source: "codex", SessionID: "valid"}}}}
 			path := filepath.Join(t.TempDir(), "request.json")
 			var stdout, stderr bytes.Buffer
-			code := writeUpload(options{output: path, format: "json"}, result, &stdout, &stderr)
-			wantCode, wantEmitted, summary := 0, 2, "discovered=4 emitted=2 duplicates=2 skipped=0 failed=0 complete"
+			code := writeUpload(options{output: path}, result, &stdout, &stderr)
+			wantCode, wantEmitted, summary := 0, 2, "discovered=4 sessions=2 duplicates=2 skipped=0 failed=0 complete"
 			if tt.conflict {
-				wantCode, wantEmitted, summary = 1, 1, "discovered=4 emitted=1 duplicates=0 skipped=0 failed=3 incomplete"
+				wantCode, wantEmitted, summary = 1, 1, "discovered=4 sessions=1 duplicates=0 skipped=0 failed=3 incomplete"
 			}
-			var envelope session.Envelope
-			if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
-				t.Fatal(err)
+			if code != wantCode || !strings.Contains(stdout.String(), summary) {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
-			if code != wantCode || len(envelope.Sessions) != wantEmitted || !strings.Contains(stderr.String(), summary) {
-				t.Fatalf("exit=%d payload=%s stderr=%q", code, stdout.Bytes(), stderr.String())
+			if strings.Count(stdout.String(), "\n") != wantEmitted+2 || (tt.conflict && strings.Contains(stdout.String(), `"same"`)) {
+				t.Fatalf("wrong session inventory: %q", stdout.String())
 			}
-			if tt.conflict && envelope.Sessions[0].SessionID != "valid" {
-				t.Fatalf("conflicting group emitted: %s", stdout.Bytes())
-			}
-			if tt.name == "omitted empty" && bytes.Contains(stdout.Bytes(), []byte("usage_observations")) {
-				t.Fatalf("empty usage emitted: %s", stdout.Bytes())
-			}
-			if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, stdout.Bytes()) {
-				t.Fatalf("file/stdout mismatch: %s %v", data, err)
-			}
+
 		})
 	}
 }
@@ -321,7 +310,7 @@ func TestWriteUploadSerializationFailureCreatesNoOutput(t *testing.T) {
 			result := session.Result{Files: len(records), Records: records}
 			path := filepath.Join(t.TempDir(), "request.json")
 			var stdout, stderr bytes.Buffer
-			if code := writeUpload(options{output: path, format: "json"}, result, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "year outside") {
+			if code := writeUpload(options{output: path}, result, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "year outside") {
 				t.Fatalf("exit=%d stdout=%s stderr=%q", code, stdout.Bytes(), stderr.String())
 			}
 			if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -341,30 +330,56 @@ func TestWriteUploadRepositoryContextConflicts(t *testing.T) {
 		result := session.Result{Files: 4, Records: []session.Record{{Session: first}, {Session: other}, {Session: first}, {Session: session.Session{Source: "codex", SessionID: "valid"}}}}
 		path := filepath.Join(t.TempDir(), "request.json")
 		var stdout, stderr bytes.Buffer
-		code := writeUpload(options{output: path, format: "json"}, result, &stdout, &stderr)
-		var envelope session.Envelope
-		if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
-			t.Fatal(err)
-		}
+		code := writeUpload(options{output: path}, result, &stdout, &stderr)
 		wantCode, wantCount, summary := 0, 2, "duplicates=2 skipped=0 failed=0 complete"
 		if conflict {
 			wantCode, wantCount, summary = 1, 1, "duplicates=0 skipped=0 failed=3 incomplete"
 		}
-		if code != wantCode || envelope.SchemaVersion != 2 || len(envelope.Sessions) != wantCount || !strings.Contains(stderr.String(), summary) {
-			t.Fatalf("exit=%d payload=%s stderr=%s", code, stdout.Bytes(), stderr.String())
+		if code != wantCode || strings.Count(stdout.String(), "\n") != wantCount+2 || !strings.Contains(stdout.String(), summary) {
+			t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.Bytes(), stderr.String())
 		}
-		if conflict && envelope.Sessions[0].SessionID != "valid" {
+		if conflict && strings.Contains(stdout.String(), `"same"`) {
 			t.Fatalf("conflicting group emitted: %s", stdout.Bytes())
 		}
-		var compact bytes.Buffer
-		if err := json.Compact(&compact, stdout.Bytes()); err != nil {
+
+	}
+}
+
+func TestEncodingFailureRetainsCompletedBatches(t *testing.T) {
+	result := session.Result{Files: 3}
+	for _, source := range []string{"claude_code", "codex"} {
+		name := "codex"
+		if source == "claude_code" {
+			name = "claude"
+		}
+		data, err := os.ReadFile("internal/session/testdata/" + name + "-usage.jsonl")
+		if err != nil {
 			t.Fatal(err)
 		}
-		if !conflict && !bytes.Contains(compact.Bytes(), []byte(`"repository_observations":[{"record_line":1,"branch":"main","commit_hash":"recorded","repository_url":"host/org/repo"}]`)) {
-			t.Fatalf("context missing: %s", stdout.Bytes())
+		r, err := session.Read(source, bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
 		}
-		if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, stdout.Bytes()) {
-			t.Fatalf("file/stdout mismatch: %s %v", data, err)
-		}
+		result.Records = append(result.Records, r)
+	}
+	oversized := result.Records[1].Session
+	oversized.SessionID = "z-oversized"
+	oversized.UsageObservations = append([]session.UsageObservation(nil), oversized.UsageObservations...)
+	for i := range oversized.UsageObservations {
+		oversized.UsageObservations[i].Model = strings.Repeat("x", 4<<20)
+	}
+	result.Records = append(result.Records, session.Record{Session: oversized})
+	path := filepath.Join(t.TempDir(), "output")
+	var stdout, stderr bytes.Buffer
+	if code := writeUpload(options{output: path}, result, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "incomplete output") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	files, err := os.ReadDir(path)
+	if err != nil || len(files) != 1 || files[0].Name() != "metrics-000001.json" {
+		t.Fatalf("files=%v err=%v", files, err)
+	}
+	data, err := os.ReadFile(filepath.Join(path, files[0].Name()))
+	if err != nil || !json.Valid(data) {
+		t.Fatalf("completed batch lost: %v", err)
 	}
 }

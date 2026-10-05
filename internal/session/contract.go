@@ -1,15 +1,7 @@
-// Package session defines the local session request contract.
+// Package session defines the local session observations.
 package session
 
 import "time"
-
-const SchemaVersion = 2
-
-// Envelope requires Sessions to be a nonnil slice so an empty inventory is [].
-type Envelope struct {
-	SchemaVersion int       `json:"schema_version"`
-	Sessions      []Session `json:"sessions"`
-}
 
 // Session contains native identity and observation bounds, not lifecycle events.
 // Adapters map claude to claude_code and codex to codex and normalize times to UTC.

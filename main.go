@@ -10,9 +10,9 @@ import (
 var version = "dev"
 
 type options struct {
-	dryRun                 bool
-	source, format, output string
-	claudeHome, codexHome  string
+	dryRun                bool
+	source, output        string
+	claudeHome, codexHome string
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -23,7 +23,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "Usage: navigara sessions upload --dry-run [options]\n       navigara --version")
+		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]\n       navigara --version")
 		return 0
 	}
 	switch args[0] {
@@ -45,7 +45,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if len(args) > 1 {
 			return invalid("unexpected argument: " + args[1])
 		}
-		fmt.Fprintln(stdout, "Usage: navigara sessions upload --dry-run [options]")
+		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]")
 		return 0
 	}
 	if args[0] != "upload" {
@@ -58,10 +58,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {}
 	fs.BoolVar(&help, "help", false, "show upload help")
 	fs.BoolVar(&shortHelp, "h", false, "show upload help")
-	fs.BoolVar(&opts.dryRun, "dry-run", false, "prepare a local request only (required)")
+	fs.BoolVar(&opts.dryRun, "dry-run", true, "export local OTLP files without network requests")
 	fs.StringVar(&opts.source, "source", "all", "session source: all, claude, codex")
-	fs.StringVar(&opts.format, "format", "text", "stdout format: text, json")
-	fs.StringVar(&opts.output, "output", "./navigara-sessions.json", "request file path")
+	fs.StringVar(&opts.output, "output", "./navigara-backfill", "new directory for OTLP request bodies")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home containing projects/ (default ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home containing sessions/ (default ~/.codex)")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -72,9 +71,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if opts.source != "all" && opts.source != "claude" && opts.source != "codex" {
 		return invalid("--source must be all, claude, or codex")
-	}
-	if opts.format != "text" && opts.format != "json" {
-		return invalid("--format must be text or json")
 	}
 	if opts.output == "" {
 		return invalid("--output must not be empty")
@@ -89,13 +85,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return invalid("--" + emptyHome + " must not be empty")
 	}
 	if help || shortHelp {
-		fmt.Fprintln(stdout, "Usage: navigara sessions upload --dry-run [options]")
+		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]")
 		fs.SetOutput(stdout)
 		fs.PrintDefaults()
 		return 0
 	}
 	if !opts.dryRun {
-		return invalid("--dry-run is required and must be true")
+		return invalid("--dry-run=false is unsupported; network upload is not implemented")
 	}
 	return upload(opts, stdout, stderr)
 }

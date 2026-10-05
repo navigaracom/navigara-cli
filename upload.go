@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 
+	"github.com/navigaracom/navigara-cli/internal/otel"
 	"github.com/navigaracom/navigara-cli/internal/session"
 )
 
@@ -24,7 +26,7 @@ func writeUpload(opts options, result session.Result, stdout, stderr io.Writer) 
 		}
 		return a.SessionID < b.SessionID
 	})
-	envelope := session.Envelope{SchemaVersion: session.SchemaVersion, Sessions: []session.Session{}}
+	sessions := []session.Session{}
 	duplicates, failed := 0, result.Files-len(result.Records)-result.Skipped
 	for start := 0; start < len(result.Records); {
 		first := result.Records[start].Session
@@ -53,7 +55,7 @@ func writeUpload(opts options, result session.Result, stdout, stderr io.Writer) 
 			failed += end - start
 			result.Errors = append(result.Errors, fmt.Errorf("conflicting metadata for %q %q", first.Source, first.SessionID))
 		} else {
-			envelope.Sessions = append(envelope.Sessions, first)
+			sessions = append(sessions, first)
 			duplicates += end - start - 1
 		}
 		start = end
@@ -61,30 +63,50 @@ func writeUpload(opts options, result session.Result, stdout, stderr io.Writer) 
 	for _, err := range result.Errors {
 		fmt.Fprintln(stderr, "navigara:", err)
 	}
-	data, err := json.MarshalIndent(envelope, "", "  ")
+	if err := os.Mkdir(opts.output, 0700); err != nil {
+		fmt.Fprintf(stderr, "navigara: output %q: %q\n", opts.output, err.Error())
+		return 1
+	}
+	mapped := otel.Result{}
+	points, batches := 0, 0
+	encoder := otel.NewEncoder(func(data []byte) error {
+		path := filepath.Join(opts.output, fmt.Sprintf("metrics-%06d.json", batches+1))
+		if err := writeRequest(path, data); err != nil {
+			return err
+		}
+		batches++
+		return nil
+	})
+	var err error
+	for _, s := range sessions {
+		r := otel.Map(s)
+		points += len(r.Points)
+		mapped.Mapped += r.Mapped
+		mapped.Repeated += r.Repeated
+		mapped.Ambiguous += r.Ambiguous
+		mapped.Unmapped += r.Unmapped
+		if err = encoder.Add(r.Points); err != nil {
+			break
+		}
+	}
 	if err == nil {
-		data = append(data, '\n')
-		err = writeRequest(opts.output, data)
+		err = encoder.Flush()
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "navigara: output %q: %q\n", opts.output, err.Error())
+		fmt.Fprintf(stderr, "navigara: incomplete output %q (%d completed batches): %q\n", opts.output, batches, err.Error())
 		return 1
 	}
 	status := "complete"
 	if len(result.Errors) != 0 {
 		status = "incomplete"
 	}
-	summary := fmt.Sprintf("discovered=%d emitted=%d duplicates=%d skipped=%d failed=%d %s\n", result.Files, len(envelope.Sessions), duplicates, result.Skipped, failed, status)
-	if opts.format == "json" {
-		fmt.Fprint(stderr, summary)
-	} else {
-		var text bytes.Buffer
-		text.WriteString(summary)
-		for _, s := range envelope.Sessions {
-			fmt.Fprintf(&text, "%s %q\n", s.Source, s.SessionID)
-		}
-		data = text.Bytes()
+	var text bytes.Buffer
+	fmt.Fprintf(&text, "discovered=%d sessions=%d duplicates=%d skipped=%d failed=%d %s\n", result.Files, len(sessions), duplicates, result.Skipped, failed, status)
+	fmt.Fprintf(&text, "points=%d batches=%d mapped=%d repeated=%d ambiguous=%d unmapped=%d\n", points, batches, mapped.Mapped, mapped.Repeated, mapped.Ambiguous, mapped.Unmapped)
+	for _, s := range sessions {
+		fmt.Fprintf(&text, "%s %q\n", s.Source, s.SessionID)
 	}
+	data := text.Bytes()
 	if err := writeBytes(stdout, data); err != nil {
 		fmt.Fprintf(stderr, "navigara: stdout: %q\n", err.Error())
 		return 1
