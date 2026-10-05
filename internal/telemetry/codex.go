@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,31 +16,44 @@ import (
 )
 
 // CodexRollouts lists the rollout files under a Codex home, child threads included:
-// Codex reports each thread as its own session.
-func CodexRollouts(codexHome string) []string {
+// Codex reports each thread as its own session. Missing roots are optional.
+func CodexRollouts(codexHome string) ([]string, error) {
 	var paths []string
 	for _, dir := range []string{"sessions", "archived_sessions"} {
-		_ = filepath.WalkDir(filepath.Join(codexHome, dir), func(path string, d os.DirEntry, err error) error {
-			if err == nil && !d.IsDir() && strings.HasPrefix(d.Name(), "rollout-") && strings.HasSuffix(d.Name(), ".jsonl") {
+		root := filepath.Join(codexHome, dir)
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				if path == root && errors.Is(err, os.ErrNotExist) {
+					return nil
+				}
+				return fmt.Errorf("walk Codex %s at %q: %w", dir, path, err)
+			}
+			if path == root && !d.IsDir() {
+				return fmt.Errorf("inspect Codex %s: not a directory", dir)
+			}
+			if !d.IsDir() && strings.HasPrefix(d.Name(), "rollout-") && strings.HasSuffix(d.Name(), ".jsonl") {
 				paths = append(paths, path)
 			}
 			return nil
 		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	sort.Strings(paths)
-	return paths
+	return paths, nil
 }
 
 // CodexSessionID reads a rollout's thread id from its session_meta header.
-func CodexSessionID(path string) string {
+func CodexSessionID(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("open Codex rollout %q: %w", path, err)
 	}
 	defer f.Close()
 	line, err := bufio.NewReaderSize(f, 1<<20).ReadBytes('\n')
 	if err != nil && err != io.EOF {
-		return ""
+		return "", fmt.Errorf("read Codex rollout header %q: %w", path, err)
 	}
 	var row struct {
 		Type    string `json:"type"`
@@ -47,10 +61,10 @@ func CodexSessionID(path string) string {
 			ID string `json:"id"`
 		} `json:"payload"`
 	}
-	if json.Unmarshal(line, &row) != nil || row.Type != "session_meta" {
-		return ""
+	if json.Unmarshal(line, &row) != nil || row.Type != "session_meta" || row.Payload.ID == "" {
+		return "", fmt.Errorf("invalid Codex rollout header %q", path)
 	}
-	return row.Payload.ID
+	return row.Payload.ID, nil
 }
 
 type codexRow struct {
