@@ -91,6 +91,9 @@ func TestEnsureIngestionMintsScopedKeyAndReusesIt(t *testing.T) {
 	}))
 	defer server.Close()
 	c := accountConfig{Version: 1, Host: server.URL, SessionToken: "session-secret", OrganizationID: "org-1"}
+	if err := saveAccount(c); err != nil {
+		t.Fatal(err)
+	}
 	if err := ensureIngestion(context.Background(), &c); err != nil {
 		t.Fatal(err)
 	}
@@ -122,5 +125,28 @@ func TestEnsureIngestionRejectsForbiddenAndWrongOrganization(t *testing.T) {
 				t.Fatalf("bad error: %v", err)
 			}
 		})
+	}
+}
+
+func TestEnsureIngestionPreservesConcurrentLogin(t *testing.T) {
+	withConfigHome(t)
+	later := accountConfig{Version: 1, Host: "https://later.example", SessionToken: "new-session", OrganizationID: "new-org"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := saveAccount(later); err != nil {
+			t.Error(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"plainTextKey": "old-org-key", "apiKey": map[string]any{"organizationId": "org-1", "expiresAt": time.Now().Add(time.Hour)}})
+	}))
+	defer srv.Close()
+	c := accountConfig{Version: 1, Host: srv.URL, SessionToken: "session-secret", OrganizationID: "org-1"}
+	if err := saveAccount(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureIngestion(context.Background(), &c); err == nil {
+		t.Fatal("overwrote a later login")
+	}
+	saved, err := loadAccount("")
+	if err != nil || saved.Host != later.Host || saved.SessionToken != later.SessionToken || saved.IngestToken != "" {
+		t.Fatal("later account changed")
 	}
 }
