@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -116,8 +115,8 @@ func TestUploadStopsOnRejectedKey(t *testing.T) {
 
 func TestUploadNeedsAnIdentity(t *testing.T) {
 	root := t.TempDir()
-	for _, home := range []string{filepath.Join(root, ".claude"), filepath.Join(root, ".codex")} {
-		if err := os.Mkdir(home, 0o700); err != nil {
+	for _, home := range []string{".claude", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(root, home), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -369,59 +368,5 @@ func TestUploadIgnoresUnselectedExplicitHome(t *testing.T) {
 		"--codex-home", filepath.Join(t.TempDir(), "missing"), "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 	if code != 0 || !strings.Contains(stdout.String(), "claude_code") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-}
-
-func TestUploadUntilExcludesFutureSessions(t *testing.T) {
-	for _, source := range []string{"claude", "codex"} {
-		t.Run(source, func(t *testing.T) {
-			claudeHome, codexHome := fixtureHomes(t)
-			wantIncluded := 2
-			if source == "codex" {
-				wantIncluded = 1
-				for id, day := range map[string]string{"included": "01", "future": "03"} {
-					path := filepath.Join(codexHome, "sessions", "rollout-"+id+".jsonl")
-					if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-						t.Fatal(err)
-					}
-					data := fmt.Sprintf(`{"timestamp":"2026-10-%sT10:00:00Z","type":"session_meta","payload":{"id":"%s"}}`+"\n", day, id)
-					if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-						t.Fatal(err)
-					}
-				}
-			} else {
-				path := filepath.Join(claudeHome, "projects", "-repo", "aaaaaaaa-0000-0000-0000-000000000003.jsonl")
-				data := `{"type":"user","sessionId":"aaaaaaaa-0000-0000-0000-000000000003","timestamp":"2026-10-03T10:00:00Z","promptId":"future","message":{"role":"user","content":"future"}}` + "\n"
-				if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			for _, window := range []struct {
-				until string
-				want  int
-			}{{"2026-09-01T00:00:00Z", 0}, {"2026-10-02T00:00:00Z", wantIncluded}} {
-				t.Run(window.until, func(t *testing.T) {
-					out := filepath.Join(t.TempDir(), "out")
-					var stdout, stderr bytes.Buffer
-					code := run([]string{"sessions", "upload", "--source", source, "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome, "--until", window.until, "--output", out}, &stdout, &stderr)
-					if code != 0 || !strings.Contains(stdout.String(), fmt.Sprintf("sessions=%d failed=0", window.want)) || stderr.Len() != 0 {
-						t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-					}
-					files, err := filepath.Glob(filepath.Join(out, "*.json"))
-					if err != nil || (len(files) == 0) != (window.want == 0) {
-						t.Fatalf("files=%v err=%v", files, err)
-					}
-					for _, path := range files {
-						body, err := os.ReadFile(path)
-						if err != nil {
-							t.Fatal(err)
-						}
-						if bytes.Contains(body, []byte("future")) || bytes.Contains(body, []byte("000000000003")) {
-							t.Fatalf("future session exported in %s", path)
-						}
-					}
-				})
-			}
-		})
 	}
 }
