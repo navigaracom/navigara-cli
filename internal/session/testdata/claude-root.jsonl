@@ -1,0 +1,5 @@
+{"type":"mode","sessionId":"claude_code-root"}
+{"type":"file-history-snapshot"}
+{"type":"user","isSidechain":false,"sessionId":"claude_code-root","timestamp":"2026-01-02T00:01:00Z","version":"2.1.285","cwd":"/workspace/example"}
+{"type":"attachment","isSidechain":false,"sessionId":"claude_code-root","timestamp":"2026-01-02T00:00:00Z","version":"2.1.285","cwd":"/workspace/example"}
+{"type":"system","isSidechain":false,"sessionId":"claude_code-root","timestamp":"2026-01-02T00:02:00Z","version":"2.1.285","cwd":"/workspace/example"}
