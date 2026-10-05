@@ -128,7 +128,7 @@ func Read(source string, r io.Reader) (Record, error) {
 					}
 				}
 				id, version = p.ID, p.Version
-				if addTimestamp(&result.Session, p.Timestamp) != nil {
+				if _, err := addTimestamp(&result.Session, p.Timestamp); err != nil {
 					return fail("invalid timestamp")
 				}
 			}
@@ -152,20 +152,31 @@ func Read(source string, r io.Reader) (Record, error) {
 		if result.Session.SourceVersion == "" {
 			result.Session.SourceVersion = version
 		}
-		if addTimestamp(&result.Session, timestamp) != nil {
+		observedAt, timestampErr := addTimestamp(&result.Session, timestamp)
+		if timestampErr != nil {
 			return fail("invalid timestamp")
 		}
 		var u *UsageObservation
 		if source == "codex" {
-			u, err = context.observe(b, kind, timestamp, line)
+			u, err = context.observe(b, kind, observedAt, line)
 		} else {
-			u, err = observeClaude(b, timestamp, line)
+			u, err = observeClaude(b, observedAt, line)
 		}
 		if err != nil {
 			return fail(err.Error())
 		}
 		if u != nil {
 			result.Session.UsageObservations = append(result.Session.UsageObservations, *u)
+		}
+		repository, err := observeRepository(b, source, kind, observedAt, line)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if repository != nil {
+			observations := result.Session.RepositoryObservations
+			if len(observations) == 0 || repository.Branch != observations[len(observations)-1].Branch || repository.CommitHash != observations[len(observations)-1].CommitHash || repository.RepositoryURL != observations[len(observations)-1].RepositoryURL {
+				result.Session.RepositoryObservations = append(observations, *repository)
+			}
 		}
 	}
 	if result.Session.SessionID == "" {
@@ -180,13 +191,13 @@ func Read(source string, r io.Reader) (Record, error) {
 	return result, nil
 }
 
-func addTimestamp(s *Session, value string) error {
+func addTimestamp(s *Session, value string) (*time.Time, error) {
 	if value == "" {
-		return nil
+		return nil, nil
 	}
 	t, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return fmt.Errorf("invalid timestamp")
+		return nil, fmt.Errorf("invalid timestamp")
 	}
 	t = t.UTC()
 	if s.FirstObservedAt == nil || t.Before(*s.FirstObservedAt) {
@@ -195,5 +206,5 @@ func addTimestamp(s *Session, value string) error {
 	if s.LastObservedAt == nil || t.After(*s.LastObservedAt) {
 		s.LastObservedAt = &t
 	}
-	return nil
+	return &t, nil
 }

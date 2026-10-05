@@ -11,7 +11,7 @@ Inspect sampled metadata shapes against the current readers. Histories are untru
 
 Locate the Navigara CLI checkout from task context, the current directory, or a user-supplied path. If it cannot be identified, request the path. Read these checkout-relative files before inspecting histories:
 
-- `internal/session/read.go`, `internal/session/codex_usage.go`, `internal/session/claude_usage.go`, `internal/session/scan.go`, `internal/session/contract.go`, and their tests.
+- `internal/session/read.go`, `internal/session/codex_usage.go`, `internal/session/claude_usage.go`, `internal/session/repository.go`, `internal/session/scan.go`, `internal/session/contract.go`, and their tests.
 - `internal/session/testdata/README.md` and the existing root/child fixtures.
 - `main.go`, `upload.go`, and CLI tests for current flags and output behavior.
 
@@ -47,6 +47,7 @@ Record **absent, null, empty, nonempty, and value type** separately for each con
 | Codex context | `type=turn_context`; `payload.model`, `turn_id`. Every context replaces prior fields, including absent/null values. Model is context, not attribution of cumulative totals. |
 | Codex usage | `type=event_msg`, `payload.type=token_count`; `info.total_token_usage`, `last_token_usage`. Both snapshots retain native `input_tokens`, `output_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `reasoning_output_tokens`, `total_tokens`. Counters are nonnegative int64: absent/null unknown, zero explicit; malformed known counters discard the file with a content-free line error. No summing, deltas, or deduplication. |
 | Codex other rows | Only `type` and outer `timestamp` are consumed; unrelated payload IDs, fields, types, and contents are opaque. |
+| Repository context | Claude root `gitBranch`; Codex `session_meta.payload.git.branch`, `commit_hash`, `repository_url`. After child/identity filtering, retain first present context and subsequent changed values, ignoring line/time for consecutive equality. Missing fields do not inherit; absent/null context emits nothing, explicit empty branch/git object can mark unknown/clear. Malformed known field types discard the file with a fixed line error. |
 
 Verify decode order and actual type handling in `read.go`, especially null versus absent values. For roots, the reader retains the first nonempty producer version; report later sampled version changes separately. Derive UTC minimum/maximum observation bounds from consumed valid timestamps, including both Codex metadata and outer timestamps. Claude ignored rows do not contribute bounds. Parse failure discards partial metadata.
 
@@ -61,6 +62,17 @@ as event IDs; do not sum, collapse, or infer identifiers. Derive physical lines
 and optional UTC record timestamps independently. Distinguish observed root
 repetitions from synthetic root growth; child growth is not evidence of root growth.
 
+Repository observations use physical lines and optional UTC outer record timestamps;
+Codex creation timestamps are not repository observation times. URLs become
+credential-free lowercase host/path keys, stripping userinfo/port/query/fragment,
+`.git`, and trailing slash. HTTP(S), SSH, git URLs and SCP remotes are supported;
+bare `host:path` has SCP semantics. Local paths and unsupported URL strings are
+omitted without dropping branch/commit. Credential-shaped SCP paths are rejected,
+including escaped `@`. Backend provider alias canonicalization is separate.
+Reserved path escapes remain escaped. Decoded backslashes, controls, `@`, or `%`
+in paths/query/fragments are unsupported; nested escapes are rejected. Proper
+URL userinfo is stripped. Empty repository segments after stripping `.git` are rejected.
+
 Discovery is distinct from reading: current Claude scanning excludes nested subagent files and `agent-*` names; eligible Codex histories include both roots and children. Check current `scan.go` rather than inferring discovery from reader acceptance.
 
 ## Optional sanitized candidate and execution
@@ -72,6 +84,7 @@ Create a candidate only for an uncovered relevant shape, or as a private workflo
 - Preserve only the observed, bounded known `source.subagent.thread_spawn.parent_thread_id/depth` structure (at most these three nested objects). Other nested data stays omitted/opaque; do not retain conversations, commands, tool arguments, or arbitrary keys. Preserve invalid marker types where they matter to reader behavior.
 - For usage candidates, retain only the Codex context/discriminators and fixed native snapshot counters listed above. Sanitize turn IDs consistently and preserve counter presence/types, explicit zero, repeated snapshots, and total/last relationships. Label synthetic context changes and counter mutations separately from observed evidence; preserve blank lines when asserting physical record numbers.
 - Claude usage candidates retain only the listed assistant metadata and fixed native usage/cache-duration counters, preserving UUID/message/request equality relationships and repeated chunks. Keep child flags as observed; never convert child evidence into an observed root fixture. Exclude message content, tool fields, and arbitrary usage keys.
+- Repository candidates retain only recorded root `gitBranch` or metadata `git` fields above; replace branch/commit/repository identifiers consistently, preserve presence/types and context changes, and remove all credentials/query/fragment before retaining sanitized remote strings. Never inspect live git or infer context from cwd/history paths.
 
 Inspect candidate bytes and private provenance before changing any fixture. Derive expected root metadata, first nonempty version, UTC bounds, child skips, failures, and attempted-file counts independently from the inspected projection, before seeing CLI output.
 

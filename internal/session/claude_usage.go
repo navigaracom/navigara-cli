@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func observeClaude(b []byte, timestamp string, line int) (*UsageObservation, error) {
+func observeClaude(b []byte, observedAt *time.Time, line int) (*UsageObservation, error) {
 	var row struct {
 		Type    json.RawMessage `json:"type"`
 		Message json.RawMessage `json:"message"`
@@ -50,14 +50,6 @@ func observeClaude(b []byte, timestamp string, line int) (*UsageObservation, err
 	if json.Unmarshal(b, &metadata) != nil {
 		return nil, fmt.Errorf("invalid Claude usage")
 	}
-	u := &UsageObservation{RecordLine: line, EventID: metadata.UUID, RequestID: metadata.RequestID, MessageID: metadata.Message.ID, Model: metadata.Message.Model, MessageUsage: &usage}
-	if timestamp != "" {
-		t, err := time.Parse(time.RFC3339Nano, timestamp)
-		if err != nil {
-			return nil, fmt.Errorf("invalid timestamp")
-		}
-		t = t.UTC()
-		u.ObservedAt = &t
-	}
+	u := &UsageObservation{RecordLine: line, ObservedAt: observedAt, EventID: metadata.UUID, RequestID: metadata.RequestID, MessageID: metadata.Message.ID, Model: metadata.Message.Model, MessageUsage: &usage}
 	return u, nil
 }
