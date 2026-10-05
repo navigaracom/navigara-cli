@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -73,9 +74,14 @@ func TestBrowserLogin(t *testing.T) {
 }
 
 func TestBrowserLoginCancelledWithFallback(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
 	var out bytes.Buffer
-	_, err := newAuthClient(defaultHost).browserLogin(ctx, &out, func(string) error { cancel(); return errors.New("no browser") })
+	_, err := newAuthClient(defaultHost).browserLogin(context.Background(), &out, func(string) error {
+		process, findErr := os.FindProcess(os.Getpid())
+		if findErr != nil {
+			return findErr
+		}
+		return errors.Join(errors.New("no browser"), process.Signal(os.Interrupt))
+	})
 	if err == nil || !strings.Contains(out.String(), defaultHost+"/cli/login?") {
 		t.Fatal("missing fallback/cancellation")
 	}
