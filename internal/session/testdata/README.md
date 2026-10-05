@@ -21,3 +21,11 @@ relationships are preserved. The reader retains total and last snapshots in file
 order without computing deltas or attributing cumulative totals to the context
 model. Tests label unobserved repetitions, model changes, resets, and invalid
 counters as synthetic. No new real history reads are needed to replay this fixture.
+
+Claude usage producer: 2.1.287. `claude-usage.jsonl` retains an identity-bearing
+mode row followed by two observed root assistant rows with identical usage and
+the same message/request IDs, but distinct UUIDs. Native input/output/cache and
+cache-duration counters retain their presence, zero values, and relationships;
+IDs/timestamps are consistently sanitized. Root counter growth is tested only
+as a labeled synthetic mutation; growing counters observed in child evidence
+are not presented as a root fixture. Message content and tools remain excluded.

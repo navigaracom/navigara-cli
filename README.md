@@ -28,8 +28,8 @@ incomplete scan, 2 invalid invocation.
 
 The request contract uses `schema_version: 2` and a `sessions` array, including
 `[]` for an empty inventory. This illustrative envelope contains only session
-identity and optional observation bounds/version. Codex also extracts usage
-snapshots; Claude usage extraction is not yet enabled:
+identity and optional observation bounds/version. Both readers also extract
+native usage observations when recorded:
 
 ```json
 {
