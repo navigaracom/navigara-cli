@@ -75,6 +75,44 @@ func TestSetupPreviewConsentAndNativeStreaming(t *testing.T) {
 	}
 }
 
+func TestSetupRollsBackFirstFileWhenLaterTargetChanges(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	home := filepath.Dir(claudeHome)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	claudeSettings := filepath.Join(claudeHome, "settings.json")
+	codexSettings := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(claudeSettings, []byte(`{"model":"keep"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if body, _ := io.ReadAll(r.Body); string(body) != "{}" {
+			t.Errorf("unexpected upload during failed setup: %s", body)
+		}
+		if err := os.WriteFile(codexSettings, []byte("concurrent = true\n"), 0600); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+		io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+	input := strings.Join([]string{"y", "y", "dev@example.com", "skip", "y", "y", ""}, "\n")
+	var out, errs bytes.Buffer
+	if runSetup(nil, strings.NewReader(input), &out, &errs) == 0 {
+		t.Fatal("later target change accepted")
+	}
+	if got, _ := os.ReadFile(claudeSettings); !bytes.Equal(got, []byte(`{"model":"keep"}`)) {
+		t.Fatalf("first target was not rolled back: %q", got)
+	}
+	if got, _ := os.ReadFile(codexSettings); !bytes.Equal(got, []byte("concurrent = true\n")) {
+		t.Fatalf("concurrent target changed: %q", got)
+	}
+}
+
 func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 	for _, failure := range []string{"policy", "auth", "upload"} {
 		t.Run(failure, func(t *testing.T) {
