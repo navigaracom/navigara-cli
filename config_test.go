@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,7 +25,9 @@ func TestCanonicalHost(t *testing.T) {
 	for _, input := range []string{
 		"", " https://app.navigara.com", "https://app.navigara.com/path", "https://app.navigara.com?x=1",
 		"https://user:pass@app.navigara.com", "http://localhost:8080", "http://example.com", "https://app.navigara.com:bad",
-		"https://app.navigara.com#fragment", "https://app.navigara.com/%", "https://app.navigara.com\n",
+		"https://app.navigara.com:0", "https://app.navigara.com:99999", "https://app.navigara.com:",
+		"https://app.navigara.com?", "https://app.navigara.com#fragment", "https://app.navigara.com#",
+		"https://app.navigara.com/%", "https://app.navigara.com\n",
 	} {
 		if got, err := canonicalHost(input); err == nil {
 			t.Errorf("canonicalHost(%q) accepted %q", input, got)
@@ -96,6 +99,21 @@ func TestAccountPersistenceValidationAndAtomicity(t *testing.T) {
 	}
 	if _, err := loadAccount(""); err == nil {
 		t.Fatal("accepted corrupt config")
+	}
+}
+
+func TestLoadAccountDoesNotEchoMalformedSecrets(t *testing.T) {
+	dir := withConfigHome(t)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	secret := "do-not-echo-this-secret"
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"host":"https://app.navigara.com","sessionExpiresAt":"`+secret+`"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadAccount(""); err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("malformed config error leaked secret: %v", err)
 	}
 }
 

@@ -33,7 +33,7 @@ func canonicalHost(raw string) (string, error) {
 		return "", errors.New("host must be an origin without whitespace")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.ForceQuery || strings.ContainsAny(raw, "?#") || u.Fragment != "" || u.RawFragment != "" {
 		return "", errors.New("host must be an origin")
 	}
 	if u.Path != "" && u.Path != "/" || u.RawPath != "" && u.RawPath != "/" {
@@ -48,6 +48,9 @@ func canonicalHost(raw string) (string, error) {
 		return "", errors.New("host must include a hostname")
 	}
 	port := u.Port()
+	if strings.HasSuffix(u.Host, ":") || (port != "" && !validPort(port)) {
+		return "", errors.New("host has an invalid port")
+	}
 	if scheme == "http" {
 		ip := net.ParseIP(hostname)
 		if ip == nil || !ip.IsLoopback() {
@@ -65,6 +68,23 @@ func canonicalHost(raw string) (string, error) {
 		host += ":" + port
 	}
 	return scheme + "://" + host, nil
+}
+
+func validPort(port string) bool {
+	if port == "" {
+		return false
+	}
+	value := 0
+	for _, digit := range port {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+		value = value*10 + int(digit-'0')
+		if value > 65535 {
+			return false
+		}
+	}
+	return value > 0
 }
 
 func accountPath() (string, string, error) {
@@ -121,7 +141,7 @@ func loadAccount(host string) (accountConfig, error) {
 	}
 	var saved accountConfig
 	if err := json.Unmarshal(data, &saved); err != nil {
-		return accountConfig{}, fmt.Errorf("invalid account config: %w", err)
+		return accountConfig{}, errors.New("invalid account config")
 	}
 	if saved.Version != 1 {
 		return accountConfig{}, fmt.Errorf("unsupported account config version %d", saved.Version)
@@ -167,7 +187,8 @@ func saveAccount(c accountConfig) error {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0600); err == nil {
+	err = tmp.Chmod(0600)
+	if err == nil {
 		_, err = tmp.Write(data)
 	}
 	if err == nil {
