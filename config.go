@@ -156,7 +156,10 @@ func loadAccount(host string) (accountConfig, error) {
 	return saved, nil
 }
 
-func saveAccount(c accountConfig) error {
+func saveAccount(c accountConfig) error { return writeAccount(c, nil) }
+
+// When a network request used a saved target, do not replace a later login.
+func writeAccount(c accountConfig, expected *accountConfig) error {
 	if c.Version != 0 && c.Version != 1 {
 		return fmt.Errorf("unsupported account config version %d", c.Version)
 	}
@@ -180,6 +183,15 @@ func saveAccount(c accountConfig) error {
 	before, existed, err := accountSnapshot(path)
 	if err != nil {
 		return err
+	}
+	if expected != nil {
+		var current accountConfig
+		if !existed || json.Unmarshal(before, &current) != nil ||
+			current.Host != expected.Host || current.UserID != expected.UserID ||
+			current.SessionToken != expected.SessionToken || current.OrganizationID != expected.OrganizationID ||
+			current.IngestToken != expected.IngestToken {
+			return errors.New("account changed while requesting an ingestion key; retry with the current login")
+		}
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
