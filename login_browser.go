@@ -63,6 +63,9 @@ func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(
 			handled = true
 			var session loginSession
 			err := c.request(ctx, "POST", "/auth/cli/exchange", "", map[string]string{"code": q.Get("code"), "codeVerifier": verifier}, &session)
+			if errors.Is(err, authHTTPError(401)) || errors.Is(err, authHTTPError(403)) {
+				err = errors.New("login code rejected or expired; run navigara login again")
+			}
 			if err == nil && (session.SessionToken == "" || !session.ExpiresAt.After(time.Now())) {
 				err = errors.New("Navigara returned an invalid session")
 			}

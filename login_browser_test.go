@@ -116,3 +116,28 @@ func TestAuthClientRejectsBadResponses(t *testing.T) {
 		t.Fatal("ignored cancellation")
 	}
 }
+
+func TestBrowserLoginRejectedCodeGuidance(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
+			defer srv.Close()
+			var out bytes.Buffer
+			_, err := newAuthClient(srv.URL).browserLogin(context.Background(), &out, func(raw string) error {
+				u, e := url.Parse(raw)
+				if e != nil {
+					return e
+				}
+				q := u.Query()
+				resp, e := http.Get("http://127.0.0.1:" + q.Get("port") + "/callback?" + url.Values{"state": {q.Get("state")}, "code": {"expired"}}.Encode())
+				if e == nil {
+					resp.Body.Close()
+				}
+				return e
+			})
+			if err == nil || !strings.Contains(err.Error(), "login code") || !strings.Contains(err.Error(), "navigara login") || strings.Contains(err.Error(), "administrator") {
+				t.Fatalf("wrong sign-in recovery: %v", err)
+			}
+		})
+	}
+}
