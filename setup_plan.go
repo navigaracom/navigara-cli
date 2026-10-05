@@ -17,7 +17,7 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		}
 		return err
 	}
-	endpoint := newSender(opts.url, opts.token).base
+	endpoint := otlpBase(opts.url)
 	if opts.source == "all" || opts.source == "claude" {
 		env := map[string]string{}
 		for _, entry := range os.Environ() {

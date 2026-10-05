@@ -24,8 +24,10 @@ type sender struct {
 func newSender(base, token string) *sender {
 	return &sender{client: &http.Client{Timeout: 60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		base: strings.TrimRight(base, "/") + "/otlp", token: token}
+		base: otlpBase(base), token: token}
 }
+
+func otlpBase(base string) string { return strings.TrimRight(base, "/") + "/otlp" }
 
 func (s *sender) validate() error {
 	u, err := url.Parse(s.base)

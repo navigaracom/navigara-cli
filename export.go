@@ -185,7 +185,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	if sender != nil {
 		fmt.Fprintf(stdout, "sent=%d\n", sender.sent)
 	}
-	if incomplete || failed > 0 {
+	if failed > 0 {
 		return 1
 	}
 	return 0

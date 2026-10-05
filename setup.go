@@ -205,6 +205,7 @@ func freshSetup(p *setupInput, stderr io.Writer) error {
 		}
 	}
 	keep = true
+	fmt.Fprintf(p.out, "Frozen backfill: %s\n", opts.output)
 	for _, f := range files {
 		if err = f.apply(); err != nil {
 			return fmt.Errorf("settings update failed: %w; earlier updates remain, backups are listed above", err)
@@ -213,7 +214,6 @@ func freshSetup(p *setupInput, stderr io.Writer) error {
 			fmt.Fprintln(p.out, "Backup:", f.backup)
 		}
 	}
-	fmt.Fprintf(p.out, "Frozen backfill: %s\n", opts.output)
 	if err = sendSetupBatches(opts.output, s); err != nil {
 		return fmt.Errorf("%w; settings are configured; retry with navigara setup --resume %q", err, opts.output)
 	}
