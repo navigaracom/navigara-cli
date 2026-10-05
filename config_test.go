@@ -135,6 +135,9 @@ func TestAccountRejectsInsecureModesAndSymlinks(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"version":1,"host":"https://app.navigara.com"}`), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := loadAccount(""); err == nil {
 		t.Fatal("accepted insecure config file")
 	}
