@@ -136,7 +136,7 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 		output := filepath.Join(root, "out")
 		var stdout, stderr bytes.Buffer
 		code := run([]string{"sessions", "upload", "--source", "claude", "--email", "dev@example.com",
-			"--claude-home", filepath.Join(root, "missing"), "--output", output}, &stdout, &stderr)
+			"--claude-home", filepath.Join(root, "missing"), "--codex-home", filepath.Join(root, "codex"), "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "missing") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 		}
