@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,7 +34,7 @@ func canonicalHost(raw string) (string, error) {
 		return "", errors.New("host must be an origin without whitespace")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.ForceQuery || strings.ContainsAny(raw, "?#") || u.Fragment != "" || u.RawFragment != "" {
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || strings.ContainsAny(raw, "?#") {
 		return "", errors.New("host must be an origin")
 	}
 	if u.Path != "" && u.Path != "/" || u.RawPath != "" && u.RawPath != "/" {
@@ -48,8 +49,15 @@ func canonicalHost(raw string) (string, error) {
 		return "", errors.New("host must include a hostname")
 	}
 	port := u.Port()
-	if strings.HasSuffix(u.Host, ":") || (port != "" && !validPort(port)) {
+	if strings.HasSuffix(u.Host, ":") {
 		return "", errors.New("host has an invalid port")
+	}
+	if port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || n == 0 {
+			return "", errors.New("host has an invalid port")
+		}
+		port = strconv.FormatUint(n, 10)
 	}
 	if scheme == "http" {
 		ip := net.ParseIP(hostname)
@@ -68,23 +76,6 @@ func canonicalHost(raw string) (string, error) {
 		host += ":" + port
 	}
 	return scheme + "://" + host, nil
-}
-
-func validPort(port string) bool {
-	if port == "" {
-		return false
-	}
-	value := 0
-	for _, digit := range port {
-		if digit < '0' || digit > '9' {
-			return false
-		}
-		value = value*10 + int(digit-'0')
-		if value > 65535 {
-			return false
-		}
-	}
-	return value > 0
 }
 
 func accountPath() (string, string, error) {
@@ -120,24 +111,14 @@ func loadAccount(host string) (accountConfig, error) {
 		return accountConfig{}, fmt.Errorf("%s must be a private directory", dir)
 	}
 	if info.Mode().Perm() != 0700 {
-		return accountConfig{}, fmt.Errorf("%s has insecure permissions", dir)
+		return accountConfig{}, fmt.Errorf("%s has insecure permissions; run chmod 700 %q", dir, dir)
 	}
-	fileInfo, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
+	data, exists, err := accountSnapshot(path)
+	if err != nil {
+		return accountConfig{}, err
+	}
+	if !exists {
 		return accountConfig{Version: 1, Host: wanted}, nil
-	}
-	if err != nil {
-		return accountConfig{}, err
-	}
-	if fileInfo.Mode()&os.ModeSymlink != 0 || !fileInfo.Mode().IsRegular() {
-		return accountConfig{}, fmt.Errorf("%s must be a regular file", path)
-	}
-	if fileInfo.Mode().Perm() != 0600 {
-		return accountConfig{}, fmt.Errorf("%s has insecure permissions", path)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return accountConfig{}, err
 	}
 	var saved accountConfig
 	if err := json.Unmarshal(data, &saved); err != nil {
@@ -247,7 +228,7 @@ func accountSnapshot(path string) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("%s must be a regular file", path)
 	}
 	if info.Mode().Perm() != 0600 {
-		return nil, false, fmt.Errorf("%s has insecure permissions", path)
+		return nil, false, fmt.Errorf("%s has insecure permissions; run chmod 600 %q", path, path)
 	}
 	b, err := os.ReadFile(path)
 	return b, true, err
