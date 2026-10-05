@@ -165,6 +165,21 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 }
 
 func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
+	t.Run("missing explicit home", func(t *testing.T) {
+		root := t.TempDir()
+		missing := filepath.Join(root, "missing")
+		output := filepath.Join(root, "out")
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+			"--claude-home", filepath.Join(root, "claude"), "--codex-home", missing, "--output", output}, &stdout, &stderr)
+		if code != 1 || !strings.Contains(stderr.String(), "missing") {
+			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+		}
+		if _, err := os.Stat(output); !os.IsNotExist(err) {
+			t.Fatalf("output created after failed discovery: %v", err)
+		}
+	})
+
 	t.Run("malformed rollout header", func(t *testing.T) {
 		claudeHome, codexHome := fixtureHomes(t)
 		rollout := filepath.Join(codexHome, "sessions", "rollout-bad.jsonl")
