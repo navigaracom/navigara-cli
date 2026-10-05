@@ -119,6 +119,11 @@ func TestUploadStopsOnRejectedKey(t *testing.T) {
 
 func TestUploadNeedsAnIdentity(t *testing.T) {
 	root := t.TempDir()
+	for _, home := range []string{".claude", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(root, home), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"sessions", "upload", "--claude-home", filepath.Join(root, ".claude"), "--codex-home", filepath.Join(root, ".codex"),
 		"--output", filepath.Join(root, "out")}, &stdout, &stderr)
