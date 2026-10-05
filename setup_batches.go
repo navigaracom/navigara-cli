@@ -16,19 +16,20 @@ import (
 
 type setupBatch struct{ Name, SHA256 string }
 type setupManifest struct {
-	Version int
-	URL     string
-	Batches []setupBatch
+	Version        int
+	URL            string
+	OrganizationID string `json:",omitempty"`
+	Batches        []setupBatch
 }
 
 var batchName = regexp.MustCompile(`^(logs|metrics)-[0-9]+\.json$`)
 
-func saveSetupBatches(dir, url string) error {
+func saveSetupBatches(dir, url, organizationID string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	m := setupManifest{Version: 1, URL: url}
+	m := setupManifest{Version: 1, URL: url, OrganizationID: organizationID}
 	for _, e := range entries {
 		if !batchName.MatchString(e.Name()) {
 			return errors.New("unexpected file in setup export")

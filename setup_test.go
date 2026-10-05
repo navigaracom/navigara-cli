@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +23,7 @@ func TestSetupPreviewConsentAndNativeStreaming(t *testing.T) {
 			t.Setenv("ZDOTDIR", home)
 			os.WriteFile(filepath.Join(claudeHome, "settings.json"), []byte(`{"model":"keep-me"}`), 0600)
 			requests := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
 				if r.Header.Get("Authorization") != "Bearer test-secret" {
 					t.Error("missing token")
@@ -41,7 +40,7 @@ func TestSetupPreviewConsentAndNativeStreaming(t *testing.T) {
 			if apply {
 				answer = "y"
 			}
-			input := strings.Join([]string{"y", "y", srv.URL, "test-secret", "dev@example.com", "all", "y", answer, ""}, "\n")
+			input := strings.Join([]string{"y", "y", "dev@example.com", "all", "y", answer, ""}, "\n")
 			var out, errs bytes.Buffer
 			code := runSetup(nil, strings.NewReader(input), &out, &errs)
 			if code != 0 {
@@ -89,7 +88,7 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			t.Setenv("ZDOTDIR", home)
 			fail := true
 			var payloads []string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				if failure == "auth" {
 					w.WriteHeader(401)
@@ -108,7 +107,7 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 				io.WriteString(w, `{}`)
 			}))
 			defer srv.Close()
-			input := strings.Join([]string{"y", "n", srv.URL, "test-secret", "dev@example.com", "all", "y", "y", ""}, "\n")
+			input := strings.Join([]string{"y", "n", "dev@example.com", "all", "y", "y", ""}, "\n")
 			var out, errs bytes.Buffer
 			if runSetup(nil, strings.NewReader(input), &out, &errs) == 0 {
 				t.Fatal("expected setup failure")
@@ -131,7 +130,7 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			// Changes to source history after preview cannot affect the retry.
 			os.RemoveAll(filepath.Join(claudeHome, "projects"))
 			fail = false
-			if runSetup([]string{"--resume", dirs[0]}, strings.NewReader("test-secret\ny\n"), &out, &errs) != 0 {
+			if runSetup([]string{"--resume", dirs[0]}, strings.NewReader("y\n"), &out, &errs) != 0 {
 				t.Fatal(errs.String())
 			}
 			if len(payloads) < 2 || payloads[0] != payloads[1] {
@@ -168,14 +167,14 @@ func TestSetupStopsOnIncompleteHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			requests := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++ }))
+			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++ }))
 			defer srv.Close()
 			var out, errs bytes.Buffer
 			selectClaude, selectCodex := "y", "n"
 			if source == "codex" {
 				selectClaude, selectCodex = "n", "y"
 			}
-			input := selectClaude + "\n" + selectCodex + "\n" + srv.URL + "\nsecret\ndev@example.com\nall\ny\ny\n"
+			input := selectClaude + "\n" + selectCodex + "\n" + "dev@example.com\nall\ny\ny\n"
 			if runSetup(nil, strings.NewReader(input), &out, &errs) == 0 {
 				t.Fatal("incomplete history accepted")
 			}
