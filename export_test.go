@@ -355,3 +355,13 @@ func TestCommitIndexKeepsADeletedBranchCommit(t *testing.T) {
 		t.Fatalf("commits = %+v, want the deleted branch's commit, unreachable", got)
 	}
 }
+
+func TestUploadIgnoresUnselectedExplicitHome(t *testing.T) {
+	claudeHome, _ := fixtureHomes(t)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome,
+		"--codex-home", filepath.Join(t.TempDir(), "missing"), "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "claude_code") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
