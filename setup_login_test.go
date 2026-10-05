@@ -15,6 +15,21 @@ import (
 	"time"
 )
 
+type mutateSetupWriter struct {
+	bytes.Buffer
+	match  string
+	mutate func()
+	done   bool
+}
+
+func (w *mutateSetupWriter) Write(p []byte) (int, error) {
+	if !w.done && strings.Contains(string(p), w.match) {
+		w.done = true
+		w.mutate()
+	}
+	return w.Buffer.Write(p)
+}
+
 func setupAccountServer(t *testing.T, ingestion http.Handler) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -174,5 +189,82 @@ func TestSetupDeclineDoesNotMintIngestionKey(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(claude, "settings.json")); !os.IsNotExist(err) {
 		t.Fatal("decline wrote tool settings")
+	}
+}
+
+func TestSetupResumeDeclineExpiredKeyDoesNotMintOrUpload(t *testing.T) {
+	withConfigHome(t)
+	posts := 0
+	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		t.Error("request before upload consent")
+	}))
+	defer srv.Close()
+	c, err := loadAccount("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.IngestToken = ""
+	c.IngestExpiresAt = time.Time{}
+	if err := saveAccount(c); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := saveSetupBatches(dir, srv.URL+"/api", "org-1"); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	if code := runSetup([]string{"--resume", dir}, strings.NewReader("n\n"), &out, &errs); code != 0 {
+		t.Fatalf("declined resume = %d: %s", code, &errs)
+	}
+	if posts != 0 {
+		t.Fatalf("minted or uploaded before consent: %d requests", posts)
+	}
+}
+
+func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
+	claude, codex := fixtureHomes(t)
+	home := filepath.Dir(claude)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	t.Setenv("CODEX_HOME", codex)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	settings := filepath.Join(claude, "settings.json")
+	if err := os.WriteFile(settings, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	posts := 0
+	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		t.Error("ingestion request after concurrent edit")
+	}))
+	defer srv.Close()
+	c, err := loadAccount("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.IngestToken = ""
+	c.IngestExpiresAt = time.Time{}
+	if err := saveAccount(c); err != nil {
+		t.Fatal(err)
+	}
+	concurrent := []byte("{\"concurrent\":true}\n")
+	out := &mutateSetupWriter{match: "Apply these settings and upload the preview", mutate: func() {
+		if err := os.WriteFile(settings, concurrent, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	var errs bytes.Buffer
+	code := runSetup(nil, strings.NewReader("y\nn\n\nskip\ny\ny\n"), out, &errs)
+	if code != 1 || !strings.Contains(errs.String(), "changed during setup") {
+		t.Fatalf("concurrent edit = %d: %s", code, &errs)
+	}
+	if got, err := os.ReadFile(settings); err != nil || !bytes.Equal(got, concurrent) {
+		t.Fatalf("concurrent settings were not preserved: %q, %v", got, err)
+	}
+	if posts != 0 {
+		t.Fatalf("minted or uploaded after concurrent edit: %d requests", posts)
 	}
 }

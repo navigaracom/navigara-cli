@@ -94,20 +94,36 @@ func TestApplySetupFilesLeavesUnchangedPrivateTarget(t *testing.T) {
 	}
 }
 
-func TestRollbackSetupFilePreservesConcurrentTarget(t *testing.T) {
+func TestRollbackSetupFilePreservesSameContentReplacement(t *testing.T) {
 	dir := t.TempDir()
-	path, backup := filepath.Join(dir, "target"), filepath.Join(dir, "backup")
-	if err := os.WriteFile(path, []byte("concurrent"), 0600); err != nil {
+	path := filepath.Join(dir, "target")
+	if err := os.WriteFile(path, []byte("before"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(backup, []byte("before"), 0600); err != nil {
+	f := transactionFile(t, path, []byte("after"))
+	tmp, err := f.prepare()
+	if err != nil {
 		t.Fatal(err)
 	}
-	f := &setupFile{path: path, backup: backup, after: []byte("after"), existed: true}
+	defer os.Remove(tmp)
+	if err := f.install(tmp); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := privateFile(dir, "replacement-*", []byte("after"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || os.SameFile(f.installed, info) {
+		t.Fatalf("replacement did not get a distinct identity: %v", err)
+	}
 	if err := f.rollback(); err == nil {
-		t.Fatal("concurrent target rollback succeeded")
+		t.Fatal("same-content replacement rollback succeeded")
 	}
-	if got, _ := os.ReadFile(path); !bytes.Equal(got, []byte("concurrent")) {
-		t.Fatalf("concurrent target replaced: %q", got)
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, []byte("after")) {
+		t.Fatalf("same-content replacement was not retained: %q", got)
 	}
 }
