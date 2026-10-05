@@ -66,8 +66,10 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		build      func() (*telemetry.Session, error)
 	}
 	var jobs []job
+	incomplete := false
 	if wantClaude {
 		scan := session.Scan("claude", opts.claudeHome, opts.codexHome)
+		incomplete = len(scan.Errors) > 0
 		for _, err := range scan.Errors {
 			fmt.Fprintln(stderr, "navigara:", err)
 		}
@@ -86,16 +88,30 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	}
 	if wantCodex {
 		seen := map[string]bool{}
-		for _, path := range telemetry.CodexRollouts(codexHome) {
-			id := telemetry.CodexSessionID(path)
-			if id == "" || seen[id] || !want(id) {
-				continue
+		paths, err := telemetry.CodexRollouts(codexHome)
+		if err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			incomplete = true
+		} else {
+			for _, path := range paths {
+				id, err := telemetry.CodexSessionID(path)
+				if err != nil {
+					fmt.Fprintln(stderr, "navigara:", err)
+					incomplete = true
+					continue
+				}
+				if seen[id] || !want(id) {
+					continue
+				}
+				seen[id] = true
+				jobs = append(jobs, job{"codex", id, func() (*telemetry.Session, error) {
+					return telemetry.BuildCodex(path, ident, opts.until)
+				}})
 			}
-			seen[id] = true
-			jobs = append(jobs, job{"codex", id, func() (*telemetry.Session, error) {
-				return telemetry.BuildCodex(path, ident, opts.until)
-			}})
 		}
+	}
+	if incomplete {
+		return 1
 	}
 	sort.Slice(jobs, func(i, j int) bool {
 		if jobs[i].source != jobs[j].source {
@@ -168,6 +184,9 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	}
 	if sender != nil {
 		fmt.Fprintf(stdout, "sent=%d\n", sender.sent)
+	}
+	if failed > 0 {
+		return 1
 	}
 	return 0
 }
