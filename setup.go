@@ -186,13 +186,29 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		fmt.Fprintln(p.out, "Setup cancelled; no tool settings changed or telemetry sent.")
 		return nil
 	}
+	// Keep the preview's snapshots as the concurrency boundary while replacing
+	// only its token-dependent output after the user consents.
+	for _, f := range files {
+		if err := f.check(); err != nil {
+			return fmt.Errorf("settings changed while awaiting consent: %w", err)
+		}
+	}
 	if err = ensureIngestion(ctx, &c); err != nil {
 		return err
 	}
 	opts.token = c.IngestToken
-	files, err = setupPlans(opts, home)
+	authenticatedFiles, err := setupPlans(opts, home)
 	if err != nil {
 		return err
+	}
+	if len(authenticatedFiles) != len(files) {
+		return errors.New("setup plans changed while awaiting consent; run setup again")
+	}
+	for i, f := range files {
+		if authenticatedFiles[i].path != f.path {
+			return errors.New("setup plans changed while awaiting consent; run setup again")
+		}
+		f.after = authenticatedFiles[i].after
 	}
 	s := newSender(opts.url, opts.token)
 	if err = applySetupFiles(files, s.checkSetup); err != nil {
@@ -220,10 +236,12 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 	}
 	fmt.Fprintf(p.out, "Retry %d frozen batches to %s. Tool settings will stay as configured.\n", len(m.Batches), m.URL)
 	var token string
+	var c accountConfig
 	if m.OrganizationID == "" {
 		token, err = p.token() // Legacy manifests predate saved organization context.
 	} else {
-		c, loadErr := loadAccount(host)
+		var loadErr error
+		c, loadErr = loadAccount(host)
 		if loadErr != nil {
 			return loadErr
 		}
@@ -237,17 +255,6 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 		if c.OrganizationID != m.OrganizationID {
 			return errors.New("saved backfill belongs to a different organization; run navigara login and select its original organization")
 		}
-		if err = ensureIngestion(ctx, &c); err != nil {
-			return err
-		}
-		token = c.IngestToken
-	}
-	if err != nil {
-		return err
-	}
-	s := newSender(m.URL, token)
-	if err = s.validate(); err != nil {
-		return err
 	}
 	yes, err := p.yes("Upload these saved batches again")
 	if err != nil {
@@ -255,6 +262,16 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 	}
 	if !yes {
 		return nil
+	}
+	if m.OrganizationID != "" {
+		if err = ensureIngestion(ctx, &c); err != nil {
+			return err
+		}
+		token = c.IngestToken
+	}
+	s := newSender(m.URL, token)
+	if err = s.validate(); err != nil {
+		return err
 	}
 	if err = s.checkSetup(); err != nil {
 		return err
