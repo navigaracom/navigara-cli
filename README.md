@@ -4,6 +4,35 @@ Backfill local Claude Code and Codex sessions into Navigara. The CLI rebuilds th
 OpenTelemetry the tools would have sent live, so a backfilled session looks the same in
 Navigara as a live one.
 
+## Set up this computer
+
+```sh
+navigara setup
+```
+
+On macOS and Linux, the wizard selects Claude Code/Codex, asks for your Navigara
+API base URL and analytics ingestor token, confirms contributor email and history
+window, and previews the import before applying changes. Token input is hidden
+on terminals. Close running tool sessions before taking the preview.
+
+Setup preserves unrelated settings and saves private backups beside changed files.
+Claude uses user settings; Codex uses its configuration plus a bash/zsh identity
+block. Existing conflicting or managed telemetry settings require manual resolution.
+Restart your tools in a new terminal afterward; launch desktop/IDE tools from that
+terminal to inherit identity. Setup reports configuration, not observed live traffic.
+
+The receiver must advertise session backfill deduplication. Live data wins over
+backfill for the same session; partial live sessions are not filled in automatically.
+Uploads reuse the exact preview files. If interrupted, retry the printed directory:
+
+```sh
+navigara setup --resume '/path/to/saved/payload'
+```
+
+Resume asks for the token again and verifies saved file hashes before uploading.
+The token is stored in private tool settings for ongoing telemetry, not in the
+saved upload manifest.
+
 ```sh
 navigara sessions upload --last 30d                 # write OTLP request bodies, send nothing
 navigara sessions upload --last 30d --send \
