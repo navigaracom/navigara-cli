@@ -52,6 +52,17 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara: skipping Codex: no signed-in email; pass --email or --allow-anonymous")
 		wantCodex = false
 	}
+	if wantCodex && opts.codexHome != "" {
+		info, err := os.Stat(codexHome)
+		if err != nil {
+			fmt.Fprintf(stderr, "navigara: Codex home %q: %v\n", codexHome, err)
+			return 1
+		}
+		if !info.IsDir() {
+			fmt.Fprintf(stderr, "navigara: Codex home %q: not a directory\n", codexHome)
+			return 1
+		}
+	}
 
 	pinned := map[string]bool{}
 	for _, id := range opts.sessions {
