@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ type ClaudeInput struct {
 	Subagents []string
 	// Until drops records after this time; the session's own cost totals then no longer apply.
 	Until time.Time
+	// Commits lists the commits made in a working directory's repository in [from, to].
+	Commits func(cwd string, from, to time.Time) []Commit
 }
 
 // ClaudeSubagents lists the subagent transcripts Claude Code keeps next to a root transcript.
@@ -211,7 +214,7 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 		}
 		rows = kept
 	}
-	s := &Session{Source: "claude_code", Service: "claude-code", seen: newSeen()}
+	s := &Session{Source: "claude_code", Service: "claude-code", seen: newSeen(), commits: in.Commits}
 	s.SessionID = sessionID
 	hasTimedRow := false
 	for _, r := range rows {
@@ -412,7 +415,8 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 			if json.Unmarshal(r.Message, &m) != nil {
 				continue
 			}
-			if m.Usage != nil && r.RequestID != "" && (requests[r.RequestID] != nil || !s.seen.requests[r.RequestID]) {
+			// "<synthetic>" rows are Claude Code's own messages (errors, interruptions), not API calls.
+			if m.Usage != nil && r.RequestID != "" && m.Model != "<synthetic>" && (requests[r.RequestID] != nil || !s.seen.requests[r.RequestID]) {
 				s.seen.requests[r.RequestID] = true
 				req := requests[r.RequestID]
 				if req == nil {
@@ -532,6 +536,29 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 	}
 	if strings.HasPrefix(tool.name, "mcp__") {
 		attrs["mcp_server_scope"] = "local"
+	}
+	if r.GitBranch != "" && r.GitBranch != "HEAD" {
+		attrs["vcs.ref.head.name"] = r.GitBranch
+	}
+	var commits []string
+	// A later step can fail after the commit; a commit that did not happen simply matches nothing.
+	if tool.name == "Bash" && s.commits != nil {
+		var input struct {
+			Command string `json:"command"`
+		}
+		_ = json.Unmarshal(tool.input, &input)
+		calls := commitCalls(r.Cwd, input.Command)
+		for i, call := range calls {
+			sha := s.claimCommit(s.commits(call.dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), call)
+			// The head after the command is the last step's commit: unknown when that step does not match.
+			if i == len(calls)-1 && sha != "" {
+				commits = []string{sha}
+			}
+		}
+	}
+	// Like live, one revision per result: the head after the command.
+	if len(commits) > 0 {
+		attrs["vcs.ref.head.revision"] = commits[0]
 	}
 	s.event("tool_result", r.at, attrs)
 
@@ -867,4 +894,280 @@ func firstAfter(rows []parsedRow, t time.Time) time.Time {
 		}
 	}
 	return t
+}
+
+// commitCall is one "git commit" in a shell command: where it runs and its message's subject.
+type commitCall struct {
+	dir, subject string
+	// amend: the step replaced a commit of the same command, which the reflog still holds.
+	amend bool
+}
+
+// commitCalls finds every "git commit" of a shell command. The directory is the recorded working
+// directory moved by each "cd DIR" before it and by "git -C DIR". The subject is "" when the message
+// is not a literal the shell would pass unchanged.
+func commitCalls(cwd, command string) []commitCall {
+	var calls []commitCall
+	// Search the shell text only: a heredoc message may hold lines that start with "git".
+	shell := maskHeredocs(command)
+	for _, at := range gitInvocation.FindAllStringIndex(shell, -1) {
+		dir := dirBefore(cwd, shell[:at[0]])
+		fields := strings.Fields(shell[at[1]:])
+		for i := 0; i < len(fields); i++ {
+			f := fields[i]
+			switch {
+			case f == "-C" && i+1 < len(fields):
+				dir = moveDir(dir, fields[i+1])
+				i++
+				continue
+			case f == "-c" || f == "--git-dir" || f == "--work-tree":
+				i++
+				continue
+			case strings.HasPrefix(f, "-"):
+				continue
+			case f == "commit":
+				end := len(command)
+				if next := gitInvocation.FindStringIndex(shell[at[1]:]); next != nil {
+					end = at[1] + next[0]
+				}
+				call := commitCall{dir: dir, subject: commitSubject(command[at[1]:end]),
+					amend: strings.Contains(" "+shell[at[1]:end]+" ", " --amend ")}
+				// An amend without a message keeps the message of the commit it replaces.
+				if n := len(calls); n > 0 && call.amend && call.subject == "" && calls[n-1].dir == dir {
+					call.subject = calls[n-1].subject
+					calls = calls[:n-1]
+				}
+				calls = append(calls, call)
+			}
+			break
+		}
+	}
+	return calls
+}
+
+// gitInvocation is git at the start of a shell command, not an argument (echo git commit).
+var gitInvocation = regexp.MustCompile(`(?:^|[;&|(\n])\s*git\s`)
+
+// dirBefore is where a command stands after the "cd" steps of its prefix. A subshell's "cd" holds
+// only inside its parentheses.
+func dirBefore(cwd, prefix string) string {
+	dir := cwd
+	var saved []string
+	step := func(text string) {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(text), "cd "); ok {
+			dir = moveDir(dir, strings.TrimSpace(rest))
+		}
+	}
+	start := 0
+	for i, r := range prefix {
+		switch r {
+		case '&', ';', '|', '\n', '(', ')':
+			step(prefix[start:i])
+			start = i + 1
+			switch r {
+			case '(':
+				saved = append(saved, dir)
+			case ')':
+				if n := len(saved); n > 0 {
+					dir, saved = saved[n-1], saved[:n-1]
+				}
+			}
+		}
+	}
+	step(prefix[start:])
+	return dir
+}
+
+func moveDir(base, to string) string {
+	to = strings.Trim(to, `"'`)
+	switch {
+	case to == "" || to == "-":
+		return base
+	case strings.HasPrefix(to, "~/"):
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, to[2:])
+		}
+		return base
+	case filepath.IsAbs(to):
+		return filepath.Clean(to)
+	}
+	return filepath.Join(base, to)
+}
+
+// commitSubject is git's subject of the message one "git commit" passes: its first paragraph with
+// the lines joined by spaces. It reads -m/--message (also a "-am" cluster) as the shell would, a
+// "$(cat <<'EOF' ... EOF)" message, and "-F -" fed by a heredoc. It is "" when the message is not a
+// literal the command shows.
+func commitSubject(args string) string {
+	spans := wordSpan.FindAllStringIndex(args, -1)
+	fields := make([]string, len(spans))
+	for i, sp := range spans {
+		fields[i] = args[sp[0]:sp[1]]
+	}
+	for i, f := range fields {
+		switch {
+		case (f == "-F" || f == "--file") && i+1 < len(fields) && fields[i+1] == "-", f == "--file=-":
+			return subjectOf(heredocBody(args))
+		case f == "-m" || f == "--message" || strings.HasPrefix(f, "--message=") ||
+			(len(f) > 2 && f[0] == '-' && f[1] != '-' && strings.HasSuffix(f, "m")):
+			at := spans[i][1]
+			rest := strings.TrimLeft(args[at:], " =")
+			if strings.HasPrefix(f, "--message=") {
+				rest = strings.TrimPrefix(f, "--message=") + args[at:]
+			}
+			if strings.HasPrefix(rest, `"$(cat <<`) {
+				return subjectOf(heredocBody(rest))
+			}
+			word, ok := shellWord(rest)
+			if !ok {
+				return ""
+			}
+			return subjectOf(word)
+		}
+	}
+	return ""
+}
+
+func subjectOf(msg string) string {
+	paragraph, _, _ := strings.Cut(strings.TrimSpace(msg), "\n\n")
+	return strings.Join(strings.Fields(paragraph), " ")
+}
+
+var wordSpan = regexp.MustCompile(`\S+`)
+
+var heredocStart = regexp.MustCompile(`<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
+
+// heredocBody is the text of the first heredoc in a command, up to its terminator line.
+func heredocBody(command string) string {
+	m := heredocStart.FindStringSubmatchIndex(command)
+	if m == nil {
+		return ""
+	}
+	tag := command[m[2]:m[3]]
+	_, body, ok := strings.Cut(command[m[1]:], "\n")
+	if !ok {
+		return ""
+	}
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) == tag {
+			return strings.Join(lines, "\n")
+		}
+		lines = append(lines, line)
+	}
+	return ""
+}
+
+// claimCommit picks the one commit a "git commit" made: the only unclaimed commit with its subject
+// made during the call. An unknown subject or a tie leaves the call without a revision, since a
+// parallel call or another session may have made the other commit. Only an amend breaks a tie: the
+// commit it replaced stays in the reflog with the same subject but is no longer reachable.
+func (s *Session) claimCommit(found []Commit, call commitCall) string {
+	// A standalone amend without a message is identified by being the call's only new commit.
+	if call.subject == "" && !call.amend {
+		return ""
+	}
+	var fit, reachable []string
+	for _, c := range found {
+		if s.seen.commits[c.SHA] || (call.subject != "" && strings.Join(strings.Fields(c.Subject), " ") != call.subject) {
+			continue
+		}
+		fit = append(fit, c.SHA)
+		if c.Reachable {
+			reachable = append(reachable, c.SHA)
+		}
+	}
+	switch {
+	case len(fit) == 1 && (call.subject != "" || len(reachable) == 1):
+	case call.amend && call.subject != "" && len(fit) == 2 && len(reachable) == 1:
+		fit = reachable
+	default:
+		return ""
+	}
+	s.seen.commits[fit[0]] = true
+	return fit[0]
+}
+
+// maskHeredocs blanks heredoc bodies, keeping every offset, so only shell text is searched.
+func maskHeredocs(command string) string {
+	b := []byte(command)
+	from := 0
+	for {
+		m := heredocStart.FindStringSubmatchIndex(command[from:])
+		if m == nil {
+			return string(b)
+		}
+		tag := command[from+m[2] : from+m[3]]
+		nl := strings.IndexByte(command[from+m[1]:], '\n')
+		if nl < 0 {
+			return string(b)
+		}
+		start := from + m[1] + nl + 1
+		end := len(command)
+		for pos := start; pos < len(command); {
+			lineEnd := strings.IndexByte(command[pos:], '\n')
+			if lineEnd < 0 {
+				lineEnd = len(command) - pos
+			}
+			if strings.TrimSpace(command[pos:pos+lineEnd]) == tag {
+				end = pos
+				break
+			}
+			pos += lineEnd + 1
+		}
+		for k := start; k < end; k++ {
+			if b[k] != '\n' {
+				b[k] = ' '
+			}
+		}
+		from = end
+	}
+}
+
+// Commit is one commit of the signed-in user.
+type Commit struct {
+	SHA     string
+	Subject string
+	// Reachable is false for a commit only the reflog still holds (amended, rebased, branch deleted).
+	Reachable bool
+}
+
+// shellWord reads one shell word with its quotes removed; ok is false when the word holds an
+// expansion whose value only the shell knows.
+func shellWord(s string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '(' || c == ')':
+			return b.String(), b.Len() > 0
+		case c == '\'':
+			end := strings.IndexByte(s[i+1:], '\'')
+			if end < 0 {
+				return "", false
+			}
+			b.WriteString(s[i+1 : i+1+end])
+			i += end + 1
+		case c == '"':
+			for i++; i < len(s) && s[i] != '"'; i++ {
+				switch {
+				case s[i] == '$' || s[i] == '`':
+					return "", false
+				case s[i] == '\\' && i+1 < len(s) && strings.IndexByte("\"\\$`\n", s[i+1]) >= 0:
+					i++
+				}
+				b.WriteByte(s[i])
+			}
+			if i >= len(s) {
+				return "", false
+			}
+		case c == '$' || c == '`':
+			return "", false
+		case c == '\\' && i+1 < len(s):
+			i++
+			b.WriteByte(s[i])
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), b.Len() > 0
 }

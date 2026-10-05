@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,20 +70,13 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	want := func(id string) bool { return len(pinned) == 0 || pinned[id] }
 
 	repos := repositoryResolver()
-	var sessions []*telemetry.Session
-	failed := 0
-	incomplete := false
-	keep := func(s *telemetry.Session, err error, id string) {
-		if err != nil {
-			failed++
-			fmt.Fprintf(stderr, "navigara: %s: %v\n", id, err)
-			return
-		}
-		s.Within(opts.since, opts.until)
-		if len(s.Events) > 0 || len(s.Points) > 0 {
-			sessions = append(sessions, s)
-		}
+	commits := &commitIndex{email: ident.Email, byRepo: map[string][]commit{}}
+	type job struct {
+		source, id string
+		build      func() (*telemetry.Session, error)
 	}
+	var jobs []job
+	incomplete := false
 	if wantClaude {
 		scan := session.Scan("claude", opts.claudeHome, opts.codexHome)
 		incomplete = len(scan.Errors) > 0
@@ -92,13 +85,15 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		}
 		seen := map[string]bool{}
 		for _, r := range scan.Records {
-			id := r.Session.SessionID
+			id, path := r.Session.SessionID, r.Path
 			if seen[id] || !want(id) {
 				continue
 			}
 			seen[id] = true
-			s, err := telemetry.BuildClaude(telemetry.ClaudeInput{Path: r.Path, Subagents: telemetry.ClaudeSubagents(r.Path), Until: opts.until}, ident, repos)
-			keep(s, err, id)
+			jobs = append(jobs, job{"claude_code", id, func() (*telemetry.Session, error) {
+				return telemetry.BuildClaude(telemetry.ClaudeInput{Path: path, Subagents: telemetry.ClaudeSubagents(path),
+					Until: opts.until, Commits: commits.between}, ident, repos)
+			}})
 		}
 	}
 	if wantCodex {
@@ -119,65 +114,94 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 					continue
 				}
 				seen[id] = true
-				s, err := telemetry.BuildCodex(path, ident, opts.until)
-				keep(s, err, id)
+				jobs = append(jobs, job{"codex", id, func() (*telemetry.Session, error) {
+					return telemetry.BuildCodex(path, ident, opts.until)
+				}})
 			}
 		}
 	}
 	if incomplete {
 		return 1
 	}
-	sort.Slice(sessions, func(i, j int) bool {
-		if sessions[i].Source != sessions[j].Source {
-			return sessions[i].Source < sessions[j].Source
+	sort.Slice(jobs, func(i, j int) bool {
+		if jobs[i].source != jobs[j].source {
+			return jobs[i].source < jobs[j].source
 		}
-		return sessions[i].SessionID < sessions[j].SessionID
+		return jobs[i].id < jobs[j].id
 	})
-
-	bodies, err := telemetry.Encode(sessions)
-	if err != nil {
-		fmt.Fprintln(stderr, "navigara: encode:", err)
-		return 1
-	}
 
 	if err := os.Mkdir(opts.output, 0700); err != nil {
 		fmt.Fprintf(stderr, "navigara: output %q: %v\n", opts.output, err)
 		return 1
 	}
+	var sender *sender
+	if opts.send {
+		if opts.url == "" || opts.token == "" {
+			fmt.Fprintln(stderr, "navigara: --send needs --url and --token (or NAVIGARA_TOKEN)")
+			return 2
+		}
+		sender = newSender(opts.url, opts.token)
+	}
+	// One session at a time: build, write and send it before the next, so memory stays flat.
 	counts := map[string]int{}
-	for _, b := range bodies {
-		kind := strings.TrimPrefix(b.Path, "/v1/")
-		counts[kind]++
-		path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json", kind, counts[kind]))
-		if err := writeRequest(path, b.Data); err != nil {
-			fmt.Fprintf(stderr, "navigara: output %q: %v\n", path, err)
+	exported, failed, events, points, bodies := 0, 0, 0, 0, 0
+	var lines []string
+	for _, j := range jobs {
+		s, err := j.build()
+		if err != nil {
+			failed++
+			fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
+			continue
+		}
+		s.Within(opts.since, opts.until)
+		if len(s.Events) == 0 && len(s.Points) == 0 {
+			continue
+		}
+		encoded, err := telemetry.Encode([]*telemetry.Session{s})
+		if err != nil {
+			fmt.Fprintf(stderr, "navigara: encode %s: %v\n", j.id, err)
 			return 1
 		}
-	}
-
-	events, points := 0, 0
-	for _, s := range sessions {
+		for _, b := range encoded {
+			kind := strings.TrimPrefix(b.Path, "/v1/")
+			counts[kind]++
+			path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json", kind, counts[kind]))
+			if err := writeRequest(path, b.Data); err != nil {
+				fmt.Fprintf(stderr, "navigara: output %q: %v\n", path, err)
+				return 1
+			}
+			if sender != nil {
+				if err := sender.post(b); err != nil {
+					fmt.Fprintf(stderr, "navigara: send: %v (re-run with a new --output to resume: the receiver drops records it already has)\n", err)
+					return 1
+				}
+			}
+		}
+		exported++
 		events += len(s.Events)
 		points += len(s.Points)
-	}
-	fmt.Fprintf(stdout, "sessions=%d failed=%d events=%d points=%d bodies=%d identity=%s\n",
-		len(sessions), failed, events, points, len(bodies), firstNonEmpty(ident.Email, ident.CodexEmail, "anonymous"))
-	for _, s := range sessions {
+		bodies += len(encoded)
 		note := ""
 		if s.Estimated {
 			note = " cost=estimated"
 		}
-		for reason, n := range s.Missing {
-			note += fmt.Sprintf(" missing[%s]=%d", reason, n)
+		reasons := make([]string, 0, len(s.Missing))
+		for reason := range s.Missing {
+			reasons = append(reasons, reason)
 		}
-		fmt.Fprintf(stdout, "%s %s events=%d points=%d%s\n", s.Source, s.SessionID, len(s.Events), len(s.Points), note)
+		sort.Strings(reasons)
+		for _, reason := range reasons {
+			note += fmt.Sprintf(" missing[%s]=%d", reason, s.Missing[reason])
+		}
+		lines = append(lines, fmt.Sprintf("%s %s events=%d points=%d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
 	}
-
-	if opts.send {
-		if err := send(opts, bodies, stdout); err != nil {
-			fmt.Fprintln(stderr, "navigara: send:", err)
-			return 1
-		}
+	fmt.Fprintf(stdout, "sessions=%d failed=%d events=%d points=%d bodies=%d identity=%s\n",
+		exported, failed, events, points, bodies, firstNonEmpty(ident.Email, ident.CodexEmail, "anonymous"))
+	for _, line := range lines {
+		fmt.Fprintln(stdout, line)
+	}
+	if sender != nil {
+		fmt.Fprintf(stdout, "sent=%d\n", sender.sent)
 	}
 	if failed > 0 {
 		return 1
@@ -227,51 +251,50 @@ func repositoryResolver() func(cwd string) string {
 	}
 }
 
-// send posts every body, retrying throttling and server errors with backoff.
-func send(opts options, bodies []telemetry.Body, stdout io.Writer) error {
-	if opts.url == "" || opts.token == "" {
-		return errors.New("--send needs --url and --token (or NAVIGARA_TOKEN)")
-	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	base := strings.TrimSuffix(opts.url, "/") + "/otlp"
-	for i, b := range bodies {
-		var lastErr error
-		for attempt := 0; attempt < 5; attempt++ {
-			if attempt > 0 {
-				time.Sleep(time.Duration(1<<attempt) * time.Second)
-			}
-			req, err := http.NewRequest(http.MethodPost, base+b.Path, bytes.NewReader(b.Data))
-			if err != nil {
-				return err
-			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+opts.token)
-			resp, err := client.Do(req)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			switch {
-			case resp.StatusCode == http.StatusOK:
-				lastErr = nil
-			case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-				return fmt.Errorf("%s: HTTP %d; the API key needs the analytics ingestor role", b.Path, resp.StatusCode)
-			case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
-				lastErr = fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
-				continue
-			default:
-				return fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
-			}
-			break
+type sender struct {
+	client *http.Client
+	base   string
+	token  string
+	sent   int
+}
+
+func newSender(url, token string) *sender {
+	return &sender{client: &http.Client{Timeout: 60 * time.Second}, base: strings.TrimSuffix(url, "/") + "/otlp", token: token}
+}
+
+// post sends one body, retrying throttling and server errors with backoff.
+func (s *sender) post(b telemetry.Body) error {
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(1<<attempt) * time.Second)
 		}
-		if lastErr != nil {
-			return fmt.Errorf("body %d of %d: %w", i+1, len(bodies), lastErr)
+		req, err := http.NewRequest(http.MethodPost, s.base+b.Path, bytes.NewReader(b.Data))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+s.token)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		switch {
+		case resp.StatusCode == http.StatusOK:
+			s.sent++
+			return nil
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return fmt.Errorf("%s: HTTP %d; the API key needs the analytics ingestor role", b.Path, resp.StatusCode)
+		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+			lastErr = fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
+		default:
+			return fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
 		}
 	}
-	fmt.Fprintf(stdout, "sent=%d\n", len(bodies))
-	return nil
+	return lastErr
 }
 
 func writeRequest(path string, data []byte) error {
@@ -287,4 +310,63 @@ func writeRequest(path string, data []byte) error {
 		_ = os.Remove(path)
 	}
 	return err
+}
+
+type commit struct {
+	at time.Time
+	telemetry.Commit
+}
+
+// commitIndex lists the signed-in user's commits per repository, once, from local refs; a
+// repository's worktrees share them, so a commit made in another worktree is found too. The reflog
+// keeps commits of deleted branches; Reachable tells an amended commit from its replacement.
+type commitIndex struct {
+	email  string
+	byRepo map[string][]commit
+}
+
+func (c *commitIndex) between(cwd string, from, to time.Time) []telemetry.Commit {
+	if cwd == "" || c.email == "" {
+		return nil
+	}
+	root, err := exec.Command("git", "-C", cwd, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		return nil
+	}
+	key := strings.TrimSpace(string(root))
+	if !filepath.IsAbs(key) {
+		key = filepath.Join(cwd, key)
+	}
+	list, ok := c.byRepo[key]
+	if !ok {
+		reachable := map[string]bool{}
+		if out, err := exec.Command("git", "-C", cwd, "rev-list", "--all").Output(); err == nil {
+			for _, sha := range strings.Fields(string(out)) {
+				reachable[sha] = true
+			}
+		}
+		out, err := exec.Command("git", "-C", cwd, "log", "--all", "--reflog", "--format=%H%x1f%ct%x1f%ae%x1f%s").Output()
+		if err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				fields := strings.Split(line, "\x1f")
+				if len(fields) != 4 || !strings.EqualFold(fields[2], c.email) {
+					continue
+				}
+				if secs, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+					list = append(list, commit{at: time.Unix(secs, 0).UTC(),
+						Commit: telemetry.Commit{SHA: fields[0], Subject: fields[3], Reachable: reachable[fields[0]]}})
+				}
+			}
+		}
+		c.byRepo[key] = list
+	}
+	var found []telemetry.Commit
+	seen := map[string]bool{}
+	for _, cm := range list {
+		if !cm.at.Before(from.Truncate(time.Second)) && !cm.at.After(to) && !seen[cm.SHA] {
+			seen[cm.SHA] = true
+			found = append(found, cm.Commit)
+		}
+	}
+	return found
 }

@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -319,5 +320,329 @@ func TestBuildClaudeSettlesEachProcessRun(t *testing.T) {
 	starts := events(s, "session_start")
 	if len(starts) != 2 || !starts[1].Time.Equal(time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)) {
 		t.Errorf("session starts = %v, want the first process's start and the resumed run's first row", starts)
+	}
+}
+
+func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	withBranch := func(row map[string]any) map[string]any {
+		row["gitBranch"] = "feature/x"
+		return row
+	}
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit it"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git commit -q -m fix && git commit -q --allow-empty -m 'fix two'"}),
+			toolUse("t2", "Bash", map[string]any{"command": "ls"})),
+		withBranch(user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")})),
+	)
+	var asked []time.Time
+	commits := func(cwd string, from, to time.Time) []Commit {
+		asked = append(asked, from, to)
+		return []Commit{{SHA: strings.Repeat("a", 40), Subject: "fix"}, {SHA: strings.Repeat("b", 40), Subject: "fix two"}}
+	}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: commits}, Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revisions []string
+	for _, e := range events(s, "tool_result") {
+		if e.Attrs["vcs.ref.head.name"] != "feature/x" {
+			t.Errorf("result branch = %v", e.Attrs["vcs.ref.head.name"])
+		}
+		if rev, ok := e.Attrs["vcs.ref.head.revision"].(string); ok {
+			revisions = append(revisions, rev)
+		}
+	}
+	if n := len(events(s, "tool_result")); n != 2 {
+		t.Fatalf("tool results = %d, want one per call", n)
+	}
+	if len(revisions) != 1 || revisions[0] != strings.Repeat("b", 40) || len(asked) != 4 {
+		t.Fatalf("revisions = %v, lookups = %v; want the call's last commit, one lookup per git commit step and none for ls", revisions, asked)
+	}
+	if !asked[0].Equal(time.Date(2026, 10, 1, 10, 0, 4, 0, time.UTC)) || !asked[1].Equal(time.Date(2026, 10, 1, 10, 0, 10, 0, time.UTC)) {
+		t.Errorf("commit window = %v..%v, want the tool call with a second of slack", asked[0], asked[1])
+	}
+}
+
+func TestCommitCalls(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    []commitCall
+	}{
+		{`git commit -m "x"`, []commitCall{{"/repo", "x", false}}},
+		{`cd ../other && git add -A && git commit -m x`, []commitCall{{"/other", "x", false}}},
+		{`git add -A && cd ../other && git commit -m x`, []commitCall{{"/other", "x", false}}},
+		{`git -C /other/repo commit -m fix`, []commitCall{{"/other/repo", "fix", false}}},
+		{`git -C sub -c user.name=x commit -m x`, []commitCall{{"/repo/sub", "x", false}}},
+		{`git commit -m one && git commit --allow-empty -m two`, []commitCall{{"/repo", "one", false}, {"/repo", "two", false}}},
+		{`git commit --amend --no-edit`, []commitCall{{"/repo", "", true}}},
+		{`(cd ../other && git commit -m fix)`, []commitCall{{"/other", "fix", false}}},
+		{`(cd ../other && git status) && git commit -m back`, []commitCall{{"/repo", "back", false}}},
+		{`git commit -m fix && git commit --amend --no-edit`, []commitCall{{"/repo", "fix", true}}},
+		{"git commit -q -F - <<'EOF'\nfeat: x\n\ngit hooks now run\ngit commit is fine\nEOF", []commitCall{{"/repo", "feat: x", false}}},
+		{`git merge main && git rebase main`, nil},
+		{`git status && echo git commit`, nil},
+	} {
+		got := commitCalls("/repo", tc.command)
+		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			t.Errorf("commitCalls(%q) = %v, want %v", tc.command, got, tc.want)
+		}
+	}
+}
+
+func TestBuildClaudeLooksUpCommitsWhereTheCommandCommitted(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git -C /other/repo commit -m fix"}),
+			toolUse("t2", "Bash", map[string]any{"command": "git add -A && cd ../wt && git commit -m fix"})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	var dirs []string
+	commits := func(cwd string, from, to time.Time) []Commit {
+		dirs = append(dirs, cwd)
+		return nil
+	}
+	if _, err := BuildClaude(ClaudeInput{Path: root, Commits: commits}, Identity{}, func(string) string { return "" }); err != nil {
+		t.Fatal(err)
+	}
+	if len(dirs) != 2 || dirs[0] != "/other/repo" || dirs[1] != "/wt" {
+		t.Errorf("commit lookups in %v, want /other/repo and /wt", dirs)
+	}
+}
+
+func TestBuildClaudeGivesParallelCommitsToTheirOwnCalls(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	heredoc := "git commit -q -m \"$(cat <<'EOF'\nfeat: two\n\nBody.\nEOF\n)\""
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit both"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": `git commit -m "fix: one"`}),
+			toolUse("t2", "Bash", map[string]any{"command": heredoc})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	both := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix: one"}, {SHA: strings.Repeat("2", 40), Subject: "feat: two"}}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return both }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range events(s, "tool_result") {
+		if rev, ok := e.Attrs["vcs.ref.head.revision"].(string); ok {
+			got[e.Attrs["tool_use_id"].(string)] = rev[:1]
+		}
+	}
+	if len(got) != 2 || got["t1"] != "1" || got["t2"] != "2" {
+		t.Errorf("revisions per call = %v, want t1:1 and t2:2", got)
+	}
+}
+
+func TestCommitSubject(t *testing.T) {
+	for _, tc := range []struct{ command, want string }{
+		{`git commit -m "fix: one"`, "fix: one"},
+		{`git commit -q -m 'chore: x' && git push`, "chore: x"},
+		{"git commit -q -m \"$(cat <<'EOF'\nfeat: two\n\nBody.\nEOF\n)\"", "feat: two"},
+		{"git commit --amend --no-edit", ""},
+		{`git commit -m 'say "hi"'`, `say "hi"`},
+		{`git commit -m "say \"hi\""`, `say "hi"`},
+		{`git commit -m "$MSG"`, ""},
+		{`git commit --message=plain && git push`, "plain"},
+		{"git commit -m 'feat: x\nmore detail\n\nBody.'", "feat: x more detail"},
+		{"git commit -q -F - <<'EOF' 2>&1 | tail -3\nfeat: from stdin\n\nBody.\nEOF", "feat: from stdin"},
+		{"git commit -q -am 'fix: all'", "fix: all"},
+		{"git -C /repos/my-module commit -m fix", "fix"},
+	} {
+		if got := commitSubject(tc.command); got != tc.want {
+			t.Errorf("commitSubject(%q) = %q, want %q", tc.command, got, tc.want)
+		}
+	}
+}
+
+func TestBuildClaudeLeavesAmbiguousParallelCommitsUnassigned(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit both"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": `git commit -m "fix"`}),
+			toolUse("t2", "Bash", map[string]any{"command": `git commit -m 'fix'`}),
+			toolUse("t3", "Bash", map[string]any{"command": `git commit -m 'say "hi"'`})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2"), toolResult("t3")}),
+	)
+	found := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix"}, {SHA: strings.Repeat("2", 40), Subject: "fix"},
+		{SHA: strings.Repeat("3", 40), Subject: `say "hi"`}}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return found }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range events(s, "tool_result") {
+		if rev, ok := e.Attrs["vcs.ref.head.revision"].(string); ok {
+			got[e.Attrs["tool_use_id"].(string)] = rev[:1]
+		}
+	}
+	if len(got) != 1 || got["t3"] != "3" {
+		t.Errorf("revisions per call = %v; want only t3:3 (same-subject parallel commits are ambiguous)", got)
+	}
+}
+
+func TestBuildClaudeGivesAParallelMergeNoCommits(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "merge and commit"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git merge main"}),
+			toolUse("t2", "Bash", map[string]any{"command": `git commit -m "fix: one"`})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	found := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix: one"}, {SHA: strings.Repeat("2", 40), Subject: "Merge branch 'main'"}}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return found }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range events(s, "tool_result") {
+		if rev, ok := e.Attrs["vcs.ref.head.revision"].(string); ok {
+			got[e.Attrs["tool_use_id"].(string)] = rev[:1]
+		}
+	}
+	if len(got) != 1 || got["t2"] != "1" {
+		t.Errorf("revisions per call = %v; want only the commit's own revision on t2", got)
+	}
+}
+
+func TestBuildClaudeKeepsACommitWhenALaterStepFails(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	failed := toolResult("t1")
+	failed["is_error"] = true
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit and push"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git -C /repos/my-module commit -m fix && git push"})),
+		user("2026-10-01T10:00:09Z", "p1", []any{failed}),
+	)
+	found := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix"}}
+	var dirs []string
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(cwd string, _, _ time.Time) []Commit {
+		dirs = append(dirs, cwd)
+		return found
+	}}, Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := events(s, "tool_result")
+	if len(results) != 1 || results[0].Attrs["vcs.ref.head.revision"] != found[0].SHA || len(dirs) != 1 || dirs[0] != "/repos/my-module" {
+		t.Errorf("result = %v, lookups in %v; want the commit made before the push failed", results, dirs)
+	}
+}
+
+func TestBuildClaudeRevisionIsTheLastStepsCommit(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": `git commit -m a && git commit -m "$MSG"`}),
+			toolUse("t2", "Bash", map[string]any{"command": `git commit -m fix && git commit --amend --no-edit`})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	found := []Commit{
+		{SHA: strings.Repeat("a", 40), Subject: "a", Reachable: true},
+		{SHA: strings.Repeat("d", 40), Subject: "dynamic", Reachable: true},
+		{SHA: strings.Repeat("0", 40), Subject: "fix"},
+		{SHA: strings.Repeat("f", 40), Subject: "fix", Reachable: true},
+	}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return found }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]any{}
+	for _, e := range events(s, "tool_result") {
+		got[e.Attrs["tool_use_id"].(string)] = e.Attrs["vcs.ref.head.revision"]
+	}
+	if got["t1"] != nil || got["t2"] != strings.Repeat("f", 40) {
+		t.Errorf("revisions = %v; want none when the last message is unknown, and the amended commit", got)
+	}
+}
+
+func TestBuildClaudeLeavesParallelSameSubjectCommitsUnassignedWhateverTheirReachability(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit in two worktrees"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": `cd ../a && git commit -m fix`}),
+			toolUse("t2", "Bash", map[string]any{"command": `cd ../b && git commit -m fix`})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1"), toolResult("t2")}),
+	)
+	found := []Commit{{SHA: strings.Repeat("1", 40), Subject: "fix", Reachable: true}, {SHA: strings.Repeat("2", 40), Subject: "fix"}}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return found }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events(s, "tool_result") {
+		if rev := e.Attrs["vcs.ref.head.revision"]; rev != nil {
+			t.Errorf("%v got revision %v; a tie between parallel calls stays unassigned", e.Attrs["tool_use_id"], rev)
+		}
+	}
+}
+
+func TestBuildClaudeReportsAStandaloneAmend(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "amend"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "git add -A && git commit --amend --no-edit"})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1")}),
+	)
+	amended := Commit{SHA: strings.Repeat("e", 40), Subject: "fix", Reachable: true}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(string, time.Time, time.Time) []Commit { return []Commit{amended} }},
+		Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := events(s, "tool_result")
+	if len(results) != 1 || results[0].Attrs["vcs.ref.head.revision"] != amended.SHA {
+		t.Errorf("results = %v, want the amend's new commit", results)
+	}
+}
+
+func TestBuildClaudeLooksUpASubshellCommitInItsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, root,
+		user("2026-10-01T10:00:00Z", "p1", "commit"),
+		assistant("2026-10-01T10:00:05Z", "r1", "claude-opus-5-5", 5,
+			toolUse("t1", "Bash", map[string]any{"command": "(cd ../other && git commit -m fix)"})),
+		user("2026-10-01T10:00:09Z", "p1", []any{toolResult("t1")}),
+	)
+	var dirs []string
+	commit := Commit{SHA: strings.Repeat("c", 40), Subject: "fix", Reachable: true}
+	s, err := BuildClaude(ClaudeInput{Path: root, Commits: func(cwd string, _, _ time.Time) []Commit {
+		dirs = append(dirs, cwd)
+		if cwd == "/other" {
+			return []Commit{commit}
+		}
+		return nil
+	}}, Identity{}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := events(s, "tool_result")
+	if len(dirs) != 1 || dirs[0] != "/other" || len(results) != 1 || results[0].Attrs["vcs.ref.head.revision"] != commit.SHA {
+		t.Errorf("lookups in %v, results %v; want the subshell's directory and its commit", dirs, results)
 	}
 }

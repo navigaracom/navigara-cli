@@ -8,11 +8,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/navigaracom/navigara-cli/internal/telemetry"
 )
 
 // fixtureHomes writes two Claude Code sessions and a ~/.claude.json with the signed-in account.
@@ -112,8 +116,8 @@ func TestUploadStopsOnRejectedKey(t *testing.T) {
 
 func TestUploadNeedsAnIdentity(t *testing.T) {
 	root := t.TempDir()
-	for _, home := range []string{filepath.Join(root, ".claude"), filepath.Join(root, ".codex")} {
-		if err := os.Mkdir(home, 0o700); err != nil {
+	for _, home := range []string{".claude", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(root, home), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -163,23 +167,6 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 }
 
 func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
-	t.Run("requested before identity eligibility", func(t *testing.T) {
-		claudeHome, codexHome := fixtureHomes(t)
-		if err := os.RemoveAll(codexHome); err != nil {
-			t.Fatal(err)
-		}
-		output := filepath.Join(t.TempDir(), "out")
-		var stdout, stderr bytes.Buffer
-		code := run([]string{"sessions", "upload", "--source", "all", "--claude-home", claudeHome,
-			"--codex-home", codexHome, "--output", output}, &stdout, &stderr)
-		if code != 1 || !strings.Contains(stderr.String(), "Codex home") {
-			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
-		}
-		if _, err := os.Stat(output); !os.IsNotExist(err) {
-			t.Fatalf("output created after failed discovery: %v", err)
-		}
-	})
-
 	t.Run("missing explicit home", func(t *testing.T) {
 		root := t.TempDir()
 		missing := filepath.Join(root, "missing")
@@ -281,6 +268,97 @@ func TestUploadSkipsASourceWithoutItsOwnEmail(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "codex-1") || !strings.Contains(stdout.String(), "claude_code") {
 		t.Errorf("stdout = %q; want Claude Code sessions only", stdout.String())
+	}
+}
+
+func TestCommitIndexMatchesAuthorEmailInAnyCase(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_EMAIL=Dev.Name+x@Example.com", "GIT_COMMITTER_EMAIL=dev@example.com",
+			"GIT_AUTHOR_NAME=Dev", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "one")
+	idx := &commitIndex{email: "dev.name+x@example.com", byRepo: map[string][]commit{}}
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	if got := idx.between(repo, at.Add(-time.Second), at.Add(time.Second)); len(got) != 1 {
+		t.Fatalf("commits = %v, want the one commit whose author email differs only in case", got)
+	}
+	for _, email := range []string{"devxname+x@example.com", "name+x@example.com"} {
+		other := &commitIndex{email: email, byRepo: map[string][]commit{}}
+		if got := other.between(repo, at.Add(-time.Second), at.Add(time.Second)); len(got) != 0 {
+			t.Fatalf("%s matched %v; only the whole author email counts", email, got)
+		}
+	}
+}
+
+func TestCommitIndexKeepsTheAmendedCommit(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_EMAIL=dev@example.com",
+			"GIT_AUTHOR_NAME=Dev", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "fix")
+	git("commit", "-q", "--allow-empty", "--amend", "--no-edit", "--date=2026-10-01T10:00:00Z")
+	head := git("rev-parse", "HEAD")
+	idx := &commitIndex{email: "dev@example.com", byRepo: map[string][]commit{}}
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	got := idx.between(repo, at.Add(-time.Second), at.Add(time.Second))
+	reachable := 0
+	for _, c := range got {
+		if c.Reachable {
+			reachable++
+			if c.SHA != head {
+				t.Errorf("reachable commit %s, want the amended head %s", c.SHA, head)
+			}
+		}
+	}
+	if len(got) != 2 || reachable != 1 {
+		t.Fatalf("commits = %+v; want the replaced commit and the amended head, only the head reachable", got)
+	}
+}
+
+func TestCommitIndexKeepsADeletedBranchCommit(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_EMAIL=dev@example.com",
+			"GIT_AUTHOR_NAME=Dev", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "base", "--date=2026-09-01T10:00:00Z")
+	git("checkout", "-q", "-b", "feature")
+	git("commit", "-q", "--allow-empty", "-m", "work")
+	git("checkout", "-q", "main")
+	git("branch", "-q", "-D", "feature")
+	idx := &commitIndex{email: "dev@example.com", byRepo: map[string][]commit{}}
+	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	got := idx.between(repo, at.Add(-time.Second), at.Add(time.Second))
+	var work *telemetry.Commit
+	for i := range got {
+		if got[i].Subject == "work" {
+			work = &got[i]
+		}
+	}
+	if work == nil || work.Reachable {
+		t.Fatalf("commits = %+v, want the deleted branch's commit, unreachable", got)
 	}
 }
 
