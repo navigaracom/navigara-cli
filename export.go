@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +18,18 @@ import (
 // exportSessions rebuilds each selected session's telemetry, writes the OTLP bodies and,
 // with --send, posts them to the Navigara OTLP endpoint.
 func exportSessions(opts options, stdout, stderr io.Writer) int {
+	var sender *sender
+	if opts.send {
+		sender = newSender(opts.url, opts.token)
+		if err := sender.validate(); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 2
+		}
+		if err := sender.checkSetup(); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
+	}
 	claudeHome, codexHome := toolHome(opts.claudeHome, ".claude"), toolHome(opts.codexHome, ".codex")
 	ident := telemetry.ReadIdentity(claudeHome, codexHome)
 	if opts.email != "" {
@@ -97,14 +107,6 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	if err := os.Mkdir(opts.output, 0700); err != nil {
 		fmt.Fprintf(stderr, "navigara: output %q: %v\n", opts.output, err)
 		return 1
-	}
-	var sender *sender
-	if opts.send {
-		if opts.url == "" || opts.token == "" {
-			fmt.Fprintln(stderr, "navigara: --send needs --url and --token (or NAVIGARA_TOKEN)")
-			return 2
-		}
-		sender = newSender(opts.url, opts.token)
 	}
 	// One session at a time: build, write and send it before the next, so memory stays flat.
 	counts := map[string]int{}
@@ -210,52 +212,6 @@ func repositoryResolver() func(cwd string) string {
 		cache[cwd] = url
 		return url
 	}
-}
-
-type sender struct {
-	client *http.Client
-	base   string
-	token  string
-	sent   int
-}
-
-func newSender(url, token string) *sender {
-	return &sender{client: &http.Client{Timeout: 60 * time.Second}, base: strings.TrimSuffix(url, "/") + "/otlp", token: token}
-}
-
-// post sends one body, retrying throttling and server errors with backoff.
-func (s *sender) post(b telemetry.Body) error {
-	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
-		}
-		req, err := http.NewRequest(http.MethodPost, s.base+b.Path, bytes.NewReader(b.Data))
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+s.token)
-		resp, err := s.client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		switch {
-		case resp.StatusCode == http.StatusOK:
-			s.sent++
-			return nil
-		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return fmt.Errorf("%s: HTTP %d; the API key needs the analytics ingestor role", b.Path, resp.StatusCode)
-		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
-			lastErr = fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
-		default:
-			return fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
-		}
-	}
-	return lastErr
 }
 
 func writeRequest(path string, data []byte) error {

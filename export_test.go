@@ -61,6 +61,10 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
+		if string(body) == "{}" {
+			w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+			return
+		}
 		got.mu.Lock()
 		got.paths = append(got.paths, r.URL.Path)
 		got.bodies = append(got.bodies, string(body))
