@@ -136,6 +136,7 @@ func TestAccountRejectsInsecureModesAndSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Force the insecure mode explicitly; os.WriteFile honors the umask.
+
 	if err := os.Chmod(path, 0644); err != nil {
 		t.Fatal(err)
 	}
