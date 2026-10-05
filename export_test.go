@@ -111,6 +111,11 @@ func TestUploadStopsOnRejectedKey(t *testing.T) {
 
 func TestUploadNeedsAnIdentity(t *testing.T) {
 	root := t.TempDir()
+	for _, home := range []string{filepath.Join(root, ".claude"), filepath.Join(root, ".codex")} {
+		if err := os.Mkdir(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"sessions", "upload", "--claude-home", filepath.Join(root, ".claude"), "--codex-home", filepath.Join(root, ".codex"),
 		"--output", filepath.Join(root, "out")}, &stdout, &stderr)
@@ -157,6 +162,23 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 }
 
 func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
+	t.Run("requested before identity eligibility", func(t *testing.T) {
+		claudeHome, codexHome := fixtureHomes(t)
+		if err := os.RemoveAll(codexHome); err != nil {
+			t.Fatal(err)
+		}
+		output := filepath.Join(t.TempDir(), "out")
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"sessions", "upload", "--source", "all", "--claude-home", claudeHome,
+			"--codex-home", codexHome, "--output", output}, &stdout, &stderr)
+		if code != 1 || !strings.Contains(stderr.String(), "Codex home") {
+			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+		}
+		if _, err := os.Stat(output); !os.IsNotExist(err) {
+			t.Fatalf("output created after failed discovery: %v", err)
+		}
+	})
+
 	t.Run("missing explicit home", func(t *testing.T) {
 		root := t.TempDir()
 		missing := filepath.Join(root, "missing")
@@ -258,5 +280,15 @@ func TestUploadSkipsASourceWithoutItsOwnEmail(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "codex-1") || !strings.Contains(stdout.String(), "claude_code") {
 		t.Errorf("stdout = %q; want Claude Code sessions only", stdout.String())
+	}
+}
+
+func TestUploadIgnoresUnselectedExplicitHome(t *testing.T) {
+	claudeHome, _ := fixtureHomes(t)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome,
+		"--codex-home", filepath.Join(t.TempDir(), "missing"), "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "claude_code") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
