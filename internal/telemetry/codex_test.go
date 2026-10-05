@@ -108,11 +108,12 @@ func TestCodexDiscoveryErrors(t *testing.T) {
 		t.Fatalf("malformed header error = %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(home, "archived_sessions"), nil, 0600); err != nil {
+	blocked := filepath.Join(home, "blocked")
+	if err := os.WriteFile(blocked, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CodexRollouts(home); err == nil {
-		t.Fatal("non-directory Codex root accepted")
+	if _, err := CodexRollouts(blocked); err == nil {
+		t.Fatal("non-directory Codex home accepted")
 	}
 }
 

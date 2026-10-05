@@ -3,7 +3,6 @@ package telemetry
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,23 +19,32 @@ import (
 func CodexRollouts(codexHome string) ([]string, error) {
 	var paths []string
 	for _, dir := range []string{"sessions", "archived_sessions"} {
-		root := filepath.Join(codexHome, dir)
-		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		root, err := filepath.EvalSymlinks(filepath.Join(codexHome, dir))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect Codex %s: %w", dir, err)
+		}
+		info, err := os.Stat(root)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect Codex %s: %w", dir, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("inspect Codex %s: not a directory", dir)
+		}
+		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				if path == root && errors.Is(err, os.ErrNotExist) {
-					return nil
-				}
 				return fmt.Errorf("walk Codex %s at %q: %w", dir, path, err)
 			}
-			if path == root && !d.IsDir() {
-				return fmt.Errorf("inspect Codex %s: not a directory", dir)
-			}
-			if !d.IsDir() && strings.HasPrefix(d.Name(), "rollout-") && strings.HasSuffix(d.Name(), ".jsonl") {
+			if d.Type().IsRegular() && strings.HasPrefix(d.Name(), "rollout-") && strings.HasSuffix(d.Name(), ".jsonl") {
 				paths = append(paths, path)
 			}
 			return nil
-		})
-		if err != nil {
+		}); err != nil {
 			return nil, err
 		}
 	}
