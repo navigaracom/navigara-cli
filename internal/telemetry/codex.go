@@ -118,7 +118,8 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			continue
 		}
 		at = at.UTC()
-		if !until.IsZero() && at.After(until) {
+		future := !until.IsZero() && at.After(until)
+		if future && r.Type != "session_meta" {
 			break
 		}
 		switch r.Type {
@@ -151,7 +152,9 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 					s.Common["vcs.repository.url.full"] = url
 				}
 			}
-			s.event("codex.conversation_starts", at, map[string]any{})
+			if !future {
+				s.event("codex.conversation_starts", at, map[string]any{})
+			}
 		case "turn_context":
 			var tc struct {
 				Model string `json:"model"`
@@ -242,6 +245,9 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 					}
 				}
 			}
+		}
+		if future {
+			break
 		}
 	}
 	if err := scanner.Err(); err != nil {

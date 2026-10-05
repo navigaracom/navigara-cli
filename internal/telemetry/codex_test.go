@@ -77,6 +77,20 @@ func TestBuildCodex(t *testing.T) {
 	}
 }
 
+func TestBuildCodexKeepsFutureSessionIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-future.jsonl")
+	writeLines(t, path, map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "future"}})
+	s, err := BuildCodex(path, Identity{}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	if err != nil || s.SessionID != "future" || len(s.Events) != 0 || len(s.Points) != 0 {
+		t.Fatalf("session=%+v err=%v", s, err)
+	}
+
+	writeLines(t, path, map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "future", "originator": 123}})
+	if _, err := BuildCodex(path, Identity{}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("malformed future metadata accepted")
+	}
+}
+
 func TestCodexDiscoveryErrors(t *testing.T) {
 	home := t.TempDir()
 	if paths, err := CodexRollouts(home); err != nil || len(paths) != 0 {
