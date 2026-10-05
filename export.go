@@ -52,6 +52,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	repos := repositoryResolver()
 	var sessions []*telemetry.Session
 	failed := 0
+	incomplete := false
 	keep := func(s *telemetry.Session, err error, id string) {
 		if err != nil {
 			failed++
@@ -65,6 +66,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	}
 	if wantClaude {
 		scan := session.Scan("claude", opts.claudeHome, opts.codexHome)
+		incomplete = len(scan.Errors) > 0
 		for _, err := range scan.Errors {
 			fmt.Fprintln(stderr, "navigara:", err)
 		}
@@ -81,15 +83,29 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	}
 	if wantCodex {
 		seen := map[string]bool{}
-		for _, path := range telemetry.CodexRollouts(codexHome) {
-			id := telemetry.CodexSessionID(path)
-			if id == "" || seen[id] || !want(id) {
-				continue
+		paths, err := telemetry.CodexRollouts(codexHome)
+		if err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			incomplete = true
+		} else {
+			for _, path := range paths {
+				id, err := telemetry.CodexSessionID(path)
+				if err != nil {
+					fmt.Fprintln(stderr, "navigara:", err)
+					incomplete = true
+					continue
+				}
+				if seen[id] || !want(id) {
+					continue
+				}
+				seen[id] = true
+				s, err := telemetry.BuildCodex(path, ident, opts.until)
+				keep(s, err, id)
 			}
-			seen[id] = true
-			s, err := telemetry.BuildCodex(path, ident, opts.until)
-			keep(s, err, id)
 		}
+	}
+	if incomplete {
+		return 1
 	}
 	sort.Slice(sessions, func(i, j int) bool {
 		if sessions[i].Source != sessions[j].Source {
@@ -137,11 +153,13 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s %s events=%d points=%d%s\n", s.Source, s.SessionID, len(s.Events), len(s.Points), note)
 	}
 
-	if !opts.send {
-		return 0
+	if opts.send {
+		if err := send(opts, bodies, stdout); err != nil {
+			fmt.Fprintln(stderr, "navigara: send:", err)
+			return 1
+		}
 	}
-	if err := send(opts, bodies, stdout); err != nil {
-		fmt.Fprintln(stderr, "navigara: send:", err)
+	if failed > 0 {
 		return 1
 	}
 	return 0
