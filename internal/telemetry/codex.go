@@ -102,7 +102,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 		return nil, err
 	}
 	s := &Session{Source: "codex", Service: "codex_tui", Common: ident.codexAttributes()}
-	scanner := bufio.NewScanner(&limitedReader{f: f, left: info.Size()})
+	scanner := bufio.NewScanner(io.LimitReader(f, info.Size()))
 	scanner.Buffer(make([]byte, 0, 1<<20), 256<<20)
 	model := ""
 	var last *codexTokens

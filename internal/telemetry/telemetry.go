@@ -35,7 +35,6 @@ type Session struct {
 	Common map[string]any
 	Events []Event
 	Points []Point
-	Start  time.Time
 	End    time.Time
 	// Estimated is true when cost comes from the price table instead of the tool's own total.
 	Estimated bool
@@ -61,15 +60,8 @@ func newSeen() *seen {
 
 func (s *Session) event(name string, at time.Time, attrs map[string]any) {
 	s.Events = append(s.Events, Event{Name: name, Time: at, Attrs: attrs})
-	s.span(at)
-}
-
-func (s *Session) span(at time.Time) {
 	if at.IsZero() {
 		return
-	}
-	if s.Start.IsZero() || at.Before(s.Start) {
-		s.Start = at
 	}
 	if at.After(s.End) {
 		s.End = at

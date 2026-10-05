@@ -12,12 +12,11 @@ import (
 type Identity struct {
 	Email string
 	// UserID is Claude Code's anonymous user.id hash; it attributes sessions without an email.
-	UserID        string
-	AccountUUID   string
-	Organization  string
-	CodexAccount  string
-	CodexEmail    string
-	EmailOverride bool
+	UserID       string
+	AccountUUID  string
+	Organization string
+	CodexAccount string
+	CodexEmail   string
 }
 
 // ReadIdentity reads the signed-in accounts from the Claude Code and Codex homes.
@@ -89,7 +88,7 @@ func jwtEmail(token string) string {
 
 // WithEmail overrides the email of both tools.
 func (id Identity) WithEmail(email string) Identity {
-	id.Email, id.CodexEmail, id.EmailOverride = strings.ToLower(email), strings.ToLower(email), true
+	id.Email, id.CodexEmail = strings.ToLower(email), strings.ToLower(email)
 	return id
 }
 

@@ -122,7 +122,7 @@ func readClaudeRows(path string) ([]parsedRow, error) {
 		return nil, err
 	}
 	var rows []parsedRow
-	scanner := bufio.NewScanner(&limitedReader{f: f, left: info.Size()})
+	scanner := bufio.NewScanner(io.LimitReader(f, info.Size()))
 	scanner.Buffer(make([]byte, 0, 1<<20), 256<<20)
 	line := 0
 	for scanner.Scan() {
@@ -147,24 +147,6 @@ func readClaudeRows(path string) ([]parsedRow, error) {
 	return rows, scanner.Err()
 }
 
-// limitedReader reads a file only up to its size at open, so a live session's appends are left out.
-type limitedReader struct {
-	f    *os.File
-	left int64
-}
-
-func (l *limitedReader) Read(p []byte) (int, error) {
-	if l.left <= 0 {
-		return 0, io.EOF
-	}
-	if int64(len(p)) > l.left {
-		p = p[:l.left]
-	}
-	n, err := l.f.Read(p)
-	l.left -= int64(n)
-	return n, err
-}
-
 type pendingTool struct {
 	name     string
 	input    json.RawMessage
@@ -177,7 +159,6 @@ type claudeRequest struct {
 	usage claudeUsage
 	// Output content size, to estimate output tokens a transcript never finalized.
 	textChars, toolChars, signatureChars int
-	lastLine                             int
 	at                                   time.Time
 	first                                time.Time
 	promptID                             string
@@ -314,7 +295,6 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 	var order []*claudeRequest
 	tools := map[string]*pendingTool{}
 	var toolOrder []string
-	emitted := map[string]bool{}
 	seenPrompt := map[string]bool{}
 	current := ""
 	var queued []string
@@ -419,7 +399,7 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 					order = append(order, req)
 				}
 				u := m.Usage
-				req.model, req.at, req.lastLine = m.Model, r.at, line
+				req.model, req.at = m.Model, r.at
 				// Rows are streaming snapshots; the largest output count is the final one.
 				output := max(req.usage.output, u.OutputTokens)
 				req.usage = claudeUsage{input: u.InputTokens, output: output, cacheRead: u.CacheReadInputTokens}
@@ -446,10 +426,9 @@ func (s *Session) walkClaude(rows []parsedRow, subagent bool, timeline promptTim
 				}
 			}
 			for _, b := range blocks {
-				if b.Type != "tool_use" || emitted[b.ID] || s.seen.tools[b.ID] {
+				if b.Type != "tool_use" || s.seen.tools[b.ID] {
 					continue
 				}
-				emitted[b.ID] = true
 				s.seen.tools[b.ID] = true
 				tools[b.ID] = &pendingTool{name: b.Name, input: b.Input, at: r.at, promptID: current}
 				toolOrder = append(toolOrder, b.ID)
@@ -534,7 +513,7 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 	if r.GitBranch != "" && r.GitBranch != "HEAD" {
 		attrs["vcs.ref.head.name"] = r.GitBranch
 	}
-	var commits []string
+	revision := ""
 	// A later step can fail after the commit; a commit that did not happen simply matches nothing.
 	if tool.name == "Bash" && s.commits != nil {
 		var input struct {
@@ -546,13 +525,13 @@ func (s *Session) toolResult(r parsedRow, b claudeBlock, tool *pendingTool, curr
 			sha := s.claimCommit(s.commits(call.dir, tool.at.Add(-time.Second), r.at.Add(time.Second)), call)
 			// The head after the command is the last step's commit: unknown when that step does not match.
 			if i == len(calls)-1 && sha != "" {
-				commits = []string{sha}
+				revision = sha
 			}
 		}
 	}
 	// Like live, one revision per result: the head after the command.
-	if len(commits) > 0 {
-		attrs["vcs.ref.head.revision"] = commits[0]
+	if revision != "" {
+		attrs["vcs.ref.head.revision"] = revision
 	}
 	s.event("tool_result", r.at, attrs)
 
