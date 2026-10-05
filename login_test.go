@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,55 @@ func TestAccountChecksAuthBeforeLogin(t *testing.T) {
 				t.Fatalf("status=%d opened=%v err=%v", status, opened, err)
 			}
 		})
+	}
+}
+
+func TestAccountKeepsNewSessionWhenOrganizationSelectionFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	exchanges := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/cli/exchange":
+			exchanges++
+			io.WriteString(w, `{"sessionToken":"session-secret","expiresAt":"2099-01-01T00:00:00Z"}`)
+		case "/api/v1/auth/session":
+			if r.Header.Get("Authorization") != "Bearer session-secret" {
+				t.Error("missing saved session")
+			}
+			io.WriteString(w, `{"userId":"user-1","email":"dev@example.com"}`)
+		case "/api/v1/auth/organizations":
+			io.WriteString(w, `{"organizations":[]}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	open := func(raw string) error {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return err
+		}
+		response, err := http.Get("http://127.0.0.1:" + u.Query().Get("port") + "/callback?" + url.Values{"state": {u.Query().Get("state")}, "code": {"code"}}.Encode())
+		if err != nil {
+			return err
+		}
+		return response.Body.Close()
+	}
+	p := &setupInput{r: bufio.NewReader(strings.NewReader("")), out: io.Discard}
+	if _, err := ensureAccount(context.Background(), srv.URL, p, true, open); err == nil {
+		t.Fatal("missing organization selection succeeded")
+	}
+	saved, err := loadAccount("")
+	if err != nil || saved.SessionToken != "session-secret" || saved.UserID != "user-1" || saved.OrganizationID != "" {
+		t.Fatalf("session was not retained: %#v, %v", saved, err)
+	}
+	if _, err := ensureAccount(context.Background(), "", p, true, func(string) error { t.Fatal("opened browser despite saved session"); return nil }); err == nil {
+		t.Fatal("missing organization selection succeeded")
+	}
+	if exchanges != 1 {
+		t.Fatalf("browser exchange count = %d, want 1", exchanges)
 	}
 }
 

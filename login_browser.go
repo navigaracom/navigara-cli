@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"sync"
 	"time"
@@ -78,6 +80,8 @@ func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16384}
 	defer server.Close()
 	go func() { _ = server.Serve(listener) }()
+	waitCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
 	fmt.Fprintf(out, "Sign in to Navigara in your browser:\n%s\n", loginURL)
 	if err := open(loginURL); err != nil {
 		fmt.Fprintln(out, "Could not open a browser. Open the URL above on this computer.")
@@ -85,7 +89,7 @@ func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(
 	select {
 	case result := <-done:
 		return result.session, result.err
-	case <-ctx.Done():
+	case <-waitCtx.Done():
 		return loginSession{}, errors.New("login cancelled or timed out; run navigara login again")
 	}
 }

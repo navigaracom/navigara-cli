@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
-	"os/signal"
 	"strconv"
 	"time"
 )
@@ -110,11 +108,17 @@ func ensureAccount(ctx context.Context, host string, p *setupInput, forceSelecti
 	if user.UserID == "" || validEmail(user.Email) != nil {
 		return c, errors.New("Navigara returned an invalid account")
 	}
+	accountChanged := login || c.UserID != user.UserID || c.Email != user.Email
 	if c.UserID != user.UserID {
 		c.OrganizationID, c.OrganizationName, c.IngestToken = "", "", ""
 		c.IngestExpiresAt = time.Time{}
 	}
 	c.UserID, c.Email = user.UserID, user.Email
+	if accountChanged {
+		if err = saveAccount(c); err != nil {
+			return c, err
+		}
+	}
 	orgs, err := client.organizations(ctx, c.SessionToken)
 	if err != nil {
 		return c, err
@@ -154,10 +158,8 @@ func runLogin(args []string, input io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara: unexpected login argument")
 		return 2
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
 	p := &setupInput{r: bufio.NewReader(input), out: stdout}
-	if _, err := ensureAccount(ctx, *host, p, true, openBrowser); err != nil {
+	if _, err := ensureAccount(context.Background(), *host, p, true, openBrowser); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
