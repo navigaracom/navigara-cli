@@ -1,7 +1,9 @@
 package telemetry
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,8 +39,15 @@ func TestBuildCodex(t *testing.T) {
 		tokenCount("2026-10-03T10:00:09Z", 250, 140, 30, 280),
 	)
 
-	paths := CodexRollouts(home)
-	if len(paths) != 1 || CodexSessionID(paths[0]) != "child-thread" {
+	paths, err := CodexRollouts(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 {
+		t.Fatalf("rollouts = %v; want one child thread", paths)
+	}
+	id, err := CodexSessionID(paths[0])
+	if err != nil || id != "child-thread" {
 		t.Fatalf("rollouts = %v; a child thread is its own session", paths)
 	}
 	s, err := BuildCodex(paths[0], Identity{CodexEmail: "dev@example.com"}, time.Time{})
@@ -65,6 +74,31 @@ func TestBuildCodex(t *testing.T) {
 		if got := sum(s, "token.usage", c.kind); got != c.want {
 			t.Errorf("%s = %v, want %v", c.kind, got, c.want)
 		}
+	}
+}
+
+func TestCodexDiscoveryErrors(t *testing.T) {
+	home := t.TempDir()
+	if paths, err := CodexRollouts(home); err != nil || len(paths) != 0 {
+		t.Fatalf("missing optional roots = %v, %v", paths, err)
+	}
+
+	rollout := filepath.Join(home, "sessions", "rollout-bad.jsonl")
+	if err := os.MkdirAll(filepath.Dir(rollout), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rollout, []byte(`{"type":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CodexSessionID(rollout); err == nil || !strings.Contains(err.Error(), "header") {
+		t.Fatalf("malformed header error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(home, "archived_sessions"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CodexRollouts(home); err == nil {
+		t.Fatal("non-directory Codex root accepted")
 	}
 }
 
