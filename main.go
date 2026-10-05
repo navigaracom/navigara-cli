@@ -97,6 +97,5 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if !opts.dryRun {
 		return invalid("--dry-run is required and must be true")
 	}
-	fmt.Fprintln(stderr, "navigara: session extraction is not implemented")
-	return 1
+	return upload(opts, stdout, stderr)
 }
