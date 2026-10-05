@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,9 +16,7 @@ import (
 )
 
 func runSetup(args []string, input io.Reader, stdout, stderr io.Writer) int {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-	return runSetupWithBrowser(ctx, args, input, stdout, stderr, openBrowser)
+	return runSetupWithBrowser(context.Background(), args, input, stdout, stderr, openBrowser)
 }
 
 func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, stdout, stderr io.Writer, open func(string) error) int {
