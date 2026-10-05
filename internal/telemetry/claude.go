@@ -192,6 +192,16 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 	if err != nil {
 		return nil, err
 	}
+	sessionID := ""
+	for _, r := range rows {
+		if r.SessionID != "" && !r.IsSidechain {
+			sessionID = r.SessionID
+			break
+		}
+	}
+	if sessionID == "" {
+		return nil, fmt.Errorf("no root session id")
+	}
 	cut := false
 	if !in.Until.IsZero() {
 		kept := rows[:0]
@@ -205,14 +215,10 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 		rows = kept
 	}
 	s := &Session{Source: "claude_code", Service: "claude-code", seen: newSeen(), commits: in.Commits}
+	s.SessionID = sessionID
+	hasTimedRow := false
 	for _, r := range rows {
-		if r.SessionID != "" && !r.IsSidechain {
-			s.SessionID = r.SessionID
-			break
-		}
-	}
-	if s.SessionID == "" {
-		return nil, fmt.Errorf("no root session id")
+		hasTimedRow = hasTimedRow || !r.at.IsZero()
 	}
 
 	var cwd, entrypoint string
@@ -268,7 +274,7 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 	} else {
 		s.reconcileCost(rows)
 	}
-	if s.Estimated {
+	if s.Estimated && hasTimedRow {
 		// A process without a cost-state row has no recorded start: its first row is the closest.
 		s.event("session_start", firstAfter(rows, s.lastSettled), map[string]any{})
 	}
