@@ -12,6 +12,7 @@ type setupFile struct {
 	path, backup  string
 	before, after []byte
 	existed       bool
+	installed     os.FileInfo
 }
 
 func readSetupFile(path string) ([]byte, bool, error) {
@@ -93,6 +94,13 @@ func (f *setupFile) prepare() (string, error) {
 // short absent interval while the replacement is linked exclusively. Any writer that creates the
 // target in that interval wins; the captured file remains in the private backup directory.
 func (f *setupFile) install(tmp string) (err error) {
+	installed, err := os.Lstat(tmp)
+	if err != nil {
+		return fmt.Errorf("inspect replacement %s: %w", tmp, err)
+	}
+	if !installed.Mode().IsRegular() {
+		return fmt.Errorf("%s must be a regular replacement file", tmp)
+	}
 	captured := false
 	defer func() {
 		if err == nil || !captured {
@@ -157,6 +165,7 @@ func (f *setupFile) install(tmp string) (err error) {
 	if err := os.Link(tmp, f.path); err != nil {
 		return fmt.Errorf("install %s without replacing an existing file: %w", f.path, err)
 	}
+	f.installed = installed
 	return nil
 }
 

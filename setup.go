@@ -196,20 +196,12 @@ func freshSetup(p *setupInput, stderr io.Writer) error {
 		fmt.Fprintln(p.out, "Setup cancelled; no settings changed or requests sent.")
 		return nil
 	}
-	if err = s.checkSetup(); err != nil {
-		return err
-	}
-	for _, f := range files {
-		if err = f.check(); err != nil {
-			return err
-		}
+	if err = applySetupFiles(files, s.checkSetup); err != nil {
+		return fmt.Errorf("settings update failed: %w", err)
 	}
 	keep = true
 	fmt.Fprintf(p.out, "Frozen backfill: %s\n", opts.output)
 	for _, f := range files {
-		if err = f.apply(); err != nil {
-			return fmt.Errorf("settings update failed: %w; earlier updates remain, backups are listed above", err)
-		}
 		if f.backup != "" {
 			fmt.Fprintln(p.out, "Backup:", f.backup)
 		}
