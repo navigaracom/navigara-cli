@@ -63,6 +63,10 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
+		if string(body) == "{}" {
+			w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+			return
+		}
 		got.mu.Lock()
 		got.paths = append(got.paths, r.URL.Path)
 		got.bodies = append(got.bodies, string(body))
@@ -167,6 +171,23 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 }
 
 func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
+	t.Run("requested before identity eligibility", func(t *testing.T) {
+		claudeHome, codexHome := fixtureHomes(t)
+		if err := os.RemoveAll(codexHome); err != nil {
+			t.Fatal(err)
+		}
+		output := filepath.Join(t.TempDir(), "out")
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"sessions", "upload", "--source", "all", "--claude-home", claudeHome,
+			"--codex-home", codexHome, "--output", output}, &stdout, &stderr)
+		if code != 1 || !strings.Contains(stderr.String(), "Codex home") {
+			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+		}
+		if _, err := os.Stat(output); !os.IsNotExist(err) {
+			t.Fatalf("output created after failed discovery: %v", err)
+		}
+	})
+
 	t.Run("missing explicit home", func(t *testing.T) {
 		root := t.TempDir()
 		missing := filepath.Join(root, "missing")
@@ -234,7 +255,10 @@ func TestUploadReportsBuildFailuresAfterSendingOtherSessions(t *testing.T) {
 				}
 			}
 			var requests atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+			}))
 			defer server.Close()
 			args := []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com", "--claude-home", claudeHome,
 				"--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}
