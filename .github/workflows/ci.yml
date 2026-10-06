@@ -34,6 +34,21 @@ jobs:
             printf 'Go files need formatting:\n%s\n' "$unformatted"
             exit 1
           fi
+      - name: Check install script
+        run: |
+          bash -n install.sh
+          if [ "$RUNNER_OS" = Linux ]; then
+            shellcheck --severity=style install.sh
+          fi
+          bash install.sh --help | grep -q '^Usage: bash install.sh'
+          if bash install.sh --bogus 2>/dev/null; then
+            printf 'install.sh accepted an unknown flag\n'
+            exit 1
+          fi
+          if bash < install.sh 2>/dev/null; then
+            printf 'install.sh ran from a pipe\n'
+            exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Test
