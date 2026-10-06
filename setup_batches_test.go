@@ -23,7 +23,7 @@ func writeBatchFixture(t *testing.T, url string) string {
 			t.Fatal(err)
 		}
 	}
-	if err := saveSetupBatches(d, url); err != nil {
+	if err := saveSetupBatches(d, url, ""); err != nil {
 		t.Fatal(err)
 	}
 	return d
