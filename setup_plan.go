@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,7 +84,7 @@ func refreshSetupPlans(files []*setupFile, opts options, home string) error {
 		return fmt.Errorf("settings plans changed; run the command again")
 	}
 	for i, f := range files {
-		if refreshed[i].path != f.path {
+		if refreshed[i].path != f.path || refreshed[i].existed != f.existed || !bytes.Equal(refreshed[i].before, f.before) {
 			return fmt.Errorf("settings plans changed; run the command again")
 		}
 		f.after = refreshed[i].after
