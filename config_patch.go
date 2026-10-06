@@ -86,12 +86,6 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
-	if apply {
-		if err := ensureIngestion(context.Background(), &c); err != nil {
-			fmt.Fprintln(stderr, "navigara:", err)
-			return 1
-		}
-	}
 	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
 	files, err := setupPlans(opts, home)
 	if err != nil {
@@ -106,6 +100,15 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 	if !apply {
 		fmt.Fprintln(stdout, "Preview only; no files changed and no ingestion request sent.")
 		return 0
+	}
+	if err := ensureIngestion(context.Background(), &c); err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
+	opts.token = c.IngestToken
+	if err := refreshSetupPlans(files, opts, home); err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
 	}
 
 	s := newSender(opts.url, opts.token)

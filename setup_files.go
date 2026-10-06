@@ -70,6 +70,15 @@ func (f *setupFile) prepare() (string, error) {
 	if err := f.check(); err != nil {
 		return "", err
 	}
+	if f.existed && bytes.Equal(f.before, f.after) {
+		info, err := os.Lstat(f.path)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode().Perm() == 0600 {
+			return "", nil
+		}
+	}
 	return privateFile(filepath.Dir(f.path), ".navigara-new-*", f.after)
 }
 

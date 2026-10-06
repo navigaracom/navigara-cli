@@ -197,18 +197,8 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		return err
 	}
 	opts.token = c.IngestToken
-	authenticatedFiles, err := setupPlans(opts, home)
-	if err != nil {
+	if err = refreshSetupPlans(files, opts, home); err != nil {
 		return err
-	}
-	if len(authenticatedFiles) != len(files) {
-		return errors.New("setup plans changed while awaiting consent; run setup again")
-	}
-	for i, f := range files {
-		if authenticatedFiles[i].path != f.path {
-			return errors.New("setup plans changed while awaiting consent; run setup again")
-		}
-		f.after = authenticatedFiles[i].after
 	}
 	s := newSender(opts.url, opts.token)
 	if err = applySetupFiles(files, s.checkSetup); err != nil {
@@ -239,6 +229,9 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 	var c accountConfig
 	if m.OrganizationID == "" {
 		token, err = p.token() // Legacy manifests predate saved organization context.
+		if err != nil {
+			return err
+		}
 	} else {
 		var loadErr error
 		c, loadErr = loadAccount(host)

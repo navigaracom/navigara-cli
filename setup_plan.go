@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,4 +72,22 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		}
 	}
 	return files, nil
+}
+
+// Refresh token-dependent output without replacing the original file snapshots.
+func refreshSetupPlans(files []*setupFile, opts options, home string) error {
+	refreshed, err := setupPlans(opts, home)
+	if err != nil {
+		return err
+	}
+	if len(refreshed) != len(files) {
+		return fmt.Errorf("settings plans changed; run the command again")
+	}
+	for i, f := range files {
+		if refreshed[i].path != f.path || refreshed[i].existed != f.existed || !bytes.Equal(refreshed[i].before, f.before) {
+			return fmt.Errorf("settings plans changed; run the command again")
+		}
+		f.after = refreshed[i].after
+	}
+	return nil
 }

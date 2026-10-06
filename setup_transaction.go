@@ -35,10 +35,15 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 		if err = f.check(); err != nil {
 			return err
 		}
-		if f.existed && bytes.Equal(f.before, f.after) {
-			if info, e := os.Lstat(f.path); e == nil && info.Mode().Perm() == 0600 {
+		if prepared[i] == "" {
+			info, e := os.Lstat(f.path)
+			if e != nil {
+				return e
+			}
+			if info.Mode().Perm() == 0600 {
 				continue
 			}
+			return fmt.Errorf("%s changed during setup; run setup again", f.path)
 		}
 		if err = f.install(prepared[i]); err != nil {
 			return err
