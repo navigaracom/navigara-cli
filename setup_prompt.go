@@ -26,7 +26,7 @@ func (p *setupInput) ask(label, fallback string) (string, error) {
 	}
 	line, err := p.r.ReadString('\n')
 	if err != nil {
-		return "", errors.New("setup input ended; no further changes applied")
+		return "", errors.New("input ended; no further changes applied")
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {

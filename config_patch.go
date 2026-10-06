@@ -20,7 +20,7 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("sessions config patch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: navigara sessions config patch [options]") }
-	fs.StringVar(&opts.url, "host", "", "Navigara origin")
+	fs.StringVar(&opts.host, "host", "", "Navigara origin")
 	fs.StringVar(&opts.source, "source", "all", "tool source: all, claude, codex")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home (default $CODEX_HOME or ~/.codex)")
@@ -74,7 +74,7 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	c, err := verifiedAccount(context.Background(), opts.url)
+	c, err := verifiedAccount(context.Background(), opts.host)
 	if err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
@@ -86,19 +86,13 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
-	if !apply {
-		opts.url = c.Host + "/api"
-		opts.token = previewIngestToken
-		if c.IngestToken != "" {
-			opts.token = c.IngestToken
-		}
-	} else {
+	if apply {
 		if err := ensureIngestion(context.Background(), &c); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 1
 		}
-		opts.url, opts.token = c.Host+"/api", c.IngestToken
 	}
+	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
 	files, err := setupPlans(opts, home)
 	if err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
@@ -169,10 +163,10 @@ func checkPatchHomes(opts *options, claudeExplicit, codexExplicit bool) error {
 		return errors.New("no tool homes found; run Claude Code or Codex once, then retry")
 	}
 	if opts.source == "all" {
-		if !claude {
+		switch {
+		case !claude:
 			opts.source = "codex"
-		}
-		if !codex && claude {
+		case !codex:
 			opts.source = "claude"
 		}
 	}

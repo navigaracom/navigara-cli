@@ -65,23 +65,6 @@ func (f *setupFile) check() error {
 	return nil
 }
 
-func (f *setupFile) apply() error {
-	if err := f.check(); err != nil {
-		return err
-	}
-	if bytes.Equal(f.before, f.after) && f.existed {
-		if info, err := os.Lstat(f.path); err == nil && info.Mode().Perm() == 0600 {
-			return nil
-		}
-	}
-	tmp, err := f.prepare()
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp)
-	return f.install(tmp)
-}
-
 // prepare creates the private replacement before the final target transition.
 func (f *setupFile) prepare() (string, error) {
 	if err := f.check(); err != nil {

@@ -13,6 +13,7 @@ func TestCanonicalHost(t *testing.T) {
 		input, want string
 	}{
 		{"https://App.Navigara.com:443/", "https://app.navigara.com"},
+		{"https://app.navigara.com:00443", "https://app.navigara.com"},
 		{"http://127.0.0.1:80", "http://127.0.0.1"},
 		{"http://[::1]:8080/", "http://[::1]:8080"},
 	}
