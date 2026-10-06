@@ -57,8 +57,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if len(args) > 1 {
 			return invalid("unexpected argument: " + args[1])
 		}
-		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]")
+		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]\n       navigara sessions config patch [options]")
 		return 0
+	}
+	if args[0] == "config" {
+		if len(args) < 2 || args[1] != "patch" {
+			return invalid("unknown command: sessions config")
+		}
+		return runConfigPatch(args[2:], stdout, stderr)
 	}
 	if args[0] != "upload" {
 		return invalid("unknown command: sessions " + args[0])
