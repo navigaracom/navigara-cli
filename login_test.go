@@ -134,9 +134,9 @@ func TestAccountKeepsNewSessionWhenOrganizationSelectionFails(t *testing.T) {
 	exchanges := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/auth/cli/exchange":
+		case "/api/oauth/token":
 			exchanges++
-			io.WriteString(w, `{"sessionToken":"session-secret","expiresAt":"2099-01-01T00:00:00Z"}`)
+			io.WriteString(w, `{"access_token":"session-secret","token_type":"Bearer","expires_in":3600,"scope":"navigara"}`)
 		case "/api/v1/auth/session":
 			if r.Header.Get("Authorization") != "Bearer session-secret" {
 				t.Error("missing saved session")
@@ -155,7 +155,7 @@ func TestAccountKeepsNewSessionWhenOrganizationSelectionFails(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		response, err := http.Get("http://127.0.0.1:" + u.Query().Get("port") + "/callback?" + url.Values{"state": {u.Query().Get("state")}, "code": {"code"}}.Encode())
+		response, err := http.Get(u.Query().Get("redirect_uri") + "?" + url.Values{"state": {u.Query().Get("state")}, "iss": {srv.URL}, "code": {"code"}}.Encode())
 		if err != nil {
 			return err
 		}

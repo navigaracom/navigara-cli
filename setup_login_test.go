@@ -79,7 +79,7 @@ func TestSetupStartsLoginOnSelectedHost(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if u.Scheme+"://"+u.Host != want || u.Path != "/cli/login" {
+				if u.Scheme+"://"+u.Host != want || u.Path != "/oauth/authorize" {
 					t.Error("wrong login destination")
 				}
 				cancel()
@@ -99,8 +99,8 @@ func TestSetupLoginReturnsToWizard(t *testing.T) {
 	var out, errs bytes.Buffer
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/auth/cli/exchange":
-			json.NewEncoder(w).Encode(map[string]any{"sessionToken": "session-secret", "expiresAt": time.Now().Add(time.Hour)})
+		case "/api/oauth/token":
+			json.NewEncoder(w).Encode(map[string]any{"access_token": "session-secret", "token_type": "Bearer", "expires_in": 3600, "scope": "navigara"})
 		case "/api/v1/auth/session":
 			io.WriteString(w, `{"userId":"user-1","email":"dev@example.com"}`)
 		case "/api/v1/auth/organizations":
@@ -117,7 +117,7 @@ func TestSetupLoginReturnsToWizard(t *testing.T) {
 			return err
 		}
 		q := u.Query()
-		resp, err := http.Get("http://127.0.0.1:" + q.Get("port") + "/callback?" + url.Values{"state": {q.Get("state")}, "code": {"code"}}.Encode())
+		resp, err := http.Get(q.Get("redirect_uri") + "?" + url.Values{"state": {q.Get("state")}, "iss": {srv.URL}, "code": {"code"}}.Encode())
 		if err == nil {
 			resp.Body.Close()
 		}

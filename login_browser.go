@@ -27,6 +27,10 @@ type loginSession struct {
 func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(string) error) (loginSession, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	issuer, err := canonicalHost(c.host)
+	if err != nil {
+		return loginSession{}, err
+	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return loginSession{}, errors.New("cannot open local login callback")
@@ -39,9 +43,17 @@ func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(
 	state := base64.RawURLEncoding.EncodeToString(random[:32])
 	verifier := base64.RawURLEncoding.EncodeToString(random[32:])
 	hash := sha256.Sum256([]byte(verifier))
-	_, port, _ := net.SplitHostPort(listener.Addr().String())
-	query := url.Values{"port": {port}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(hash[:])}}
-	loginURL := c.host + "/cli/login?" + query.Encode()
+	redirectURI := "http://" + listener.Addr().String() + "/callback"
+	query := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {oauthClientID},
+		"redirect_uri":          {redirectURI},
+		"scope":                 {oauthScope},
+		"state":                 {state},
+		"code_challenge":        {base64.RawURLEncoding.EncodeToString(hash[:])},
+		"code_challenge_method": {"S256"},
+	}
+	loginURL := c.host + "/oauth/authorize?" + query.Encode()
 	type reply struct {
 		session loginSession
 		err     error
@@ -53,8 +65,8 @@ func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		q := r.URL.Query()
-		if r.Host != listener.Addr().String() || len(q["state"]) != 1 || q.Get("state") != state || len(q["code"]) != 1 || q.Get("code") == "" || len(q.Get("code")) > 8192 {
+		q, queryOK := parseOAuthCallbackQuery(r.URL.RawQuery)
+		if r.Host != listener.Addr().String() || !queryOK || !validOAuthCallback(q, state, issuer) {
 			http.Error(w, "Invalid login callback. Return to the terminal and try again.", http.StatusBadRequest)
 			return
 		}
@@ -62,12 +74,12 @@ func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(
 		once.Do(func() {
 			handled = true
 			var session loginSession
-			err := c.request(ctx, "POST", "/auth/cli/exchange", "", map[string]string{"code": q.Get("code"), "codeVerifier": verifier}, &session)
-			if errors.Is(err, authHTTPError(401)) || errors.Is(err, authHTTPError(403)) {
-				err = errors.New("login code rejected or expired; run navigara login again")
-			}
-			if err == nil && (session.SessionToken == "" || !session.ExpiresAt.After(time.Now())) {
-				err = errors.New("Navigara returned an invalid session")
+			var err error
+			if q.Get("error") != "" {
+				err = oauthAuthorizationError(q.Get("error"))
+			} else {
+				requestStart := time.Now()
+				session, err = c.oauthToken(ctx, q.Get("code"), redirectURI, verifier, requestStart)
 			}
 			if err != nil {
 				http.Error(w, "Login failed. Return to the terminal and try again.", http.StatusBadGateway)
@@ -95,6 +107,34 @@ func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(
 	case <-waitCtx.Done():
 		return loginSession{}, errors.New("login cancelled or timed out; run navigara login again")
 	}
+}
+
+func validOAuthCallback(q url.Values, state, issuer string) bool {
+	for _, key := range []string{"state", "iss", "code", "error"} {
+		if values, ok := q[key]; ok && (len(values) != 1 || values[0] == "") {
+			return false
+		}
+	}
+	if len(q["state"]) != 1 || q.Get("state") != state || len(q["iss"]) != 1 || q.Get("iss") != issuer {
+		return false
+	}
+	hasCode, hasError := q.Get("code") != "", q.Get("error") != ""
+	if hasCode == hasError || (hasCode && len(q.Get("code")) > maxOAuthToken) {
+		return false
+	}
+	return true
+}
+
+func parseOAuthCallbackQuery(rawQuery string) (url.Values, bool) {
+	query, err := url.ParseQuery(rawQuery)
+	return query, err == nil
+}
+
+func oauthAuthorizationError(code string) error {
+	if code == "access_denied" {
+		return errors.New("sign-in was denied; run navigara login again")
+	}
+	return errors.New("Navigara could not finish sign-in; run navigara login again")
 }
 
 func openBrowser(raw string) error {
