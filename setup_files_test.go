@@ -15,11 +15,11 @@ func TestSetupFileBackupAndConcurrentEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(path, []byte(`{"user":"changed"}`), 0600)
-	if err := f.apply(); err == nil {
+	if err := applySetupFiles([]*setupFile{f}, func() error { return nil }); err == nil {
 		t.Fatal("overwrote concurrent edit")
 	}
 	os.WriteFile(path, f.before, 0644)
-	if err := f.apply(); err != nil {
+	if err := applySetupFiles([]*setupFile{f}, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(path)
@@ -44,7 +44,7 @@ func TestSetupFileBackupAndConcurrentEdit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.apply(); err != nil {
+	if err := applySetupFiles([]*setupFile{f}, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	again, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".navigara-backup-*"))
@@ -69,7 +69,7 @@ func TestSetupFileRejectsSymlinkAndUnexpectedCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(path, []byte("user file"), 0600)
-	if err := f.apply(); err == nil {
+	if err := applySetupFiles([]*setupFile{f}, func() error { return nil }); err == nil {
 		t.Fatal("replaced new user file")
 	}
 	got, _ := os.ReadFile(target)

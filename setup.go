@@ -190,7 +190,7 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	// only its token-dependent output after the user consents.
 	for _, f := range files {
 		if err := f.check(); err != nil {
-			return fmt.Errorf("settings changed while awaiting consent: %w", err)
+			return err
 		}
 	}
 	if err = ensureIngestion(ctx, &c); err != nil {

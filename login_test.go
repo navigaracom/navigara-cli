@@ -120,6 +120,10 @@ func TestAccountChecksAuthBeforeLogin(t *testing.T) {
 			if err == nil || opened != (status == 401) {
 				t.Fatalf("status=%d opened=%v err=%v", status, opened, err)
 			}
+			if status == 403 && !strings.Contains(err.Error(), "administrator") {
+				t.Fatal("permission denial lacks a next step")
+			}
+
 		})
 	}
 }

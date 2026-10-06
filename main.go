@@ -20,7 +20,7 @@ type options struct {
 	email                 string
 	allowAnonymous        bool
 	send                  bool
-	url, token            string
+	host, url, token      string
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -105,7 +105,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	})
 	fs.StringVar(&opts.email, "email", "", "email to attribute the sessions to (default: the signed-in account)")
 	fs.BoolVar(&opts.allowAnonymous, "allow-anonymous", false, "export without a user email")
-	fs.BoolVar(&opts.send, "send", false, "post the request bodies to --url after writing them")
+	fs.BoolVar(&opts.send, "send", false, "post the request bodies using saved login or --url and --token")
+	fs.StringVar(&opts.host, "host", "", "Navigara origin for --send with saved login (default saved host)")
 	fs.StringVar(&opts.url, "url", "", "Navigara base URL, for example https://app.navigara.com")
 	fs.StringVar(&opts.token, "token", os.Getenv("NAVIGARA_TOKEN"), "API key with the analytics ingestor role (default $NAVIGARA_TOKEN)")
 	var last time.Duration

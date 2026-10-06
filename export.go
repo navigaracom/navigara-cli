@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -20,6 +21,10 @@ import (
 func exportSessions(opts options, stdout, stderr io.Writer) int {
 	var sender *sender
 	if opts.send {
+		if err := prepareUploadAccount(context.Background(), &opts); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
 		sender = newSender(opts.url, opts.token)
 		if err := sender.validate(); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)

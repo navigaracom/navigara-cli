@@ -23,24 +23,15 @@ func verifiedAccount(ctx context.Context, host string) (accountConfig, error) {
 	}
 
 	client := newAuthClient(c.Host)
-	var user struct {
-		UserID string `json:"userId"`
-		Email  string `json:"email"`
-	}
-	if err := client.request(ctx, "GET", "/v1/auth/session", c.SessionToken, nil, &user); err != nil {
-		if isAuthStatus(err, 401) || isAuthStatus(err, 403) {
-			return c, errors.New("Navigara session is no longer valid; run navigara login")
-		}
+	user, err := client.session(ctx, c.SessionToken)
+	if err != nil {
 		return c, err
 	}
-	if user.UserID == "" || user.UserID != c.UserID || validEmail(user.Email) != nil {
+	if user.UserID != c.UserID {
 		return c, errors.New("saved Navigara account no longer matches the signed-in user; run navigara login")
 	}
 	orgs, err := client.organizations(ctx, c.SessionToken)
 	if err != nil {
-		if isAuthStatus(err, 401) || isAuthStatus(err, 403) {
-			return c, errors.New("Navigara session is no longer valid; run navigara login")
-		}
 		return c, err
 	}
 	if len(orgs) == 0 {
@@ -94,7 +85,7 @@ func ensureIngestion(ctx context.Context, c *accountConfig) error {
 		"expiresAt": expiresAt,
 	}, &response)
 	if err != nil {
-		if isAuthStatus(err, 403) {
+		if errors.Is(err, authHTTPError(403)) {
 			return errors.New("you need organization admin access to create a Navigara CLI ingestion key; ask an organization admin")
 		}
 		return err
@@ -116,9 +107,4 @@ func ensureIngestion(ctx context.Context, c *accountConfig) error {
 	}
 	*c = updated
 	return nil
-}
-
-func isAuthStatus(err error, status int) bool {
-	var got authHTTPError
-	return errors.As(err, &got) && int(got) == status
 }

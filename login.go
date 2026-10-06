@@ -82,13 +82,10 @@ func ensureAccount(ctx context.Context, host string, p *setupInput, forceSelecti
 		return c, err
 	}
 	client := newAuthClient(c.Host)
-	var user struct {
-		UserID string `json:"userId"`
-		Email  string `json:"email"`
-	}
+	var user accountUser
 	login := c.SessionToken == "" || !c.SessionExpiresAt.After(time.Now())
 	if !login {
-		err = client.request(ctx, "GET", "/v1/auth/session", c.SessionToken, nil, &user)
+		user, err = client.session(ctx, c.SessionToken)
 		if errors.Is(err, authHTTPError(401)) {
 			login = true
 		} else if err != nil {
@@ -101,12 +98,9 @@ func ensureAccount(ctx context.Context, host string, p *setupInput, forceSelecti
 			return c, err
 		}
 		c.SessionToken, c.SessionExpiresAt = session.SessionToken, session.ExpiresAt
-		if err = client.request(ctx, "GET", "/v1/auth/session", c.SessionToken, nil, &user); err != nil {
+		if user, err = client.session(ctx, c.SessionToken); err != nil {
 			return c, err
 		}
-	}
-	if user.UserID == "" || validEmail(user.Email) != nil {
-		return c, errors.New("Navigara returned an invalid account")
 	}
 	accountChanged := login || c.UserID != user.UserID || c.Email != user.Email
 	if c.UserID != user.UserID {

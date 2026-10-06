@@ -20,10 +20,8 @@ func TestSetupPlansBothShellStartupModes(t *testing.T) {
 	if len(files) != 3 || files[1].path != filepath.Join(home, ".bashrc") || files[2].path != filepath.Join(home, ".profile") {
 		t.Fatalf("plans: %+v", files)
 	}
-	for _, f := range files {
-		if err := f.apply(); err != nil {
-			t.Fatal(err)
-		}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(filepath.Join(home, ".profile"))
 	if !strings.Contains(string(got), "# keep login setup") || strings.Contains(string(got), "secret") {
