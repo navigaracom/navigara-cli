@@ -192,3 +192,41 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 		t.Fatalf("receiver checked %d times", otlpPosts)
 	}
 }
+
+func TestConfigPatchInvalidSettingsDoesNotMintIngestionKey(t *testing.T) {
+	keyPosts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/session":
+			_ = json.NewEncoder(w).Encode(map[string]string{"userId": "u1", "email": "dev@example.com"})
+		case "/api/v1/auth/organizations":
+			_ = json.NewEncoder(w).Encode(map[string]any{"organizations": []map[string]string{{"id": "org1", "name": "Acme", "status": "active"}}})
+		case "/api/v1/organizations/org1/api-keys":
+			keyPosts++
+			http.Error(w, "must not mint", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	claude := filepath.Join(root, "claude")
+	if err := os.MkdirAll(claude, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(`{"env":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAccount(accountConfig{Version: 1, Host: srv.URL, SessionToken: "session", UserID: "u1", Email: "dev@example.com", OrganizationID: "org1", OrganizationName: "Acme", SessionExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := runConfigPatch([]string{"--apply", "--host", srv.URL, "--source", "claude", "--claude-home", claude}, &out, &errOut); code != 1 {
+		t.Fatalf("code = %d, want 1: %s", code, errOut.String())
+	}
+	if keyPosts != 0 {
+		t.Fatalf("minted ingestion key despite invalid settings: %d", keyPosts)
+	}
+}

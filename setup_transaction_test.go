@@ -94,6 +94,60 @@ func TestApplySetupFilesLeavesUnchangedPrivateTarget(t *testing.T) {
 	}
 }
 
+func TestApplySetupFilesLeavesUnchangedPrivateTargetInReadOnlyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte("same"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f := transactionFile(t, path, []byte("same"))
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+	if err := applySetupFiles([]*setupFile{f}, func() error { return nil }); err != nil {
+		t.Fatalf("unchanged private target required a temporary file: %v", err)
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, ".navigara-new-*")); err != nil || len(matches) != 0 {
+		t.Fatalf("temporary replacements = %v, err = %v", matches, err)
+	}
+}
+
+func TestApplySetupFilesTightensUnchangedTargetMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte("same"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles([]*setupFile{transactionFile(t, path, []byte("same"))}, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("target mode = %v, want 0600", info.Mode())
+	}
+}
+
+func TestApplySetupFilesRejectsModeChangeForSkippedTarget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte("same"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f := transactionFile(t, path, []byte("same"))
+	if err := applySetupFiles([]*setupFile{f}, func() error { return os.Chmod(path, 0644) }); err == nil {
+		t.Fatal("accepted concurrent mode change")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0644 || f.backup != "" {
+		t.Fatalf("mode change was not preserved: mode=%v backup=%q", info.Mode(), f.backup)
+	}
+}
+
 func TestRollbackSetupFilePreservesSameContentReplacement(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "target")

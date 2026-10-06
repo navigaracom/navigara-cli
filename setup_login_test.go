@@ -222,6 +222,20 @@ func TestSetupResumeDeclineExpiredKeyDoesNotMintOrUpload(t *testing.T) {
 	}
 }
 
+func TestSetupResumeLegacyTokenErrorDoesNotAskForConsent(t *testing.T) {
+	dir := t.TempDir()
+	if err := saveSetupBatches(dir, "https://example.test/api", ""); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	if code := runSetup([]string{"--resume", dir}, strings.NewReader(""), &out, &errs); code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if strings.Contains(out.String(), "Upload these saved batches again") {
+		t.Fatalf("asked for consent after token input failed: %s", out.String())
+	}
+}
+
 func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
 	claude, codex := fixtureHomes(t)
 	home := filepath.Dir(claude)
