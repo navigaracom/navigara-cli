@@ -4,6 +4,21 @@ Backfill local Claude Code and Codex sessions into Navigara. The CLI rebuilds th
 OpenTelemetry the tools would have sent live, so a backfilled session looks the same in
 Navigara as a live one.
 
+## Install
+
+Download `install.sh` from the [release](https://github.com/navigaracom/navigara-cli/releases/tag/v1.0.0),
+read it, then run it from disk:
+
+```sh
+bash install.sh                 # current user, ~/.local/bin
+sudo bash install.sh --system   # machine-wide, /opt/navigara/bin (MDM)
+```
+
+The script downloads one pinned release and installs it only when the SHA-256 digest
+matches the value embedded in the script. It refuses to run from a pipe. Enterprises
+can host the reviewed copy themselves; only the release block at the top changes
+between releases.
+
 ## Set up this computer
 
 ```sh
