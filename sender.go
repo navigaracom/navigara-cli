@@ -21,6 +21,8 @@ type sender struct {
 	sent        int
 }
 
+var errIngestionAuthRejected = errors.New("the API key needs the analytics ingestor role")
+
 func newSender(base, token string) *sender {
 	return &sender{client: &http.Client{Timeout: 60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
@@ -101,7 +103,7 @@ func (s *sender) send(b telemetry.Body, probe bool) error {
 			}
 			return nil
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return fmt.Errorf("%s: HTTP %d; the API key needs the analytics ingestor role", b.Path, resp.StatusCode)
+			return fmt.Errorf("%s: HTTP %d; %w", b.Path, resp.StatusCode, errIngestionAuthRejected)
 		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 			lastErr = fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
 		default:
