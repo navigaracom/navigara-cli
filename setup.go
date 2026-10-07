@@ -82,23 +82,17 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		}
 		available = append(available, tool.name)
 	}
-	selected, err := wizardTools(available, p)
+	preferences, err := wizardPreferences(available, c.Email, p)
 	if err != nil {
 		return err
 	}
-	opts.source = setupSource(selected)
+	opts.source, opts.email = preferences.source, preferences.email
+	selected := available
+	if opts.source != "all" {
+		selected = []string{opts.source}
+	}
 	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
-	opts.email, err = p.ask("Attribute this activity to email", c.Email)
-	if err != nil {
-		return err
-	}
-	if err = validEmail(opts.email); err != nil {
-		return err
-	}
-	window, err := wizardHistory(p)
-	if err != nil {
-		return err
-	}
+	window := preferences.history
 	var last time.Duration
 	if window != "all" && window != "skip" {
 		last, err = parseLast(window)
@@ -115,7 +109,7 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		return nil
 	}
 	opts.source = setupSource(selected)
-	yes, err := p.yes("Finish and close your running sessions so we can import complete history. Continue")
+	yes, err := p.wizardContinue("Finish and close your running sessions so we can import complete history. Continue", "Continue")
 	if err != nil {
 		return err
 	}
@@ -174,7 +168,11 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	fmt.Fprintf(p.out, "Keep new activity in sync: %s\n", strings.Join(names, ", "))
 	fmt.Fprintln(p.out, "Sync usage and activity; prompt text and tool contents stay disabled. History already received live will be skipped, including partially synced sessions.")
 	fmt.Fprintln(p.out, "Navigara will update your tool settings, save private backups, and store a credential for future syncing.")
-	yes, err = p.yes("Connect these tools and import this history")
+	action := "Connect and import"
+	if window == "skip" {
+		action = "Connect"
+	}
+	yes, err = p.wizardContinue("Connect this computer to Navigara", action)
 	if err != nil {
 		return err
 	}

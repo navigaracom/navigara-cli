@@ -8,7 +8,37 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
+
+func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
+	for _, available := range [][]string{{"claude", "codex"}, {"claude"}, {"codex"}} {
+		settings := wizardSettings{source: setupSource(available), email: "dev@example.com", history: "all"}
+		form := newWizardForm(available, &settings).WithWidth(72)
+		form.Init()
+		form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+		view := ansi.Strip(form.View())
+		for _, source := range available {
+			if !strings.Contains(view, setupToolName(source)) {
+				t.Fatalf("detected tool is invisible: %s", view)
+			}
+		}
+		if !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "All available history") {
+			t.Fatalf("default account or history is invisible: %s", view)
+		}
+	}
+}
+
+func TestWizardEnterKeepsAccountToolsAndAllHistory(t *testing.T) {
+	var out bytes.Buffer
+	p := newSetupInput(strings.NewReader("\n\n\n\n"), &out)
+	settings, err := wizardPreferences([]string{"claude", "codex"}, "dev@example.com", p)
+	if err != nil || settings.source != "all" || settings.email != "dev@example.com" || settings.history != "all" {
+		t.Fatalf("default preferences = %#v, %v", settings, err)
+	}
+}
 
 func TestOrganizationNamesCannotAlterTerminalChoices(t *testing.T) {
 	var out bytes.Buffer
