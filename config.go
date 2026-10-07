@@ -171,7 +171,7 @@ func writeAccount(c accountConfig, expected *accountConfig) error {
 			current.Host != expected.Host || current.UserID != expected.UserID ||
 			current.SessionToken != expected.SessionToken || current.OrganizationID != expected.OrganizationID ||
 			current.IngestToken != expected.IngestToken {
-			return errors.New("account changed while requesting an ingestion key; retry with the current login")
+			return errors.New("account changed during the request; retry with the current login")
 		}
 	}
 	data, err := json.MarshalIndent(c, "", "  ")

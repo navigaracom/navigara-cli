@@ -40,6 +40,9 @@ The selected host and organization are saved privately. To sign in or select a
 different organization without running the wizard, use `navigara login [--host ORIGIN]`.
 Sign-in uses OAuth 2.0 authorization code flow with PKCE and opens a browser. The CLI
 does not use refresh tokens; when its access token expires, it opens the browser again.
+To sign out of the saved account, use `navigara logout [--host ORIGIN]`. It clears the
+saved account, organization, and local ingestion credential without changing Claude or
+Codex settings. When a saved session is available, it also asks Navigara to revoke it.
 An organization administrator must authorize creation of an analytics ingestor key.
 For on-premises installations, the server’s `FRONTEND_URL` must match `--host`.
 For local development, use `http://127.0.0.1:3000` for both; HTTP requires a loopback IP.
