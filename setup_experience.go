@@ -86,11 +86,11 @@ func wizardPreferences(available []string, email string, p *setupInput) (wizardS
 	return settings, nil
 }
 
-func (p *setupInput) wizardContinue(label, action string) (bool, error) {
+func (p *setupInput) wizardConfirm(label, action string, defaultYes bool) (bool, error) {
 	if !p.interactive() {
 		return p.yes(label)
 	}
-	accepted := true
+	accepted := defaultYes
 	err := p.form(huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().Title(label).Affirmative(action).Negative("Cancel").Value(&accepted),
 	)))

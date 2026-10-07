@@ -109,7 +109,7 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		return nil
 	}
 	opts.source = setupSource(selected)
-	yes, err := p.wizardContinue("Finish and close your running sessions so we can import complete history. Continue", "Continue")
+	yes, err := p.wizardConfirm("Finish and close your running sessions so we can import complete history. Continue", "Continue", true)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	if window == "skip" {
 		action = "Connect"
 	}
-	yes, err = p.wizardContinue("Connect this computer to Navigara", action)
+	yes, err = p.wizardConfirm("Connect this computer to Navigara", action, false)
 	if err != nil {
 		return err
 	}
