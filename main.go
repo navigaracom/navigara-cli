@@ -31,13 +31,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "Usage: navigara setup [options]\n       navigara login [--host ORIGIN]\n       navigara sessions upload [options]\n       navigara --version")
+		fmt.Fprintln(stdout, "Usage: navigara wizard [options]\n       navigara login [--host ORIGIN]\n       navigara sessions upload [options]\n       navigara --version")
 		return 0
 	}
 	switch args[0] {
 	case "login":
 		return runLogin(args[1:], os.Stdin, stdout, stderr)
-	case "setup":
+	case "wizard", "setup":
 		return runSetup(args[1:], os.Stdin, stdout, stderr)
 	case "--help", "-h", "--version":
 		if len(args) != 1 {

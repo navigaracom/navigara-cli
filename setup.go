@@ -24,7 +24,7 @@ func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, st
 	fs.SetOutput(stderr)
 	host := fs.String("host", "", "Navigara origin (default saved host or https://app.navigara.com)")
 	resume := fs.String("resume", "", "retry the exact saved setup batches in DIR")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: navigara setup [--host ORIGIN] [--resume DIR]") }
+	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: navigara wizard [--host ORIGIN] [--resume DIR]") }
 	for _, arg := range args {
 		if arg == "--help" || arg == "-h" {
 			fs.SetOutput(stdout)
@@ -37,11 +37,11 @@ func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, st
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "navigara: unexpected setup argument")
+		fmt.Fprintln(stderr, "navigara: unexpected wizard argument")
 		return 2
 	}
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		fmt.Fprintln(stderr, "navigara: setup supports macOS and Linux")
+		fmt.Fprintln(stderr, "navigara: wizard supports macOS and Linux")
 		return 2
 	}
 	p := &setupInput{r: bufio.NewReader(input), out: stdout}
@@ -95,7 +95,7 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		}
 	}
 	if len(selected) == 0 {
-		return errors.New("no tools selected; run Claude Code or Codex once, then rerun setup")
+		return errors.New("no tools selected; run Claude Code or Codex once, then rerun wizard")
 	}
 	opts.source = selected[0]
 	if len(selected) == 2 {
@@ -212,7 +212,7 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		}
 	}
 	if err = sendSetupBatches(opts.output, s); err != nil {
-		return fmt.Errorf("%w; settings are configured; retry with navigara setup --resume %q", err, opts.output)
+		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
 	fmt.Fprintf(p.out, "Receiver accepted %d batches. Streaming configured, not yet verified.\n", s.sent)
 	fmt.Fprintln(p.out, "Open a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.")

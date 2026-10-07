@@ -65,6 +65,22 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestWizardAndSetupHelpUseSameFlow(t *testing.T) {
+	var wizardOut, wizardErr, setupOut, setupErr bytes.Buffer
+	if code := run([]string{"wizard", "--help"}, &wizardOut, &wizardErr); code != 0 {
+		t.Fatalf("wizard help exit = %d; stderr=%q", code, wizardErr.String())
+	}
+	if code := run([]string{"setup", "--help"}, &setupOut, &setupErr); code != 0 {
+		t.Fatalf("setup help exit = %d; stderr=%q", code, setupErr.String())
+	}
+	if wizardOut.String() != setupOut.String() || wizardErr.String() != setupErr.String() {
+		t.Fatalf("wizard and setup help differ: wizard stdout=%q stderr=%q; setup stdout=%q stderr=%q", wizardOut.String(), wizardErr.String(), setupOut.String(), setupErr.String())
+	}
+	if !strings.Contains(wizardOut.String(), "Usage: navigara wizard") {
+		t.Errorf("wizard help = %q", wizardOut.String())
+	}
+}
+
 func TestInvalidUploadDoesNotCreateOutput(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "sessions.json")
 	var stdout, stderr bytes.Buffer
