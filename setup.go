@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -44,12 +43,7 @@ func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, st
 		fmt.Fprintln(stderr, "navigara: wizard supports macOS and Linux")
 		return 2
 	}
-	p := &setupInput{r: bufio.NewReader(input), out: stdout}
-	if f, ok := input.(*os.File); ok {
-		if info, err := f.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
-			p.terminal = f
-		}
-	}
+	p := newSetupInput(input, stdout)
 	var err error
 	if *resume != "" {
 		err = resumeSetup(ctx, *resume, *host, p, open)

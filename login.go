@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -152,7 +151,7 @@ func runLogin(args []string, input io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara: unexpected login argument")
 		return 2
 	}
-	p := &setupInput{r: bufio.NewReader(input), out: stdout}
+	p := newSetupInput(input, stdout)
 	if _, err := ensureAccount(context.Background(), *host, p, true, openBrowser); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
