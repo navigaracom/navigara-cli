@@ -30,6 +30,9 @@ sign-in is needed. Choose your organization, then select Claude Code/Codex,
 contributor email, and history window. Review the preview before applying changes.
 Close running tool sessions before taking the preview.
 
+Interactive terminals show keyboard-driven forms. Redirected input/output,
+`TERM=dumb`, or `NO_COLOR` use plain prompts instead.
+
 The default host is `https://app.navigara.com`. For an on-prem instance:
 
 ```sh
@@ -49,7 +52,8 @@ For local development, use `http://127.0.0.1:3000` for both; HTTP requires a loo
 
 Setup preserves unrelated settings and saves private backups beside changed files.
 Claude uses user settings; Codex uses its configuration plus a bash/zsh identity
-block. Existing conflicting or managed telemetry settings require manual resolution.
+block. If a tool cannot be updated safely, the wizard offers to skip its history
+and streaming for this run. You can resolve its settings and reconnect it later.
 Restart your tools in a new terminal afterward; launch desktop/IDE tools from that
 terminal to inherit identity. Setup reports configuration, not observed live traffic.
 

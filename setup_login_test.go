@@ -330,7 +330,7 @@ func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	concurrent := []byte("{\"concurrent\":true}\n")
-	out := &mutateSetupWriter{match: "Apply these settings and upload the preview", mutate: func() {
+	out := &mutateSetupWriter{match: "Connect these tools and import this history", mutate: func() {
 		if err := os.WriteFile(settings, concurrent, 0600); err != nil {
 			t.Fatal(err)
 		}

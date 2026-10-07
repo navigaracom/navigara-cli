@@ -152,6 +152,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	// One session at a time: build, write and send it before the next, so memory stays flat.
 	counts := map[string]int{}
 	exported, failed, events, points, bodies := 0, 0, 0, 0, 0
+	estimated, partial := 0, 0
 	var lines []string
 	for _, j := range jobs {
 		s, err := j.build()
@@ -188,6 +189,15 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		events += len(s.Events)
 		points += len(s.Points)
 		bodies += len(encoded)
+		if s.Estimated {
+			estimated++
+		}
+		if len(s.Missing) > 0 {
+			partial++
+		}
+		if opts.humanSummary {
+			continue
+		}
 		note := ""
 		if s.Estimated {
 			note = " cost=estimated"
@@ -202,10 +212,17 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		}
 		lines = append(lines, fmt.Sprintf("%s %s events=%d points=%d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
 	}
-	fmt.Fprintf(stdout, "sessions=%d failed=%d events=%d points=%d bodies=%d identity=%s\n",
-		exported, failed, events, points, bodies, firstNonEmpty(ident.Email, ident.CodexEmail, "anonymous"))
-	for _, line := range lines {
-		fmt.Fprintln(stdout, line)
+	if opts.humanSummary {
+		fmt.Fprintf(stdout, "%d sessions ready to import (%d activity events, %d usage measurements).\n", exported, events, points)
+		if estimated > 0 || partial > 0 {
+			fmt.Fprintf(stdout, "%d sessions have estimated costs; %d have fields unavailable in local history.\n", estimated, partial)
+		}
+	} else {
+		fmt.Fprintf(stdout, "sessions=%d failed=%d events=%d points=%d bodies=%d identity=%s\n",
+			exported, failed, events, points, bodies, firstNonEmpty(ident.Email, ident.CodexEmail, "anonymous"))
+		for _, line := range lines {
+			fmt.Fprintln(stdout, line)
+		}
 	}
 	if sender != nil {
 		fmt.Fprintf(stdout, "sent=%d\n", sender.sent)

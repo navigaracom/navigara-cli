@@ -19,6 +19,7 @@ type options struct {
 	sessions              []string
 	email                 string
 	allowAnonymous        bool
+	humanSummary          bool
 	send                  bool
 	host, url, token      string
 }
