@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,6 +102,38 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(output, "*.json"))
 	if len(files) != 2 {
 		t.Errorf("wrote %d files, want 2", len(files))
+	}
+}
+
+func TestExportProgressCountsFilteredSessions(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	opts := options{
+		source:     "claude",
+		claudeHome: claudeHome,
+		codexHome:  codexHome,
+		output:     filepath.Join(t.TempDir(), "out"),
+		since:      time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	var discovered []int
+	var processed [][2]int
+	var stdout, stderr bytes.Buffer
+	code := exportSessionsWithProgress(opts, &stdout, &stderr, func(done, total int) {
+		if done == 0 {
+			discovered = append(discovered, total)
+		}
+		processed = append(processed, [2]int{done, total})
+	})
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if !reflect.DeepEqual(discovered, []int{2}) {
+		t.Fatalf("discovered = %#v", discovered)
+	}
+	if !reflect.DeepEqual(processed, [][2]int{{0, 2}, {1, 2}, {2, 2}}) {
+		t.Fatalf("processed = %#v", processed)
+	}
+	if got := stdout.String(); !strings.HasPrefix(got, "sessions=0 failed=0") {
+		t.Fatalf("filtered history changed command output: %q", got)
 	}
 }
 
