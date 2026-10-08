@@ -1,0 +1,9 @@
+[otel.metrics_exporter.otlp-http]
+endpoint = "https://old.example/v1/metrics"
+protocol = "binary"
+headers = { Authorization = "tokenfixture-old" }
+
+[otel.exporter.otlp-http]
+endpoint = "https://old.example/v1/logs"
+protocol = "binary"
+headers = { Authorization = "tokenfixture-old" }

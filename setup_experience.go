@@ -165,12 +165,23 @@ func setupSource(selected []string) string {
 
 // A tool that cannot be updated safely must not prevent connecting another tool.
 // Skipping excludes both its history and its streaming settings from this run.
-func wizardPlans(opts options, home string, selected []string, p *setupInput) ([]*setupFile, []string, error) {
+func wizardPlans(opts *options, home string, selected []string, p *setupInput) ([]*setupFile, []string, error) {
 	var files []*setupFile
 	var connected []string
 	for _, tool := range selected {
-		opts.source = tool
-		planned, err := setupPlans(opts, home)
+		toolOpts := *opts
+		toolOpts.source = tool
+		planned, err := setupPlans(toolOpts, home)
+		if tool == "codex" && errors.Is(err, errCodexTelemetry) {
+			replace, inputErr := p.yes("Replace Codex's existing telemetry with Navigara and save a private backup")
+			if inputErr != nil {
+				return nil, nil, inputErr
+			}
+			if replace {
+				toolOpts.replaceCodexTelemetry = true
+				planned, err = setupPlans(toolOpts, home)
+			}
+		}
 		if err != nil {
 			fmt.Fprintf(p.out, "\n%s couldn't be connected safely. Its settings have not changed.\nDetails: %v\n", setupToolName(tool), err)
 			skip, inputErr := p.yes("Skip " + setupToolName(tool) + " for this setup (history and new activity)")
@@ -184,6 +195,9 @@ func wizardPlans(opts options, home string, selected []string, p *setupInput) ([
 		}
 		files = append(files, planned...)
 		connected = append(connected, tool)
+		if tool == "codex" {
+			opts.replaceCodexTelemetry = toolOpts.replaceCodexTelemetry
+		}
 	}
 	return files, connected, nil
 }

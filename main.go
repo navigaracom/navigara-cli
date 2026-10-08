@@ -20,6 +20,7 @@ type options struct {
 	email                 string
 	allowAnonymous        bool
 	humanSummary          bool
+	replaceCodexTelemetry bool
 	send                  bool
 	host, url, token      string
 }

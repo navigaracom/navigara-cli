@@ -5,6 +5,89 @@ import (
 	"strings"
 )
 
+const (
+	codexMetricsTable = "[otel.metrics_exporter.otlp-http]"
+	codexLogsTable    = "[otel.exporter.otlp-http]"
+)
+
+// codexTelemetryRange returns the byte range occupied by Codex's two legacy
+// OpenTelemetry tables. It deliberately recognizes only the small, safe shape
+// that setup can replace without reformatting unrelated user configuration.
+func codexTelemetryRange(data []byte) (start, end int, ok bool) {
+	state := ""
+	depth := 0
+	beforeTable := true
+	seen := make(map[string]bool, 2)
+	inTelemetry := false
+	finished := false
+
+	for lineStart := 0; lineStart <= len(data); {
+		lineEnd := lineStart
+		for lineEnd < len(data) && data[lineEnd] != '\n' {
+			lineEnd++
+		}
+		line := string(data[lineStart:lineEnd])
+
+		if state == "" && depth == 0 {
+			trimmed := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+			if strings.HasPrefix(trimmed, "[") {
+				if trimmed == codexMetricsTable || trimmed == codexLogsTable {
+					if finished || seen[trimmed] {
+						return 0, 0, false
+					}
+					if !inTelemetry {
+						start = lineStart
+						inTelemetry = true
+					}
+					seen[trimmed] = true
+				} else {
+					if tomlRootKey(trimmed) == "otel" || inTelemetry && len(seen) < 2 {
+						return 0, 0, false
+					}
+					if inTelemetry && len(seen) == 2 && !finished {
+						end = lineStart
+						finished = true
+						inTelemetry = false
+					}
+				}
+				beforeTable = false
+			} else if inTelemetry && trimmed != "" {
+				key, assignment := tomlAssignmentKey(trimmed)
+				if !assignment || (key != "endpoint" && key != "protocol" && key != "headers") {
+					return 0, 0, false
+				}
+			} else if beforeTable && strings.Contains(trimmed, "=") && tomlRootKey(trimmed) == "otel" {
+				return 0, 0, false
+			}
+		}
+
+		state, depth = scanTOML(line, state, depth)
+		if depth < 0 {
+			return 0, 0, false
+		}
+		if lineEnd == len(data) {
+			break
+		}
+		lineStart = lineEnd + 1
+	}
+	if state != "" || depth != 0 || len(seen) != 2 {
+		return 0, 0, false
+	}
+	if !finished {
+		end = len(data)
+	}
+	return start, end, true
+}
+
+func tomlAssignmentKey(line string) (string, bool) {
+	i := strings.IndexByte(line, '=')
+	if i < 1 {
+		return "", false
+	}
+	key := strings.TrimSpace(line[:i])
+	return key, key != "" && !strings.ContainsAny(key, ".[]{}\"'")
+}
+
 // hasOTELTOML recognizes only competing root OTEL keys/tables. It is a narrow lexer,
 // not a TOML parser: strings, comments, arrays, and inline tables are skipped safely.
 func hasOTELTOML(data []byte) bool {

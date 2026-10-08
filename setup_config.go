@@ -14,6 +14,8 @@ const (
 	telemetryEnd   = "# <<< navigara telemetry <<<"
 )
 
+var errCodexTelemetry = errors.New("Codex already has telemetry configured")
+
 func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) {
 	if err := validValue("endpoint", endpoint); err != nil {
 		return nil, err
@@ -68,7 +70,7 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	return json.MarshalIndent(settings, "", "  ")
 }
 
-func codexSettings(data []byte, endpoint, token string) ([]byte, error) {
+func codexSettings(data []byte, endpoint, token string, replace bool) ([]byte, error) {
 	if err := validValue("endpoint", endpoint); err != nil {
 		return nil, err
 	}
@@ -81,7 +83,17 @@ func codexSettings(data []byte, endpoint, token string) ([]byte, error) {
 	}
 	outside := append(append([]byte(nil), data[:start]...), data[end:]...)
 	if hasOTELTOML(outside) {
-		return nil, errors.New("existing OpenTelemetry configuration or unsupported TOML syntax found; remove it or put it in the Navigara managed block")
+		if start != end {
+			return nil, errors.New("Codex has telemetry outside its Navigara block; this layout cannot be replaced automatically")
+		}
+		var supported bool
+		start, end, supported = codexTelemetryRange(data)
+		if !supported {
+			return nil, errors.New("Codex settings use an unsupported or conflicting TOML layout; skip Codex or update its telemetry settings manually")
+		}
+		if !replace {
+			return nil, errCodexTelemetry
+		}
 	}
 	block := []byte(codexBlock(endpoint, token))
 	if start != end {
