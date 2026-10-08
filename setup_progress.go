@@ -37,7 +37,7 @@ func (u *setupProgress) upload(done, total int) {
 	const label = "Uploading history "
 	width := 32
 	if columns, _, err := term.GetSize(u.p.terminal.Fd()); err == nil && columns > 0 {
-		width = max(1, columns-len(label)-len(fmt.Sprintf("[] %d/%d", done, total)))
+		width = min(width, max(1, columns-len(label)-len(fmt.Sprintf("[] %d/%d", done, total))-1))
 	}
 	fmt.Fprintf(u.p.out, "%s%s", label, setupProgressBar(done, total, width))
 	u.started = true
