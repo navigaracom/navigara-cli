@@ -91,6 +91,12 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	if bytes.Count(second, []byte("# >>> navigara telemetry >>>")) != 1 || bytes.Contains(second, []byte(`Bearer a\"b`)) || !bytes.Contains(second, []byte(`Bearer new`)) {
 		t.Fatalf("managed block was not replaced:\n%s", second)
 	}
+	suffix := []byte("\n# keep this separation\n[projects.keep]\ntrust_level = \"trusted\"\n")
+	withSuffix := append(append([]byte(nil), second...), suffix...)
+	updated, err := codexSettings(withSuffix, testEndpoint, "next", false)
+	if err != nil || !bytes.HasSuffix(updated, suffix) {
+		t.Fatalf("managed update changed its suffix: %q, %v", updated, err)
+	}
 	withRootSuffix := append(append([]byte(nil), first...), []byte("model = \"other\"\n")...)
 	if _, err := codexSettings(withRootSuffix, testEndpoint, "new", false); err == nil {
 		t.Fatal("managed block followed by root keys succeeded")

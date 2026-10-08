@@ -186,18 +186,12 @@ func tomlManagedRange(data []byte) (int, int, error) {
 			if begin >= 0 || finish >= 0 {
 				return 0, 0, errors.New("multiple or nested Navigara telemetry markers")
 			}
-			begin = bytes.LastIndexByte(data[:expression.start], '\n') + 1
+			begin = expression.start
 		case telemetryEnd:
 			if begin < 0 || finish >= 0 {
 				return 0, 0, errors.New("unmatched Navigara telemetry end marker")
 			}
 			finish = expression.end
-			if finish < len(data) && data[finish] == '\r' {
-				finish++
-			}
-			if finish < len(data) && data[finish] == '\n' {
-				finish++
-			}
 		default:
 			if bytes.Contains([]byte(expression.comment), []byte("navigara telemetry")) {
 				return 0, 0, errors.New("malformed Navigara telemetry marker")
