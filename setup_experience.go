@@ -13,6 +13,7 @@ type wizardSettings struct {
 }
 
 func newWizardForm(available []string, settings *wizardSettings, selected *[]string, history *string) *huh.Form {
+	continueSetup := true
 	tools := make([]huh.Option[string], 0, len(available))
 	for _, source := range available {
 		tools = append(tools, huh.NewOption(setupToolName(source), source))
@@ -36,9 +37,9 @@ func newWizardForm(available []string, settings *wizardSettings, selected *[]str
 			huh.NewOption("Only sync new activity", "skip"),
 			huh.NewOption("Custom duration", "custom"),
 		).Value(history).Height(4),
-		huh.NewNote().Title("Ready to preview your connection").
+		huh.NewConfirm().Key("continue").Title("Ready to preview your connection").
 			Description("Close running sessions first.\nEnter to continue; Shift+Tab to edit.").
-			Next(true).NextLabel("Continue"),
+			Affirmative("Continue").Negative("Cancel").Value(&continueSetup),
 	).Description("Defaults are ready."))
 	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeCharm(isDark)
@@ -72,6 +73,9 @@ func editWizardPreferences(available []string, settings wizardSettings, p *setup
 		form := newWizardForm(available, &settings, &selected, &history)
 		if err := p.form(form); err != nil {
 			return settings, err
+		}
+		if !form.GetBool("continue") {
+			return settings, errors.New("input cancelled; no further changes applied")
 		}
 		settings.history = history
 	} else {

@@ -30,6 +30,23 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 		if !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
 			t.Fatalf("default account or history is invisible: %s", view)
 		}
+		for name, key := range map[string]tea.Key{
+			"q":      {Code: 'q', Text: "q"},
+			"up":     {Code: tea.KeyUp},
+			"space":  {Code: tea.KeySpace},
+			"escape": {Code: tea.KeyEscape},
+		} {
+			t.Run(name, func(t *testing.T) {
+				settings := wizardSettings{source: setupSource(available), email: "dev@example.com", history: "all"}
+				selected, history := selectedTools(available, settings.source), settings.history
+				form := newWizardForm(available, &settings, &selected, &history)
+				dispatchWizardCommand(form, form.Init())
+				dispatchWizardMessage(form, tea.KeyPressMsg(key))
+				if form.State != huh.StateNormal {
+					t.Fatalf("%s submitted the form: %v", name, form.State)
+				}
+			})
+		}
 		if _, cmd := form.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd == nil {
 			t.Fatal("focused Continue did not handle Enter")
 		} else if _, cmd = form.Update(cmd()); cmd != nil {
@@ -40,6 +57,28 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 		if form.State != huh.StateCompleted {
 			t.Fatalf("Enter did not complete defaults form: %v", form.State)
 		}
+		if !form.GetBool("continue") {
+			t.Fatal("Enter did not retain the default Continue action")
+		}
+	}
+}
+
+func dispatchWizardMessage(form *huh.Form, message tea.Msg) {
+	_, command := form.Update(message)
+	dispatchWizardCommand(form, command)
+}
+
+func dispatchWizardCommand(form *huh.Form, command tea.Cmd) {
+	if command == nil {
+		return
+	}
+	switch message := command().(type) {
+	case tea.BatchMsg:
+		for _, command := range message {
+			dispatchWizardCommand(form, command)
+		}
+	default:
+		dispatchWizardMessage(form, message)
 	}
 }
 
