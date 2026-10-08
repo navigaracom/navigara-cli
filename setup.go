@@ -122,7 +122,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	preferences.source = opts.source
 	yes := true
 	if !p.interactive() {
-		yes, err = p.wizardConfirm("Finish and close your running sessions so we can import complete history. Continue", "Continue", true)
+		yes, err = p.yes("Finish and close your running sessions so we can import complete history. Continue")
 	}
 	if err != nil {
 		return false, err
