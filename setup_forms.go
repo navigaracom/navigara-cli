@@ -31,7 +31,11 @@ func (p *setupInput) interactive() bool {
 
 func (p *setupInput) form(form *huh.Form) error {
 	// Pass the file itself so Bubble Tea can enter and restore terminal raw mode.
-	form.WithInput(p.terminal).WithOutput(p.out).WithWidth(72)
+	width := 72
+	if columns, _, err := term.GetSize(p.terminal.Fd()); err == nil && columns > 0 {
+		width = min(width, columns)
+	}
+	form.WithInput(p.terminal).WithOutput(p.out).WithWidth(width)
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
 			return errors.New("input cancelled; no further changes applied")

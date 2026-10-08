@@ -10,23 +10,35 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
 func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 	for _, available := range [][]string{{"claude", "codex"}, {"claude"}, {"codex"}} {
 		settings := wizardSettings{source: setupSource(available), email: "dev@example.com", history: "all"}
-		form := newWizardForm(available, &settings).WithWidth(72)
+		selected, history := selectedTools(available, settings.source), settings.history
+		form := newWizardForm(available, &settings, &selected, &history).WithWidth(72)
 		form.Init()
 		form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
 		view := ansi.Strip(form.View())
 		for _, source := range available {
-			if !strings.Contains(view, setupToolName(source)) {
+			if !strings.Contains(view, "[x] "+setupToolName(source)) {
 				t.Fatalf("detected tool is invisible: %s", view)
 			}
 		}
-		if !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "All available history") {
+		if !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
 			t.Fatalf("default account or history is invisible: %s", view)
+		}
+		if _, cmd := form.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd == nil {
+			t.Fatal("focused Continue did not handle Enter")
+		} else if _, cmd = form.Update(cmd()); cmd != nil {
+			if _, next := form.Update(cmd()); next != nil {
+				t.Fatal("Continue did not complete the form")
+			}
+		}
+		if form.State != huh.StateCompleted {
+			t.Fatalf("Enter did not complete defaults form: %v", form.State)
 		}
 	}
 }
@@ -37,6 +49,20 @@ func TestWizardEnterKeepsAccountToolsAndAllHistory(t *testing.T) {
 	settings, err := wizardPreferences([]string{"claude", "codex"}, "dev@example.com", p)
 	if err != nil || settings.source != "all" || settings.email != "dev@example.com" || settings.history != "all" {
 		t.Fatalf("default preferences = %#v, %v", settings, err)
+	}
+}
+
+func TestWizardEditKeepsPreviousAnswersOnBlankPlainInput(t *testing.T) {
+	var out bytes.Buffer
+	p := newSetupInput(strings.NewReader("\n\n\n\n"), &out)
+	settings, err := editWizardPreferences([]string{"claude", "codex"}, wizardSettings{
+		source: "claude", email: "dev@example.com", history: "12h",
+	}, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.source != "claude" || settings.email != "dev@example.com" || settings.history != "12h" {
+		t.Fatalf("blank edit lost saved values: %#v", settings)
 	}
 }
 
