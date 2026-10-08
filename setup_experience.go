@@ -36,11 +36,11 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			huh.NewOption("Last 24 hours", "24h"),
 			huh.NewOption("Only sync new activity", "skip"),
 			huh.NewOption("Custom duration", "custom"),
-		).Value(history).Height(4),
+		).Value(history).Height(2),
 		huh.NewConfirm().Key("continue").Title("Ready to preview your connection").
 			Description("Close running sessions first.\nEnter to continue; Shift+Tab to edit.").
 			Affirmative("Continue").Negative("Cancel").Value(&continueSetup),
-	).Title("Connect this computer to Navigara").Description(fmt.Sprintf("Signed in as %q\nOrganization: %q\nNavigara instance: %q\n\nDefaults are ready.", account.Email, account.OrganizationName, account.Host)))
+	).Title("Connect this computer to Navigara").Description(fmt.Sprintf("Account: %q\nOrg: %q\nInstance: %q", account.Email, account.OrganizationName, account.Host)))
 	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeCharm(isDark)
 		styles.Focused.SelectedPrefix = styles.Focused.SelectedPrefix.SetString("[x] ")

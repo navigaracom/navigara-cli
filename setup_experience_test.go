@@ -34,8 +34,15 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 		narrow := newWizardForm(account, available, &settings, &selected, &history).WithWidth(40)
 		narrow.Init()
 		narrow.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
-		if !strings.Contains(ansi.Strip(narrow.View()), "Continue") {
-			t.Fatal("narrow wizard hides Continue")
+		narrowView := ansi.Strip(narrow.View())
+		expected := []string{"dev@example.com", "All available history", "Continue"}
+		for _, tool := range available {
+			expected = append(expected, "[x] "+setupToolName(tool))
+		}
+		for _, label := range expected {
+			if !strings.Contains(narrowView, label) {
+				t.Fatalf("narrow wizard hides %s: %s", label, narrowView)
+			}
 		}
 		for name, key := range map[string]tea.Key{
 			"q":      {Code: 'q', Text: "q"},
