@@ -31,6 +31,14 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, `"dev@example.com"`) || !strings.Contains(view, `"Acme"`) || !strings.Contains(view, `"https://app.example"`) || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
 			t.Fatalf("default account or history is invisible: %s", view)
 		}
+		if strings.Contains(view, "> ") || !strings.Contains(view, "● All available history") {
+			t.Fatalf("inactive fields look focused or lose their selection: %s", view)
+		}
+		for _, label := range []string{"Last 30 days", "Last 7 days", "Last 24 hours", "Only sync new activity", "Custom duration"} {
+			if !strings.Contains(view, label) {
+				t.Fatalf("history choice is hidden: %s", view)
+			}
+		}
 		narrow := newWizardForm(account, available, &settings, &selected, &history).WithWidth(40)
 		narrow.Init()
 		narrow.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
