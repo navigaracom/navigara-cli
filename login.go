@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"strconv"
 	"time"
 )
 
@@ -60,19 +59,20 @@ func chooseOrganization(orgs []organization, previous string, force bool, p *set
 			}
 		}
 	}
-	fmt.Fprintln(p.out, "Choose an organization:")
+	choices := make([]setupChoice, len(orgs))
 	for i, org := range orgs {
-		fmt.Fprintf(p.out, "  %d. %q\n", i+1, org.Name)
+		choices[i] = setupChoice{fmt.Sprintf("%q", org.Name), org.ID}
 	}
-	answer, err := p.ask("Organization number", "")
+	answer, err := p.selectOption("Where should this activity appear?", choices, "")
 	if err != nil {
 		return organization{}, err
 	}
-	n, err := strconv.Atoi(answer)
-	if err != nil || n < 1 || n > len(orgs) {
-		return organization{}, errors.New("enter one of the listed organization numbers")
+	for _, org := range orgs {
+		if org.ID == answer {
+			return org, nil
+		}
 	}
-	return orgs[n-1], nil
+	return organization{}, errors.New("choose one of the available organizations")
 }
 
 func ensureAccount(ctx context.Context, host string, p *setupInput, forceSelection bool, open func(string) error) (accountConfig, error) {
@@ -128,7 +128,7 @@ func ensureAccount(ctx context.Context, host string, p *setupInput, forceSelecti
 	if err = saveAccount(c); err != nil {
 		return c, err
 	}
-	fmt.Fprintf(p.out, "Account: %s\nHost: %s\nOrganization: %q (%s)\n", c.Email, c.Host, c.OrganizationName, c.OrganizationID)
+	fmt.Fprintf(p.out, "\nSigned in as %s\nOrganization: %q\nNavigara instance: %s\n", c.Email, c.OrganizationName, c.Host)
 	return c, nil
 }
 

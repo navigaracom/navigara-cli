@@ -67,8 +67,8 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		return err
 	}
 	opts := options{claudeHome: firstNonEmpty(os.Getenv("CLAUDE_CONFIG_DIR"), filepath.Join(home, ".claude")), codexHome: firstNonEmpty(os.Getenv("CODEX_HOME"), filepath.Join(home, ".codex"))}
-	fmt.Fprintln(p.out, "Set up this computer for Navigara backfill and native telemetry.")
-	var selected []string
+	fmt.Fprintln(p.out, "\nConnect this computer to Navigara\nImport past sessions and keep new activity in sync.")
+	var available []string
 	for _, tool := range []struct{ name, path string }{{"claude", opts.claudeHome}, {"codex", opts.codexHome}} {
 		info, err := os.Stat(tool.path)
 		if os.IsNotExist(err) {
@@ -80,33 +80,19 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		if !info.IsDir() {
 			return fmt.Errorf("%s home is not a directory", tool.name)
 		}
-		yes, err := p.yes("Configure " + tool.name + " at " + tool.path)
-		if err != nil {
-			return err
-		}
-		if yes {
-			selected = append(selected, tool.name)
-		}
+		available = append(available, tool.name)
 	}
-	if len(selected) == 0 {
-		return errors.New("no tools selected; run Claude Code or Codex once, then rerun wizard")
+	preferences, err := wizardPreferences(available, c.Email, p)
+	if err != nil {
+		return err
 	}
-	opts.source = selected[0]
-	if len(selected) == 2 {
-		opts.source = "all"
+	opts.source, opts.email = preferences.source, preferences.email
+	selected := available
+	if opts.source != "all" {
+		selected = []string{opts.source}
 	}
 	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
-	opts.email, err = p.ask("Contributor email for both backfill and streaming", c.Email)
-	if err != nil {
-		return err
-	}
-	if err = validEmail(opts.email); err != nil {
-		return err
-	}
-	window, err := p.ask("Import history: duration (7d, 24h), all, or skip", "30d")
-	if err != nil {
-		return err
-	}
+	window := preferences.history
 	var last time.Duration
 	if window != "all" && window != "skip" {
 		last, err = parseLast(window)
@@ -114,16 +100,21 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 			return err
 		}
 	}
-	files, err := setupPlans(opts, home)
+	files, selected, err := wizardPlans(opts, home, selected, p)
 	if err != nil {
 		return err
 	}
-	yes, err := p.yes("Finish and close running Claude Code/Codex sessions before continuing. Ready")
+	if len(selected) == 0 {
+		fmt.Fprintln(p.out, "Cancelled. Your tool settings have not changed.")
+		return nil
+	}
+	opts.source = setupSource(selected)
+	yes, err := p.wizardConfirm("Finish and close your running sessions so we can import complete history. Continue", "Continue", true)
 	if err != nil {
 		return err
 	}
 	if !yes {
-		fmt.Fprintln(p.out, "Setup cancelled.")
+		fmt.Fprintln(p.out, "Cancelled. Your tool settings have not changed.")
 		return nil
 	}
 	opts.until = time.Now().UTC()
@@ -151,6 +142,8 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	opts.output = filepath.Join(dir, "payload")
 	var summary bytes.Buffer
 	if window != "skip" {
+		fmt.Fprintln(p.out, "Preparing your session history...")
+		opts.humanSummary = true
 		if exportSessions(opts, &summary, stderr) != 0 {
 			return errors.New("could not prepare backfill; no configuration changed")
 		}
@@ -160,24 +153,31 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	if err = saveSetupBatches(opts.output, opts.url, c.OrganizationID); err != nil {
 		return err
 	}
-	fmt.Fprintln(p.out, "\nBackfill preview:")
+	fmt.Fprintln(p.out, "\nReview your connection")
+	fmt.Fprintf(p.out, "Organization: %q\nActivity belongs to: %s\n", c.OrganizationName, opts.email)
 	if window == "skip" {
-		fmt.Fprintln(p.out, "Historical import skipped.")
+		fmt.Fprintln(p.out, "History: none; only new activity will be synced.")
 	} else {
+		fmt.Fprintf(p.out, "History: %s\n", window)
 		fmt.Fprint(p.out, summary.String())
 	}
-	fmt.Fprintf(p.out, "\nNative telemetry: %s\nEndpoint: %s\nContributor: %s\nAuthorization: Bearer <hidden>\n", strings.Join(selected, ", "), otlpBase(opts.url), opts.email)
-	fmt.Fprintln(p.out, "Enable metrics and logs; prompts and tool contents stay disabled. Existing live session data takes precedence over backfill, including partially live sessions.")
-	for _, f := range files {
-		fmt.Fprintln(p.out, "Update:", f.path)
+	names := make([]string, len(selected))
+	for i, tool := range selected {
+		names[i] = setupToolName(tool)
 	}
-	fmt.Fprintln(p.out, "Private backups will be saved beside changed files. The token is stored in tool settings for future exports.")
-	yes, err = p.yes("Apply these settings and upload the preview")
+	fmt.Fprintf(p.out, "Keep new activity in sync: %s\n", strings.Join(names, ", "))
+	fmt.Fprintln(p.out, "Sync usage and activity; prompt text and tool contents stay disabled. History already received live will be skipped, including partially synced sessions.")
+	fmt.Fprintln(p.out, "Navigara will update your tool settings, save private backups, and store a credential for future syncing.")
+	action := "Connect and import"
+	if window == "skip" {
+		action = "Connect"
+	}
+	yes, err = p.wizardConfirm("Connect this computer to Navigara", action, false)
 	if err != nil {
 		return err
 	}
 	if !yes {
-		fmt.Fprintln(p.out, "Setup cancelled; no tool settings changed or telemetry sent.")
+		fmt.Fprintln(p.out, "Cancelled. No tool settings changed or session data sent.")
 		return nil
 	}
 	// Keep the preview's snapshots as the concurrency boundary while replacing
@@ -199,16 +199,15 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		return fmt.Errorf("settings update failed: %w", err)
 	}
 	keep = true
-	fmt.Fprintf(p.out, "Frozen backfill: %s\n", opts.output)
 	for _, f := range files {
 		if f.backup != "" {
-			fmt.Fprintln(p.out, "Backup:", f.backup)
+			fmt.Fprintln(p.out, "Previous settings saved at:", f.backup)
 		}
 	}
 	if err = sendSetupBatches(opts.output, s); err != nil {
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
-	fmt.Fprintf(p.out, "Receiver accepted %d batches. Streaming configured, not yet verified.\n", s.sent)
+	fmt.Fprintf(p.out, "\nConnected. Navigara accepted %d upload batches.\nNew activity syncing is configured, not yet verified.\n", s.sent)
 	fmt.Fprintln(p.out, "Open a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.")
 	return nil
 }
