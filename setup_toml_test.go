@@ -85,4 +85,14 @@ func TestCodexTelemetryRange(t *testing.T) {
 	if _, _, ok := codexTelemetryRange(append([]byte("# [otel.exporter.otlp-http]\nnote = \"[otel.metrics_exporter.otlp-http]\"\n"), fixture...)); !ok {
 		t.Fatal("comments or strings were mistaken for telemetry")
 	}
+	for _, suffix := range [][]byte{
+		[]byte("\n# MCP servers used by work\n[mcp_servers.x]\ncommand = \"x\"\n"),
+		[]byte("# trailing comment\n"),
+	} {
+		input := append(append([]byte{}, fixture...), suffix...)
+		start, end, ok := codexTelemetryRange(input)
+		if !ok || !bytes.Equal(input[start:end], fixture) || !bytes.Equal(input[end:], suffix) {
+			t.Fatalf("trailing content was included in range: %q", suffix)
+		}
+	}
 }

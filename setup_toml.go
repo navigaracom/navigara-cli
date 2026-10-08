@@ -27,9 +27,13 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 			lineEnd++
 		}
 		line := string(data[lineStart:lineEnd])
+		ownedContent := inTelemetry && (state != "" || depth != 0)
 
 		if state == "" && depth == 0 {
 			trimmed := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+			if inTelemetry && trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "[") {
+				ownedContent = true
+			}
 			if strings.HasPrefix(trimmed, "[") {
 				if trimmed == codexMetricsTable || trimmed == codexLogsTable {
 					if finished || seen[trimmed] {
@@ -40,19 +44,20 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 						inTelemetry = true
 					}
 					seen[trimmed] = true
+					ownedContent = true
 				} else {
 					if tomlRootKey(trimmed) == "otel" || inTelemetry && len(seen) < 2 {
 						return 0, 0, false
 					}
 					if inTelemetry && len(seen) == 2 && !finished {
-						end = lineStart
 						finished = true
 						inTelemetry = false
 					}
 				}
 				beforeTable = false
 			} else if inTelemetry && trimmed != "" {
-				key, assignment := tomlAssignmentKey(trimmed)
+				key, _, assignment := strings.Cut(trimmed, "=")
+				key = strings.TrimSpace(key)
 				if !assignment || (key != "endpoint" && key != "protocol" && key != "headers") {
 					return 0, 0, false
 				}
@@ -65,6 +70,12 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 		if depth < 0 {
 			return 0, 0, false
 		}
+		if ownedContent {
+			end = lineEnd
+			if lineEnd < len(data) {
+				end++
+			}
+		}
 		if lineEnd == len(data) {
 			break
 		}
@@ -73,19 +84,7 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 	if state != "" || depth != 0 || len(seen) != 2 {
 		return 0, 0, false
 	}
-	if !finished {
-		end = len(data)
-	}
 	return start, end, true
-}
-
-func tomlAssignmentKey(line string) (string, bool) {
-	i := strings.IndexByte(line, '=')
-	if i < 1 {
-		return "", false
-	}
-	key := strings.TrimSpace(line[:i])
-	return key, key != "" && !strings.ContainsAny(key, ".[]{}\"'")
 }
 
 // hasOTELTOML recognizes only competing root OTEL keys/tables. It is a narrow lexer,
