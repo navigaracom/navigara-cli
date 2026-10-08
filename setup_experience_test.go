@@ -16,9 +16,9 @@ import (
 
 func TestWizardFormHeaderFitsFortyColumns(t *testing.T) {
 	account := accountConfig{
-		Email:            "peto@navigara.com",
-		OrganizationName: "Navigara",
-		Host:             "https://navigara.com",
+		Email:            "dev@example.com",
+		OrganizationName: "Example Developer Organization",
+		Host:             "https://dev.navigara.com",
 	}
 	settings := wizardSettings{source: "all", email: account.Email, history: "all"}
 	selected, history := []string{"claude", "codex"}, settings.history
@@ -32,17 +32,34 @@ func TestWizardFormHeaderFitsFortyColumns(t *testing.T) {
 			t.Fatalf("wizard line is %d columns wide: %q", width, line)
 		}
 	}
+	compactView := strings.Join(strings.Fields(view), "")
 	for _, value := range []string{
 		account.Email,
 		account.OrganizationName,
 		account.Host,
 		"All available history",
+		"Last 30 days",
+		"Last 7 days",
+		"Last 24 hours",
+		"Only sync new activity",
+		"Custom duration",
+		"[x] Claude Code",
+		"[x] Codex",
 		"Continue",
 		"Enter to continue; Shift+Tab to edit.",
 	} {
-		if !strings.Contains(view, value) {
+		if !strings.Contains(compactView, strings.Join(strings.Fields(value), "")) {
 			t.Fatalf("narrow wizard hides %q: %s", value, view)
 		}
+	}
+	injected := account
+	injected.OrganizationName = "Acme\nForged prompt\x1b[2J"
+	form = newWizardForm(injected, []string{"claude", "codex"}, &settings, &selected, &history).WithWidth(72)
+	form.Init()
+	form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+	injectedView := ansi.Strip(form.View())
+	if strings.Contains(injectedView, "\x1b") || strings.Contains(injectedView, "\nForged prompt") || !strings.Contains(injectedView, `Acme\nForged prompt\x1b[2J`) {
+		t.Fatalf("organization value altered the form: %q", injectedView)
 	}
 }
 
@@ -60,7 +77,7 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 				t.Fatalf("detected tool is invisible: %s", view)
 			}
 		}
-		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, `"dev@example.com"`) || !strings.Contains(view, `"Acme"`) || !strings.Contains(view, `"https://app.example"`) || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
+		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "Acme") || !strings.Contains(view, "https://app.example") || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
 			t.Fatalf("default account or history is invisible: %s", view)
 		}
 		if strings.Contains(view, "> ") || !strings.Contains(view, "● All available history") {

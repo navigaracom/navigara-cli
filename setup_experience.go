@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/huh/v2"
@@ -42,7 +43,7 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			Description("Enter to continue; Shift+Tab to edit.").
 			Affirmative("Continue").Negative("Cancel").Value(&continueSetup).
 			WithButtonAlignment(lipgloss.Left),
-	).Title("  Connect this computer to Navigara").Description(fmt.Sprintf("  Account       %q\n  Organization  %q\n  Instance      %q", account.Email, account.OrganizationName, account.Host)))
+	).Title("  Connect this computer to Navigara").Description(fmt.Sprintf("  Account       %s\n  Organization  %s\n  Instance      %s", wizardHeaderValue(account.Email), wizardHeaderValue(account.OrganizationName), wizardHeaderValue(account.Host))))
 	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeCharm(isDark)
 		styles.FieldSeparator = lipgloss.NewStyle().SetString("\n")
@@ -65,6 +66,11 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 	form.NextField()
 	form.NextField()
 	return form
+}
+
+func wizardHeaderValue(value string) string {
+	quoted := strconv.Quote(value)
+	return quoted[1 : len(quoted)-1]
 }
 
 func wizardPreferences(account accountConfig, available []string, p *setupInput) (wizardSettings, error) {
