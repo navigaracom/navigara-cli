@@ -19,6 +19,9 @@ type setupInput struct {
 }
 
 func (p *setupInput) ask(label, fallback string) (string, error) {
+	if p.interactive() {
+		return p.askForm(label, fallback)
+	}
 	if fallback != "" {
 		fmt.Fprintf(p.out, "%s [%s]: ", label, fallback)
 	} else {
@@ -36,6 +39,9 @@ func (p *setupInput) ask(label, fallback string) (string, error) {
 }
 
 func (p *setupInput) yes(label string) (bool, error) {
+	if p.interactive() {
+		return p.yesForm(label)
+	}
 	answer, err := p.ask(label+" (y/n)", "n")
 	if err != nil {
 		return false, err
@@ -46,11 +52,14 @@ func (p *setupInput) yes(label string) (bool, error) {
 	case "n", "no":
 		return false, nil
 	default:
-		return false, errors.New("enter y or n; run setup again")
+		return false, errors.New("enter y or n; run navigara wizard again")
 	}
 }
 
 func (p *setupInput) token() (string, error) {
+	if p.interactive() {
+		return p.tokenForm()
+	}
 	if p.terminal == nil {
 		return p.ask("Paste analytics ingestor token", "")
 	}
