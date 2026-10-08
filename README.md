@@ -22,7 +22,7 @@ between releases.
 ## Set up this computer
 
 ```sh
-navigara setup
+navigara wizard
 ```
 
 On macOS and Linux, the wizard checks your saved login and opens the browser when
@@ -33,11 +33,11 @@ Close running tool sessions before taking the preview.
 The default host is `https://app.navigara.com`. For an on-prem instance:
 
 ```sh
-navigara setup --host https://navigara.example.com
+navigara wizard --host https://navigara.example.com
 ```
 
 The selected host and organization are saved privately. To sign in or select a
-different organization without running setup, use `navigara login [--host ORIGIN]`.
+different organization without running the wizard, use `navigara login [--host ORIGIN]`.
 Sign-in uses OAuth 2.0 authorization code flow with PKCE and opens a browser. The CLI
 does not use refresh tokens; when its access token expires, it opens the browser again.
 An organization administrator must authorize creation of an analytics ingestor key.
@@ -55,7 +55,7 @@ backfill for the same session; partial live sessions are not filled in automatic
 Uploads reuse the exact preview files. If interrupted, retry the printed directory:
 
 ```sh
-navigara setup --resume '/path/to/saved/payload'
+navigara wizard --resume '/path/to/saved/payload'
 ```
 
 Resume verifies saved file hashes and requires the original host and organization.
