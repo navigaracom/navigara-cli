@@ -157,6 +157,10 @@ func TestCodexSettingsRequiresConsentToReplaceExistingExporters(t *testing.T) {
 	if _, err := codexSettings(append(got, fixture...), testEndpoint, "next", true); err == nil {
 		t.Fatal("mixed managed and unmanaged telemetry was accepted")
 	}
+	foreignRoot := append([]byte("otel.environment = \"dev\"\n"), fixture...)
+	if got, err := codexSettings(foreignRoot, testEndpoint, "new", true); err == nil || got != nil {
+		t.Fatalf("legacy exporters with root OTEL settings were accepted: %q, %v", got, err)
+	}
 }
 
 func TestShellSettingsIsIdempotentAndSafelyQuotesEmail(t *testing.T) {

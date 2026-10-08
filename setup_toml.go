@@ -110,10 +110,12 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 
 	seen := make(map[string]bool, 2)
 	active := ""
+	seenTable := false
 	first, last := -1, -1
 	for _, expression := range expressions {
 		switch expression.kind {
 		case unstable.Table, unstable.ArrayTable:
+			seenTable = true
 			if expression.kind != unstable.Table || !isCodexTelemetryTable(expression.key) {
 				if len(expression.key) > 0 && expression.key[0] == "otel" {
 					return 0, 0, false
@@ -135,6 +137,9 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 			}
 			last = expression.end
 		case unstable.KeyValue:
+			if !seenTable && len(expression.key) > 0 && expression.key[0] == "otel" {
+				return 0, 0, false
+			}
 			if active == "" {
 				continue
 			}
