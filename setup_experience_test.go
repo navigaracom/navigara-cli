@@ -165,7 +165,7 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 				if !apply {
 					t.Error("ingestion request without consent")
 				}
-				data, _ := io.ReadAll(r.Body)
+				data := mustBody(r)
 				if bytes.Contains(data, []byte(`"codex"`)) {
 					t.Error("uploaded history for skipped Codex")
 				}

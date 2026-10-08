@@ -80,7 +80,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&help, "help", false, "show upload help")
 	fs.BoolVar(&shortHelp, "h", false, "show upload help")
 	fs.StringVar(&opts.source, "source", "all", "session source: all, claude, codex")
-	fs.StringVar(&opts.output, "output", "./navigara-backfill", "new directory for OTLP request bodies")
+	fs.StringVar(&opts.output, "output", "./navigara-backfill", "new directory for gzip-compressed OTLP request bodies")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home containing projects/ (default ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home containing sessions/ (default ~/.codex)")
 	fs.Func("session", "only export this session id (repeatable)", func(value string) error {

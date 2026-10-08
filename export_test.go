@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,10 +63,13 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		body, _ := io.ReadAll(r.Body)
+		body := mustBody(r)
 		if string(body) == "{}" {
 			w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
 			return
+		}
+		if r.Header.Get("Content-Encoding") != "gzip" {
+			t.Error("upload is not gzip-compressed")
 		}
 		got.mu.Lock()
 		got.paths = append(got.paths, r.URL.Path)
@@ -98,7 +102,7 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.bodies[0]), &logs); err != nil || len(logs.ResourceLogs) != 1 {
 		t.Errorf("logs body is not OTLP JSON: %v", err)
 	}
-	files, _ := filepath.Glob(filepath.Join(output, "*.json"))
+	files, _ := filepath.Glob(filepath.Join(output, "*.json.gz"))
 	if len(files) != 2 {
 		t.Errorf("wrote %d files, want 2", len(files))
 	}
@@ -431,12 +435,16 @@ func TestUploadUntilExcludesFutureSessions(t *testing.T) {
 					if code != 0 || !strings.Contains(stdout.String(), fmt.Sprintf("sessions=%d failed=0", window.want)) || stderr.Len() != 0 {
 						t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 					}
-					files, err := filepath.Glob(filepath.Join(out, "*.json"))
+					files, err := filepath.Glob(filepath.Join(out, "*.json.gz"))
 					if err != nil || (len(files) == 0) != (window.want == 0) {
 						t.Fatalf("files=%v err=%v", files, err)
 					}
 					for _, path := range files {
-						body, err := os.ReadFile(path)
+						zr, err := gzip.NewReader(bytes.NewReader(mustRead(t, path)))
+						if err != nil {
+							t.Fatal(err)
+						}
+						body, err := io.ReadAll(zr)
 						if err != nil {
 							t.Fatal(err)
 						}

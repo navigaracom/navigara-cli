@@ -87,7 +87,7 @@ an empty request, then updates the selected tools (`--source all|claude|codex`).
 ## Backfill sessions
 
 ```sh
-navigara sessions upload --last 30d                 # write OTLP request bodies, send nothing
+navigara sessions upload --last 30d                 # write gzip-compressed OTLP request bodies, send nothing
 navigara sessions upload --last 30d --send          # use saved login and organization
 navigara sessions upload --last 30d --send \
   --url https://app.navigara.com/api --token "$NAVIGARA_TOKEN"
@@ -129,7 +129,7 @@ never sent.
 | `--source all\|claude\|codex` | Which tool to read. |
 | `--last 30d`, `--since`, `--until` | Time window, by duration or RFC 3339 time. |
 | `--session ID` | Only this session; repeat for more. Useful to compare one session with live data. |
-| `--output DIR` | New directory for the request bodies (`logs-000001.json`, `metrics-000001.json`, …). |
+| `--output DIR` | New directory for the gzip-compressed request bodies (`logs-000001.json.gz`, `metrics-000001.json.gz`, …). Read one with `gunzip -c`. |
 | `--send`, `--url`, `--token` | Post the bodies, logs first. Retries throttling and server errors. |
 | `--claude-home`, `--codex-home` | Tool homes, default `~/.claude` and `~/.codex`. |
 

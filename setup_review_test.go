@@ -65,7 +65,7 @@ func TestSetupEditRebuildsPreviewBeforeFinalConsent(t *testing.T) {
 				if out.reviews != 2 {
 					t.Error("ingestion or key request before the second review")
 				}
-				body, _ := io.ReadAll(r.Body)
+				body := mustBody(r)
 				bodies = append(bodies, string(body))
 				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
 				_, _ = io.WriteString(w, `{}`)
