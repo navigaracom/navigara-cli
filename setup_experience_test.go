@@ -15,10 +15,11 @@ import (
 )
 
 func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
+	account := accountConfig{Email: "dev@example.com", OrganizationName: "Acme", Host: "https://app.example", IngestToken: "secret"}
 	for _, available := range [][]string{{"claude", "codex"}, {"claude"}, {"codex"}} {
 		settings := wizardSettings{source: setupSource(available), email: "dev@example.com", history: "all"}
 		selected, history := selectedTools(available, settings.source), settings.history
-		form := newWizardForm(available, &settings, &selected, &history).WithWidth(72)
+		form := newWizardForm(account, available, &settings, &selected, &history).WithWidth(72)
 		form.Init()
 		form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
 		view := ansi.Strip(form.View())
@@ -27,8 +28,21 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 				t.Fatalf("detected tool is invisible: %s", view)
 			}
 		}
-		if !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
+		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, `"dev@example.com"`) || !strings.Contains(view, `"Acme"`) || !strings.Contains(view, `"https://app.example"`) || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
 			t.Fatalf("default account or history is invisible: %s", view)
+		}
+		narrow := newWizardForm(account, available, &settings, &selected, &history).WithWidth(40)
+		narrow.Init()
+		narrow.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+		narrowView := ansi.Strip(narrow.View())
+		expected := []string{"dev@example.com", "All available history", "Continue"}
+		for _, tool := range available {
+			expected = append(expected, "[x] "+setupToolName(tool))
+		}
+		for _, label := range expected {
+			if !strings.Contains(narrowView, label) {
+				t.Fatalf("narrow wizard hides %s: %s", label, narrowView)
+			}
 		}
 		for name, key := range map[string]tea.Key{
 			"q":      {Code: 'q', Text: "q"},
@@ -39,7 +53,7 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				settings := wizardSettings{source: setupSource(available), email: "dev@example.com", history: "all"}
 				selected, history := selectedTools(available, settings.source), settings.history
-				form := newWizardForm(available, &settings, &selected, &history)
+				form := newWizardForm(account, available, &settings, &selected, &history)
 				dispatchWizardCommand(form, form.Init())
 				dispatchWizardMessage(form, tea.KeyPressMsg(key))
 				if form.State != huh.StateNormal {
@@ -85,7 +99,7 @@ func dispatchWizardCommand(form *huh.Form, command tea.Cmd) {
 func TestWizardEnterKeepsAccountToolsAndAllHistory(t *testing.T) {
 	var out bytes.Buffer
 	p := newSetupInput(strings.NewReader("\n\n\n\n"), &out)
-	settings, err := wizardPreferences([]string{"claude", "codex"}, "dev@example.com", p)
+	settings, err := wizardPreferences(accountConfig{Email: "dev@example.com"}, []string{"claude", "codex"}, p)
 	if err != nil || settings.source != "all" || settings.email != "dev@example.com" || settings.history != "all" {
 		t.Fatalf("default preferences = %#v, %v", settings, err)
 	}
@@ -94,7 +108,7 @@ func TestWizardEnterKeepsAccountToolsAndAllHistory(t *testing.T) {
 func TestWizardEditKeepsPreviousAnswersOnBlankPlainInput(t *testing.T) {
 	var out bytes.Buffer
 	p := newSetupInput(strings.NewReader("\n\n\n\n"), &out)
-	settings, err := editWizardPreferences([]string{"claude", "codex"}, wizardSettings{
+	settings, err := editWizardPreferences(accountConfig{Email: "dev@example.com"}, []string{"claude", "codex"}, wizardSettings{
 		source: "claude", email: "dev@example.com", history: "12h",
 	}, p)
 	if err != nil {
