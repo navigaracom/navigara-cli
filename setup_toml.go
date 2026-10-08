@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pelletier/go-toml/v2/unstable"
@@ -41,7 +42,7 @@ func parseTOML(data []byte) ([]tomlExpression, error) {
 				if len(bytes.TrimSpace(data[expression.start:node.Raw.Offset])) != 0 {
 					continue
 				}
-				expression.comment = string(parser.Raw(node.Raw))
+				expression.comment = strings.TrimSuffix(string(parser.Raw(node.Raw)), "\r")
 			default:
 				continue
 			}

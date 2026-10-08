@@ -97,6 +97,14 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	if err != nil || !bytes.HasSuffix(updated, suffix) {
 		t.Fatalf("managed update changed its suffix: %q, %v", updated, err)
 	}
+	crlfPrefix := []byte("model = \"o3\"\r\n\r\n# comment\r\n")
+	crlfSuffix := []byte("\r\n# keep this CRLF separation\r\n[projects.keep]\r\ntrust_level = \"trusted\"\r\n")
+	crlfManaged := bytes.ReplaceAll(first, []byte("\n"), []byte("\r\n"))
+	crlfInput := append(append([]byte(nil), crlfManaged...), crlfSuffix...)
+	crlfUpdated, err := codexSettings(crlfInput, testEndpoint, "crlf-token", false)
+	if err != nil || !bytes.HasPrefix(crlfUpdated, crlfPrefix) || !bytes.HasSuffix(crlfUpdated, crlfSuffix) || bytes.Count(crlfUpdated, []byte(telemetryBegin)) != 1 || !bytes.Contains(crlfUpdated, []byte("Bearer crlf-token")) {
+		t.Fatalf("CRLF managed update changed surrounding content: %q, %v", crlfUpdated, err)
+	}
 	withRootSuffix := append(append([]byte(nil), first...), []byte("model = \"other\"\n")...)
 	if _, err := codexSettings(withRootSuffix, testEndpoint, "new", false); err == nil {
 		t.Fatal("managed block followed by root keys succeeded")
