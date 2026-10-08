@@ -490,3 +490,83 @@ func TestUploadUntilExcludesFutureSessions(t *testing.T) {
 		})
 	}
 }
+
+func TestUploadSkipsHistoryThatEndsBeforeSince(t *testing.T) {
+	root := t.TempDir()
+	claudeHome, codexHome := filepath.Join(root, ".claude"), filepath.Join(root, ".codex")
+	old := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	write := func(path string, at time.Time, lines ...string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claudeRow := func(id, at string) string {
+		return `{"type":"user","sessionId":"` + id + `","promptId":"p-` + id + `","timestamp":"` + at + `","message":{"role":"user","content":"hi"}}`
+	}
+	codexMeta := func(id, at string) string {
+		return `{"type":"session_meta","timestamp":"` + at + `","payload":{"id":"` + id + `","timestamp":"` + at + `","cli_version":"0.139.0","source":"exec"}}`
+	}
+	upload := func(since string) (int, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"sessions", "upload", "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome,
+			"--since", since, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
+		return code, stdout.String() + stderr.String()
+	}
+
+	// Old histories hold an invalid row: reading them would fail the upload.
+	dir := filepath.Join(claudeHome, "projects", "-repo")
+	write(filepath.Join(dir, "c-old.jsonl"), old, claudeRow("c-old", "2025-01-01T00:00:00Z"), `not json`, claudeRow("c-old", "2025-01-01T00:00:01Z"))
+	write(filepath.Join(codexHome, "sessions", "rollout-x-old.jsonl"), old, codexMeta("x-old", "2025-01-01T00:00:00Z"), `not json`,
+		`{"type":"event_msg","timestamp":"2025-01-01T00:00:01Z","payload":{}}`)
+	// A file system clock behind the tool's: the write time is old, the records are not.
+	write(filepath.Join(dir, "c-skew.jsonl"), old, claudeRow("c-skew", "2026-10-01T10:00:00Z"))
+	write(filepath.Join(codexHome, "sessions", "rollout-x-skew.jsonl"), old, codexMeta("x-skew", "2026-10-01T10:00:00Z"))
+	// A resumed process whose only new row is its cost-state.
+	write(filepath.Join(dir, "c-cost.jsonl"), old, claudeRow("c-cost", "2025-01-01T00:00:00Z"),
+		`{"type":"cost-state","totalCostUSD":1,"startTime":1790000000000,"modelUsage":{"claude-opus-5-5":{"costUSD":1}}}`)
+	// An old root whose subagent is still writing.
+	write(filepath.Join(dir, "c-sub.jsonl"), old, claudeRow("c-sub", "2025-01-01T00:00:00Z"))
+	write(filepath.Join(dir, "c-sub", "subagents", "agent-a.jsonl"), time.Now(),
+		`{"type":"user","sessionId":"c-sub","isSidechain":true,"timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"x"}}`)
+
+	code, got := upload("2026-09-01T00:00:00Z")
+	if code != 0 || !strings.Contains(got, "sessions=4 failed=0") {
+		t.Fatalf("exit=%d output=%q; want the skewed, cost-state and subagent sessions only", code, got)
+	}
+	for _, id := range []string{"claude_code c-cost", "claude_code c-skew", "claude_code c-sub", "codex x-skew"} {
+		if !strings.Contains(got, id) {
+			t.Errorf("missing %s in %q", id, got)
+		}
+	}
+	if code, got := upload("2024-01-01T00:00:00Z"); code == 0 {
+		t.Fatalf("read nothing old: %q", got)
+	}
+}
+
+func TestStaleKeepsFilesWrittenJustBeforeSince(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		written time.Time
+		want    bool
+	}{{since.Add(-time.Second), false}, {since.Add(-staleMargin + time.Millisecond), false}, {since.Add(-2 * staleMargin), true}} {
+		row := `{"timestamp":"` + tc.written.Format(time.RFC3339Nano) + `"}` + "\n"
+		if err := os.WriteFile(path, []byte(row), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, tc.written, tc.written); err != nil {
+			t.Fatal(err)
+		}
+		if got := stale(since, path); got != tc.want {
+			t.Errorf("written %v before since: stale=%v, want %v", since.Sub(tc.written), got, tc.want)
+		}
+	}
+}

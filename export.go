@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -101,7 +102,9 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 	var jobs []job
 	incomplete := false
 	if wantClaude {
-		scan := session.Scan("claude", opts.claudeHome, opts.codexHome)
+		scan := session.Scan("claude", opts.claudeHome, opts.codexHome, func(path string) bool {
+			return stale(opts.since, append([]string{path}, telemetry.ClaudeSubagents(path)...)...)
+		})
 		incomplete = len(scan.Errors) > 0
 		for _, err := range scan.Errors {
 			fmt.Fprintln(stderr, "navigara:", err)
@@ -127,6 +130,9 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			incomplete = true
 		} else {
 			for _, path := range paths {
+				if stale(opts.since, path) {
+					continue
+				}
 				id, err := telemetry.CodexSessionID(path)
 				if err != nil {
 					fmt.Fprintln(stderr, "navigara:", err)
@@ -253,6 +259,71 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 		return 1
 	}
 	return 0
+}
+
+// staleMargin covers coarse file times (1 s on HFS+) and the points a builder stamps just after
+// the last record, such as cost-state residue at the session end plus 1 ms.
+const staleMargin = time.Minute
+
+// stale reports whether every file ends well before since, so none can hold a record in the
+// window. Skipping them keeps a short --last from reading the whole history. A file counts only
+// when both its write time and its newest tail record are old: a network file system can stamp
+// write times by a clock that differs from the tool's.
+func stale(since time.Time, paths ...string) bool {
+	if since.IsZero() {
+		return false
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil || !info.ModTime().Add(staleMargin).Before(since) {
+			return false
+		}
+		if last := lastRecordTime(path); last.IsZero() || !last.Add(staleMargin).Before(since) {
+			return false
+		}
+	}
+	return true
+}
+
+// lastRecordTime is the newest record time in the last 64 KiB of a JSONL history, counting a
+// Claude Code cost-state row's process start. It is zero when that tail holds no complete
+// timestamped record, for example inside one very long record.
+func lastRecordTime(path string) time.Time {
+	f, err := os.Open(path)
+	if err != nil {
+		return time.Time{}
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return time.Time{}
+	}
+	start := max(info.Size()-64<<10, 0)
+	buf := make([]byte, info.Size()-start)
+	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
+		return time.Time{}
+	}
+	lines := bytes.Split(buf, []byte("\n"))
+	if start > 0 {
+		lines = lines[1:]
+	}
+	var last time.Time
+	for _, line := range lines {
+		var row struct {
+			Timestamp string `json:"timestamp"`
+			StartTime int64  `json:"startTime"`
+		}
+		if json.Unmarshal(line, &row) != nil {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339Nano, row.Timestamp); err == nil && t.After(last) {
+			last = t
+		}
+		if t := time.UnixMilli(row.StartTime); row.StartTime > 0 && t.After(last) {
+			last = t
+		}
+	}
+	return last
 }
 
 func toolHome(flag, dir string) string {

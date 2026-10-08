@@ -57,7 +57,7 @@ func TestScanLayoutsAndSelection(t *testing.T) {
 		{"codex", "missing unselected", codex, 3, 1, paths[1:]},
 	} {
 		t.Run(tc.source, func(t *testing.T) {
-			got := Scan(tc.source, tc.claude, tc.codex)
+			got := Scan(tc.source, tc.claude, tc.codex, nil)
 			var actual []string
 			for _, record := range got.Records {
 				actual = append(actual, record.Path)
@@ -86,7 +86,7 @@ func TestScanRootPolicies(t *testing.T) {
 		{"all", home, home, 0},
 		{"unknown", missing, file, 1},
 	} {
-		got := Scan(tc.source, tc.claude, tc.codex)
+		got := Scan(tc.source, tc.claude, tc.codex, nil)
 		if got.Records == nil || got.Files != 0 || len(got.Records) != 0 || got.Skipped != 0 || len(got.Errors) != tc.errors {
 			t.Fatalf("%+v: got %+v", tc, got)
 		}
@@ -94,7 +94,7 @@ func TestScanRootPolicies(t *testing.T) {
 	putHistory(t, filepath.Join(home, "sessions", "valid.jsonl"), fixture(t, "codex-root"))
 	putHistory(t, filepath.Join(home, "archived_sessions"), "not a directory")
 	putHistory(t, filepath.Join(home, "projects"), "not a directory")
-	got := Scan("all", home, home)
+	got := Scan("all", home, home, nil)
 	if got.Files != 1 || len(got.Records) != 1 || len(got.Errors) != 2 {
 		t.Fatalf("root diagnostics must preserve other roots: %+v", got)
 	}
@@ -115,7 +115,7 @@ func TestScanSymlinksAndNonregular(t *testing.T) {
 	if err := exec.Command("mkfifo", filepath.Join(root, "pipe.jsonl")).Run(); err != nil {
 		t.Logf("FIFO unavailable: %v", err)
 	}
-	got := Scan("codex", "", home)
+	got := Scan("codex", "", home, nil)
 	if got.Files != 1 || len(got.Records) != 1 || len(got.Errors) != 0 || got.Records[0].Path != filepath.Join(root, "valid.jsonl") {
 		t.Fatalf("got %+v", got)
 	}
@@ -126,7 +126,7 @@ func TestScanFailureKeepsOtherFilesAndQuotesPaths(t *testing.T) {
 	bad := filepath.Join(home, "sessions", "bad\n\x1b.jsonl")
 	putHistory(t, bad, fixture(t, "codex-root")+"{private malformed tail")
 	putHistory(t, filepath.Join(home, "sessions", "good.jsonl"), fixture(t, "codex-root"))
-	got := Scan("codex", "", home)
+	got := Scan("codex", "", home, nil)
 	if got.Files != 2 || len(got.Records) != 1 || got.Skipped != 0 || len(got.Errors) != 1 {
 		t.Fatalf("got %+v", got)
 	}
@@ -158,7 +158,7 @@ func TestScanPermissionFailures(t *testing.T) {
 		f.Close()
 		t.Skip("OS does not enforce permissions for this user")
 	}
-	got := Scan("codex", "", home)
+	got := Scan("codex", "", home, nil)
 	if got.Files != 2 || len(got.Records) != 1 || got.Skipped != 0 || len(got.Errors) != 2 {
 		t.Fatalf("got %+v", got)
 	}
