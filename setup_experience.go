@@ -12,7 +12,7 @@ type wizardSettings struct {
 	source, email, history string
 }
 
-func newWizardForm(available []string, settings *wizardSettings, selected *[]string, history *string) *huh.Form {
+func newWizardForm(account accountConfig, available []string, settings *wizardSettings, selected *[]string, history *string) *huh.Form {
 	continueSetup := true
 	tools := make([]huh.Option[string], 0, len(available))
 	for _, source := range available {
@@ -40,7 +40,7 @@ func newWizardForm(available []string, settings *wizardSettings, selected *[]str
 		huh.NewConfirm().Key("continue").Title("Ready to preview your connection").
 			Description("Close running sessions first.\nEnter to continue; Shift+Tab to edit.").
 			Affirmative("Continue").Negative("Cancel").Value(&continueSetup),
-	).Description("Defaults are ready."))
+	).Title("Connect this computer to Navigara").Description(fmt.Sprintf("Signed in as %q\nOrganization: %q\nNavigara instance: %q\n\nDefaults are ready.", account.Email, account.OrganizationName, account.Host)))
 	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeCharm(isDark)
 		styles.Focused.SelectedPrefix = styles.Focused.SelectedPrefix.SetString("[x] ")
@@ -55,22 +55,22 @@ func newWizardForm(available []string, settings *wizardSettings, selected *[]str
 	return form
 }
 
-func wizardPreferences(available []string, email string, p *setupInput) (wizardSettings, error) {
+func wizardPreferences(account accountConfig, available []string, p *setupInput) (wizardSettings, error) {
 	if len(available) == 0 {
 		return wizardSettings{}, errors.New("no tools selected; run Claude Code or Codex once, then rerun navigara wizard")
 	}
-	settings := wizardSettings{source: setupSource(available), email: email, history: "all"}
-	return editWizardPreferences(available, settings, p)
+	settings := wizardSettings{source: setupSource(available), email: account.Email, history: "all"}
+	return editWizardPreferences(account, available, settings, p)
 }
 
-func editWizardPreferences(available []string, settings wizardSettings, p *setupInput) (wizardSettings, error) {
+func editWizardPreferences(account accountConfig, available []string, settings wizardSettings, p *setupInput) (wizardSettings, error) {
 	selected := selectedTools(available, settings.source)
 	history, customHistory := settings.history, "7d"
 	if !knownHistory(history) {
 		customHistory, history = history, "custom"
 	}
 	if p.interactive() {
-		form := newWizardForm(available, &settings, &selected, &history)
+		form := newWizardForm(account, available, &settings, &selected, &history)
 		if err := p.form(form); err != nil {
 			return settings, err
 		}

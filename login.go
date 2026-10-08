@@ -128,8 +128,11 @@ func ensureAccount(ctx context.Context, host string, p *setupInput, forceSelecti
 	if err = saveAccount(c); err != nil {
 		return c, err
 	}
-	fmt.Fprintf(p.out, "\nSigned in as %s\nOrganization: %q\nNavigara instance: %s\n", c.Email, c.OrganizationName, c.Host)
 	return c, nil
+}
+
+func writeAccountSummary(out io.Writer, c accountConfig) {
+	fmt.Fprintf(out, "\nSigned in as %s\nOrganization: %q\nNavigara instance: %s\n", c.Email, c.OrganizationName, c.Host)
 }
 
 func runLogin(args []string, input io.Reader, stdout, stderr io.Writer) int {
@@ -152,9 +155,11 @@ func runLogin(args []string, input io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	p := newSetupInput(input, stdout)
-	if _, err := ensureAccount(context.Background(), *host, p, true, openBrowser); err != nil {
+	c, err := ensureAccount(context.Background(), *host, p, true, openBrowser)
+	if err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
+	writeAccountSummary(p.out, c)
 	return 0
 }

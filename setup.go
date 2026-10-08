@@ -67,7 +67,10 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		return err
 	}
 	opts := options{claudeHome: firstNonEmpty(os.Getenv("CLAUDE_CONFIG_DIR"), filepath.Join(home, ".claude")), codexHome: firstNonEmpty(os.Getenv("CODEX_HOME"), filepath.Join(home, ".codex"))}
-	fmt.Fprintln(p.out, "\nConnect this computer to Navigara\nImport past sessions and keep new activity in sync.")
+	if !p.interactive() {
+		writeAccountSummary(p.out, c)
+		fmt.Fprintln(p.out, "\nConnect this computer to Navigara\nImport past sessions and keep new activity in sync.")
+	}
 	var available []string
 	for _, tool := range []struct{ name, path string }{{"claude", opts.claudeHome}, {"codex", opts.codexHome}} {
 		info, err := os.Stat(tool.path)
@@ -82,7 +85,7 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		}
 		available = append(available, tool.name)
 	}
-	preferences, err := wizardPreferences(available, c.Email, p)
+	preferences, err := wizardPreferences(c, available, p)
 	if err != nil {
 		return err
 	}
@@ -91,7 +94,7 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		if err != nil || !edit {
 			return err
 		}
-		preferences, err = editWizardPreferences(available, preferences, p)
+		preferences, err = editWizardPreferences(c, available, preferences, p)
 		if err != nil {
 			return err
 		}
@@ -251,6 +254,7 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 		if err != nil {
 			return err
 		}
+		writeAccountSummary(p.out, c)
 		if c.OrganizationID != m.OrganizationID {
 			return errors.New("saved backfill belongs to a different organization; run navigara login and select its original organization")
 		}
