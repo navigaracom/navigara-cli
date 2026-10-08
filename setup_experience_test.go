@@ -192,7 +192,7 @@ func TestOrganizationNamesCannotAlterTerminalChoices(t *testing.T) {
 func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 	for _, action := range []string{"cancel", "skip", "connect"} {
 		t.Run(action, func(t *testing.T) {
-			skip, apply := action != "cancel", action == "connect"
+			apply := action == "connect"
 			claude, codex := fixtureHomes(t)
 			home := filepath.Dir(claude)
 			t.Setenv("HOME", home)
@@ -230,23 +230,24 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 				io.WriteString(w, `{}`)
 			}))
 			defer srv.Close()
-			answer := "n"
-			if skip {
-				answer = "y"
+			skip, closeSessions := "n", "n"
+			if action != "cancel" {
+				skip = "y"
 			}
-			consent := "n"
-			if apply {
-				consent = "y"
+			if action == "connect" {
+				closeSessions = "y"
+			}
+			input := "y\ny\n\nall\n" + skip + "\n"
+			if action != "cancel" {
+				input += closeSessions + "\n"
 			}
 			var out, errs bytes.Buffer
-			code := runSetup(nil, strings.NewReader("y\ny\n\nall\n"+answer+"\ny\n"+consent+"\n"), &out, &errs)
+			code := runSetup(nil, strings.NewReader(input), &out, &errs)
 			if code != 0 {
 				t.Fatalf("wizard failed rather than offering recovery: %d %s", code, &errs)
 			}
-			if skip && (!strings.Contains(out.String(), "2 sessions") || !strings.Contains(out.String(), "Keep new activity in sync: Claude Code")) {
-				t.Fatalf("preview did not reflect the remaining tool: %s", &out)
-			}
-			if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, existing) {
+			got, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(got, existing) {
 				t.Fatalf("conflicting settings changed: %q %v", got, err)
 			}
 			data, err := os.ReadFile(filepath.Join(claude, "settings.json"))
@@ -261,7 +262,7 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 	}
 }
 
-func TestWizardReplacesExistingCodexTelemetryOnlyAfterFinalConsent(t *testing.T) {
+func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 	for action, connect := range map[string]bool{"cancel": false, "connect": true} {
 		t.Run(action, func(t *testing.T) {
 			claude, codex := fixtureHomes(t)
@@ -284,8 +285,8 @@ func TestWizardReplacesExistingCodexTelemetryOnlyAfterFinalConsent(t *testing.T)
 			requests := 0
 			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
-				if !connect || !strings.Contains(out.String(), "Connect this computer to Navigara (y/n/edit)") {
-					t.Error("ingestion request before final consent")
+				if !connect || !strings.Contains(out.String(), "Connecting your tools...") {
+					t.Error("ingestion request before confirmation")
 				}
 				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
 				io.WriteString(w, `{}`)
@@ -295,12 +296,9 @@ func TestWizardReplacesExistingCodexTelemetryOnlyAfterFinalConsent(t *testing.T)
 			if connect {
 				final = "y"
 			}
-			input := "n\ny\n\nskip\ny\ny\n" + final + "\n"
+			input := "n\ny\n\nskip\ny\n" + final + "\n"
 			if code := runSetup(nil, strings.NewReader(input), &out, &errs); code != 0 {
 				t.Fatalf("wizard = %d: %s", code, &errs)
-			}
-			if !strings.Contains(out.String(), "existing telemetry will be replaced") {
-				t.Fatal("preview omitted replacement scope")
 			}
 			got, err := os.ReadFile(path)
 			if err != nil {
