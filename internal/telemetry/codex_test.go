@@ -25,6 +25,9 @@ func TestBuildCodex(t *testing.T) {
 		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{
 			"id": "child-thread", "parent_thread_id": "parent", "originator": "codex-tui", "thread_source": "subagent",
 			"git": map[string]any{"repository_url": "git@github.com:acme/repo.git"}}},
+		// Fork pattern reported in review: a copied parent header follows the child header.
+		map[string]any{"timestamp": "2026-10-03T09:59:59Z", "type": "session_meta", "payload": map[string]any{
+			"id": "parent", "originator": "codex-tui"}},
 		map[string]any{"timestamp": "2026-10-03T10:00:01Z", "type": "turn_context", "payload": map[string]any{"model": "gpt-6-astra"}},
 		codexEvent("2026-10-03T10:00:02Z", "item_completed", map[string]any{"item": map[string]any{
 			"type": "UserMessage", "content": []any{map[string]any{"type": "text", "text": "review this"}}}}),
@@ -54,9 +57,13 @@ func TestBuildCodex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.SessionID != "child-thread" || s.Service != "codex_tui" || s.Common["user.email"] != "dev@example.com" ||
+	if s.SessionID != "child-thread" || s.Common["session.id"] != "child-thread" || s.Service != "codex_tui" || s.Common["user.email"] != "dev@example.com" ||
 		s.Common["vcs.repository.url.full"] != "https://github.com/acme/repo" {
 		t.Fatalf("session = %+v", s)
+	}
+	starts := events(s, "codex.conversation_starts")
+	if len(starts) != 1 || !starts[0].Time.Equal(time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("conversation starts = %v", starts)
 	}
 	prompts := events(s, "codex.user_prompt")
 	if len(prompts) != 1 || prompts[0].Attrs["prompt_length"] != "11" || prompts[0].Attrs["model"] != "gpt-6-astra" {

@@ -124,6 +124,10 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 		}
 		switch r.Type {
 		case "session_meta":
+			// Forked rollouts may copy an optional parent header after the child header.
+			if s.SessionID != "" {
+				break
+			}
 			var meta struct {
 				ID            string `json:"id"`
 				Originator    string `json:"originator"`
