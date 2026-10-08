@@ -30,6 +30,8 @@ sign-in is needed. Choose your organization, then review the prefilled form:
 all detected tools, your account email, and all available history. Press Enter
 once to keep the defaults, or use Shift+Tab to edit and Space to toggle tools.
 Review the preview before applying changes.
+Choose Edit settings from the preview to return to the prefilled form and
+generate a new preview.
 Close running tool sessions before taking the preview.
 
 Interactive terminals show keyboard-driven forms. Redirected input/output,

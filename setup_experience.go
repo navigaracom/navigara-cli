@@ -149,17 +149,6 @@ func selectedBySource(tool, source string) bool {
 	return source == "all" || source == tool
 }
 
-func (p *setupInput) wizardConfirm(label, action string, defaultYes bool) (bool, error) {
-	if !p.interactive() {
-		return p.yes(label)
-	}
-	accepted := defaultYes
-	err := p.form(huh.NewForm(huh.NewGroup(
-		huh.NewConfirm().Title(label).Affirmative(action).Negative("Cancel").Value(&accepted),
-	)))
-	return accepted, err
-}
-
 func setupToolName(source string) string {
 	if source == "claude" {
 		return "Claude Code"
