@@ -109,7 +109,10 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		return nil
 	}
 	opts.source = setupSource(selected)
-	yes, err := p.wizardConfirm("Finish and close your running sessions so we can import complete history. Continue", "Continue", true)
+	yes := true
+	if !p.interactive() {
+		yes, err = p.wizardConfirm("Finish and close your running sessions so we can import complete history. Continue", "Continue", true)
+	}
 	if err != nil {
 		return err
 	}

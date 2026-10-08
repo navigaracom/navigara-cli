@@ -12,17 +12,21 @@ type wizardSettings struct {
 	source, email, history string
 }
 
-func newWizardForm(available []string, settings *wizardSettings) *huh.Form {
-	tools := make([]huh.Option[string], 0, len(available)+1)
-	if len(available) == 2 {
-		tools = append(tools, huh.NewOption("Claude Code and Codex", "all"))
-	}
+func newWizardForm(available []string, settings *wizardSettings, selected *[]string, history *string) *huh.Form {
+	continueSetup := true
+	tools := make([]huh.Option[string], 0, len(available))
 	for _, source := range available {
 		tools = append(tools, huh.NewOption(setupToolName(source), source))
 	}
-	return huh.NewForm(huh.NewGroup(
-		huh.NewSelect[string]().Title("Tools to connect").
-			Options(tools...).Value(&settings.source),
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewMultiSelect[string]().Title("Tools to connect").
+			Options(tools...).Value(selected).Height(len(available)+2).
+			Validate(func(selected []string) error {
+				if len(selected) == 0 {
+					return errors.New("select at least one tool")
+				}
+				return nil
+			}),
 		huh.NewInput().Title("Your email").Value(&settings.email).
 			Validate(func(email string) error { return validEmail(strings.TrimSpace(email)) }),
 		huh.NewSelect[string]().Title("Import history").Options(
@@ -32,8 +36,23 @@ func newWizardForm(available []string, settings *wizardSettings) *huh.Form {
 			huh.NewOption("Last 24 hours", "24h"),
 			huh.NewOption("Only sync new activity", "skip"),
 			huh.NewOption("Custom duration", "custom"),
-		).Value(&settings.history),
-	).Description("Defaults are ready. Press Enter to keep each value; use Tab or arrows to edit."))
+		).Value(history).Height(4),
+		huh.NewConfirm().Key("continue").Title("Ready to preview your connection").
+			Description("Close running sessions first.\nEnter to continue; Shift+Tab to edit.").
+			Affirmative("Continue").Negative("Cancel").Value(&continueSetup),
+	).Description("Defaults are ready."))
+	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {
+		styles := huh.ThemeCharm(isDark)
+		styles.Focused.SelectedPrefix = styles.Focused.SelectedPrefix.SetString("[x] ")
+		styles.Focused.UnselectedPrefix = styles.Focused.UnselectedPrefix.SetString("[ ] ")
+		styles.Blurred.SelectedPrefix = styles.Blurred.SelectedPrefix.SetString("[x] ")
+		styles.Blurred.UnselectedPrefix = styles.Blurred.UnselectedPrefix.SetString("[ ] ")
+		return styles
+	}))
+	form.NextField()
+	form.NextField()
+	form.NextField()
+	return form
 }
 
 func wizardPreferences(available []string, email string, p *setupInput) (wizardSettings, error) {
@@ -41,14 +60,32 @@ func wizardPreferences(available []string, email string, p *setupInput) (wizardS
 		return wizardSettings{}, errors.New("no tools selected; run Claude Code or Codex once, then rerun navigara wizard")
 	}
 	settings := wizardSettings{source: setupSource(available), email: email, history: "all"}
+	return editWizardPreferences(available, settings, p)
+}
+
+func editWizardPreferences(available []string, settings wizardSettings, p *setupInput) (wizardSettings, error) {
+	selected := selectedTools(available, settings.source)
+	history, customHistory := settings.history, "7d"
+	if !knownHistory(history) {
+		customHistory, history = history, "custom"
+	}
 	if p.interactive() {
-		if err := p.form(newWizardForm(available, &settings)); err != nil {
+		form := newWizardForm(available, &settings, &selected, &history)
+		if err := p.form(form); err != nil {
 			return settings, err
 		}
+		if !form.GetBool("continue") {
+			return settings, errors.New("input cancelled; no further changes applied")
+		}
+		settings.history = history
 	} else {
-		var selected []string
+		selected = selected[:0]
 		for _, tool := range available {
-			answer, err := p.ask("Connect "+setupToolName(tool)+" (y/n)", "y")
+			fallback := "n"
+			if selectedBySource(tool, settings.source) {
+				fallback = "y"
+			}
+			answer, err := p.ask("Connect "+setupToolName(tool)+" (y/n)", fallback)
 			if err != nil {
 				return settings, err
 			}
@@ -63,27 +100,53 @@ func wizardPreferences(available []string, email string, p *setupInput) (wizardS
 		if len(selected) == 0 {
 			return settings, errors.New("no tools selected; rerun navigara wizard and choose a tool to connect")
 		}
-		settings.source = setupSource(selected)
 		var err error
-		if settings.email, err = p.ask("Your email", email); err != nil {
+		if settings.email, err = p.ask("Your email", settings.email); err != nil {
 			return settings, err
 		}
-		if settings.history, err = p.ask("How much history should we import? (7d, 24h, all, or skip)", "all"); err != nil {
+		if settings.history, err = p.ask("How much history should we import? (7d, 24h, all, or skip)", settings.history); err != nil {
 			return settings, err
 		}
 	}
+	if len(selected) == 0 {
+		return settings, errors.New("no tools selected; rerun navigara wizard and choose a tool to connect")
+	}
+	settings.source = setupSource(selected)
 	settings.email = strings.TrimSpace(settings.email)
 	if err := validEmail(settings.email); err != nil {
 		return settings, err
 	}
 	if settings.history == "custom" {
 		var err error
-		settings.history, err = p.ask("How far back? (for example 12h or 14d)", "7d")
+		settings.history, err = p.ask("How far back? (for example 12h or 14d)", customHistory)
 		if err != nil {
 			return settings, err
 		}
 	}
 	return settings, nil
+}
+
+func knownHistory(history string) bool {
+	for _, candidate := range []string{"all", "30d", "7d", "24h", "skip", "custom"} {
+		if history == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedTools(available []string, source string) []string {
+	selected := make([]string, 0, len(available))
+	for _, tool := range available {
+		if selectedBySource(tool, source) {
+			selected = append(selected, tool)
+		}
+	}
+	return selected
+}
+
+func selectedBySource(tool, source string) bool {
+	return source == "all" || source == tool
 }
 
 func (p *setupInput) wizardConfirm(label, action string, defaultYes bool) (bool, error) {

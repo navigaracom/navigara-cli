@@ -28,8 +28,8 @@ navigara wizard
 On macOS and Linux, the wizard checks your saved login and opens the browser when
 sign-in is needed. Choose your organization, then review the prefilled form:
 all detected tools, your account email, and all available history. Press Enter
-through the defaults or edit them with Tab and arrow keys. Review the preview
-before applying changes.
+once to keep the defaults, or use Shift+Tab to edit and Space to toggle tools.
+Review the preview before applying changes.
 Close running tool sessions before taking the preview.
 
 Interactive terminals show keyboard-driven forms. Redirected input/output,
