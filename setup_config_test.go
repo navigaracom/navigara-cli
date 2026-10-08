@@ -105,12 +105,21 @@ func TestCodexSettingsRejectsOtherOTELAndMalformedMarkers(t *testing.T) {
 		[]byte("'otel' = \"foreign\"\n"),
 		[]byte("note = \"\"\"unterminated\n"),
 		[]byte("model = \"x\" # '''\n[otel.metrics_exporter.otlp-http]\n"),
+		[]byte("model = \"x\"\nmodel = \"duplicate\"\n"),
 		[]byte("# >>> navigara telemetry >>>\n"),
 		[]byte("# <<< navigara telemetry <<<\n"),
 	} {
 		if _, err := codexSettings(input, testEndpoint, "token", false); err == nil {
 			t.Errorf("codexSettings(%q) succeeded", input)
 		}
+	}
+}
+
+func TestCodexSettingsPreservesMarkerTextInValues(t *testing.T) {
+	input := []byte("note = \"# >>> navigara telemetry >>>\"\n")
+	got, err := codexSettings(input, testEndpoint, "token", false)
+	if err != nil || !bytes.HasPrefix(got, input) {
+		t.Fatalf("marker text in a value was not preserved: %q, %v", got, err)
 	}
 }
 

@@ -75,6 +75,7 @@ func TestCodexTelemetryRange(t *testing.T) {
 		"[otel.metrics_exporter.otlp-http]\nunknown = \"x\"\n[otel.exporter.otlp-http]\n",
 		"[otel.metrics_exporter.otlp-http]\n[otel.exporter.otlp-http]\nunknown = \"x\"\n",
 		"[otel.metrics_exporter.otlp-http]\nheaders.Authorization = \"x\"\n[otel.exporter.otlp-http]\n",
+		"[otel.metrics_exporter.otlp-http]\n[\"otel.exporter\".\"otlp-http\"]\n",
 		"[otel.metrics_exporter.otlp-http]\nheaders = { Authorization = \"x\"\n[otel.exporter.otlp-http]\n",
 		string(append(append([]byte{}, fixture...), []byte("[otel.exporter.otlp-http]\n")...)),
 	} {
@@ -94,5 +95,16 @@ func TestCodexTelemetryRange(t *testing.T) {
 		if !ok || !bytes.Equal(input[start:end], fixture) || !bytes.Equal(input[end:], suffix) {
 			t.Fatalf("trailing content was included in range: %q", suffix)
 		}
+	}
+}
+
+func TestCodexTelemetryRangeAcceptsDecodedKeysAndMultilineValues(t *testing.T) {
+	input := []byte("notes = [\r\n  \"keep\", # comment\r\n]\r\n\r\n[ \"otel\" . metrics_exporter . \"otlp-http\" ]\r\nendpoint = \"https://old.example/v1/metrics\"\r\nprotocol = \"binary\"\r\nheaders = { Authorization = \"old\" }\r\n\r\n[ otel . exporter . \"otlp-http\" ]\r\nendpoint = \"https://old.example/v1/logs\"\r\nprotocol = \"binary\"\r\nheaders = [\r\n  \"old\",\r\n]\r\n\r\n# trailing exporter note\r\n[projects.keep]\r\nvalue = 1\r\n")
+	start, end, ok := codexTelemetryRange(input)
+	if !ok {
+		t.Fatal("decoded table keys were not recognized")
+	}
+	if !bytes.HasPrefix(input[:start], []byte("notes = [\r\n")) || !bytes.HasPrefix(input[end:], []byte("\r\n# trailing exporter note\r\n")) {
+		t.Fatal("range did not preserve prefix or trailing comments")
 	}
 }

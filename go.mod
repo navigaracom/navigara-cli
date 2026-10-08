@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.1
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/term v0.2.2
+	github.com/pelletier/go-toml/v2 v2.2.4
 )
 
 require (
