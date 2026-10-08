@@ -14,6 +14,38 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestWizardFormHeaderFitsFortyColumns(t *testing.T) {
+	account := accountConfig{
+		Email:            "peto@navigara.com",
+		OrganizationName: "Navigara",
+		Host:             "https://navigara.com",
+	}
+	settings := wizardSettings{source: "all", email: account.Email, history: "all"}
+	selected, history := []string{"claude", "codex"}, settings.history
+	form := newWizardForm(account, []string{"claude", "codex"}, &settings, &selected, &history).WithWidth(40)
+	form.Init()
+	form.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+
+	view := ansi.Strip(form.View())
+	for _, line := range strings.Split(view, "\n") {
+		if width := ansi.StringWidth(line); width > 40 {
+			t.Fatalf("wizard line is %d columns wide: %q", width, line)
+		}
+	}
+	for _, value := range []string{
+		account.Email,
+		account.OrganizationName,
+		account.Host,
+		"All available history",
+		"Continue",
+		"Enter to continue; Shift+Tab to edit.",
+	} {
+		if !strings.Contains(view, value) {
+			t.Fatalf("narrow wizard hides %q: %s", value, view)
+		}
+	}
+}
+
 func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 	account := accountConfig{Email: "dev@example.com", OrganizationName: "Acme", Host: "https://app.example", IngestToken: "secret"}
 	for _, available := range [][]string{{"claude", "codex"}, {"claude"}, {"codex"}} {

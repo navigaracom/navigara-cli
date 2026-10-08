@@ -42,11 +42,9 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			Description("Enter to continue; Shift+Tab to edit.").
 			Affirmative("Continue").Negative("Cancel").Value(&continueSetup).
 			WithButtonAlignment(lipgloss.Left),
-	).Title("Connect this computer to Navigara").Description(fmt.Sprintf("Account       %q\nOrganization  %q\nInstance      %q", account.Email, account.OrganizationName, account.Host)))
+	).Title("  Connect this computer to Navigara").Description(fmt.Sprintf("  Account       %q\n  Organization  %q\n  Instance      %q", account.Email, account.OrganizationName, account.Host)))
 	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeCharm(isDark)
-		styles.Group.Title = styles.Group.Title.PaddingLeft(2)
-		styles.Group.Description = styles.Group.Description.PaddingLeft(2)
 		styles.FieldSeparator = lipgloss.NewStyle().SetString("\n")
 		styles.Focused.Base = styles.Focused.Base.BorderForeground(styles.Focused.Title.GetForeground())
 		styles.Focused.SelectedPrefix = styles.Focused.SelectedPrefix.SetString("[x] ")
