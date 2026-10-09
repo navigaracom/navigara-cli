@@ -77,7 +77,7 @@ func codexSettings(data []byte, endpoint, token string, replace bool) ([]byte, e
 	if err := validValue("token", token); err != nil {
 		return nil, err
 	}
-	start, end, err := managedRange(data)
+	start, end, err := tomlManagedRange(data)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,11 @@ func codexSettings(data []byte, endpoint, token string, replace bool) ([]byte, e
 			return nil, errors.New("Navigara managed TOML block is followed by root keys; move those keys before the block or into a table")
 		}
 	}
-	return spliceManaged(data, block, start, end), nil
+	out := spliceManaged(data, block, start, end)
+	if err := validateTOML(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func shellSettings(data []byte, email string) ([]byte, error) {
