@@ -203,3 +203,73 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestWizardReplacesExistingCodexTelemetryOnlyAfterFinalConsent(t *testing.T) {
+	for action, connect := range map[string]bool{"cancel": false, "connect": true} {
+		t.Run(action, func(t *testing.T) {
+			claude, codex := fixtureHomes(t)
+			home := filepath.Dir(claude)
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			t.Setenv("CLAUDE_CONFIG_DIR", claude)
+			t.Setenv("CODEX_HOME", codex)
+			t.Setenv("SHELL", "/bin/zsh")
+			t.Setenv("ZDOTDIR", home)
+			original, err := os.ReadFile("testdata/codex-existing-telemetry.toml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(codex, "config.toml")
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out, errs bytes.Buffer
+			requests := 0
+			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if !connect || !strings.Contains(out.String(), "Connect this computer to Navigara (y/n/edit)") {
+					t.Error("ingestion request before final consent")
+				}
+				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+				io.WriteString(w, `{}`)
+			}))
+			defer srv.Close()
+			final := "n"
+			if connect {
+				final = "y"
+			}
+			input := "n\ny\n\nskip\ny\ny\n" + final + "\n"
+			if code := runSetup(nil, strings.NewReader(input), &out, &errs); code != 0 {
+				t.Fatalf("wizard = %d: %s", code, &errs)
+			}
+			if !strings.Contains(out.String(), "existing telemetry will be replaced") {
+				t.Fatal("preview omitted replacement scope")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backups, err := filepath.Glob(filepath.Join(codex, ".navigara-backup-*", "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !connect {
+				if requests != 0 || len(backups) != 0 || !bytes.Equal(got, original) {
+					t.Fatal("cancel changed settings, created a backup, or contacted ingestion")
+				}
+				return
+			}
+			if requests == 0 || len(backups) != 1 || !bytes.Contains(got, []byte("test-secret")) || bytes.Contains(got, []byte("fixture-old")) {
+				t.Fatal("Connect did not refresh the credential and back up the original")
+			}
+			backup, err := os.ReadFile(backups[0])
+			if err != nil || !bytes.Equal(backup, original) {
+				t.Fatal("backup did not retain the original settings")
+			}
+			info, err := os.Stat(filepath.Dir(backups[0]))
+			if err != nil || info.Mode().Perm() != 0700 {
+				t.Fatal("backup directory is not private")
+			}
+		})
+	}
+}

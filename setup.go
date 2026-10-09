@@ -113,7 +113,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 			return false, err
 		}
 	}
-	files, selected, err := wizardPlans(opts, home, selected, p)
+	files, selected, err := wizardPlans(&opts, home, selected, p)
 	if err != nil {
 		return false, err
 	}
@@ -185,6 +185,9 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	fmt.Fprintf(p.out, "Keep new activity in sync: %s\n", strings.Join(names, ", "))
 	fmt.Fprintln(p.out, "Sync usage and activity; prompt text and tool contents stay disabled. History already received live will be skipped, including partially synced sessions.")
 	fmt.Fprintln(p.out, "Navigara will update your tool settings, save private backups, and store a credential for future syncing.")
+	if opts.replaceCodexTelemetry {
+		fmt.Fprintln(p.out, "Codex's existing telemetry will be replaced with Navigara. Your original settings will be saved in a private backup.")
+	}
 	action, err := wizardReview(window, p)
 	if err != nil {
 		return false, err
