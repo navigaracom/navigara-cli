@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 )
 
@@ -200,21 +199,20 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		return fmt.Errorf("settings update failed: %w", err)
 	}
 	keep = true
-	if p.interactive() {
-		var backups strings.Builder
-		for _, f := range files {
-			if f.backup != "" {
-				fmt.Fprintln(&backups, "Previous settings saved at:", wizardHeaderValue(f.backup))
-			}
+	backups := make([]string, 0, len(files))
+	for _, f := range files {
+		if f.backup != "" {
+			backups = append(backups, f.backup)
 		}
-		if backups.Len() > 0 {
-			p.status("Settings backup", backups.String())
+	}
+	if len(backups) > 0 && p.interactive() {
+		p.status("Settings backup", "Your previous settings are saved here:\n")
+		for _, backup := range backups {
+			fmt.Fprintf(p.out, "  %s\n", wizardHeaderValue(backup))
 		}
 	} else {
-		for _, f := range files {
-			if f.backup != "" {
-				fmt.Fprintln(p.out, "Previous settings saved at:", f.backup)
-			}
+		for _, backup := range backups {
+			fmt.Fprintln(p.out, "Previous settings saved at:", backup)
 		}
 	}
 	progress := newSetupProgress(p)
