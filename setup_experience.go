@@ -16,19 +16,6 @@ type wizardSettings struct {
 
 func newWizardForm(account accountConfig, available []string, settings *wizardSettings, selected *[]string, history *string) *huh.Form {
 	continueSetup := true
-	historyEnabled := settings.history != "skip"
-	historyOptions := func() []huh.Option[string] {
-		if !historyEnabled {
-			return []huh.Option[string]{huh.NewOption("Disabled — sync new activity only", *history)}
-		}
-		return []huh.Option[string]{
-			huh.NewOption("All available history", "all"),
-			huh.NewOption("Last 30 days", "30d"),
-			huh.NewOption("Last 7 days", "7d"),
-			huh.NewOption("Last 24 hours", "24h"),
-			huh.NewOption("Custom duration", "custom"),
-		}
-	}
 	tools := make([]huh.Option[string], 0, len(available))
 	for _, source := range available {
 		tools = append(tools, huh.NewOption(setupToolName(source), source))
@@ -44,17 +31,14 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			}),
 		huh.NewInput().Title("Your email").Prompt("  ").Value(&settings.email).
 			Validate(func(email string) error { return validEmail(strings.TrimSpace(email)) }),
-		huh.NewConfirm().Key("includeHistory").Title("Import past sessions").
-			Affirmative("Enabled").Negative("Disabled").Value(&historyEnabled).
-			WithButtonAlignment(lipgloss.Left),
-		huh.NewSelect[string]().Title("History window").
-			DescriptionFunc(func() string {
-				if !historyEnabled {
-					return "Used when history import is enabled."
-				}
-				return ""
-			}, &historyEnabled).
-			Options(historyOptions()...).OptionsFunc(historyOptions, &historyEnabled).Value(history).Height(6),
+		huh.NewSelect[string]().Title("Import past sessions").Options(
+			huh.NewOption("All available history", "all"),
+			huh.NewOption("Last 30 days", "30d"),
+			huh.NewOption("Last 7 days", "7d"),
+			huh.NewOption("Last 24 hours", "24h"),
+			huh.NewOption("Do not import history", "skip"),
+			huh.NewOption("Custom duration", "custom"),
+		).Value(history).Height(7),
 		huh.NewConfirm().Key("continue").Title("Close running sessions first.").
 			Description("Enter to connect; Shift+Tab to edit.").
 			Affirmative("Connect").Negative("Cancel").Value(&continueSetup).
@@ -78,7 +62,6 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 		styles.Blurred.FocusedButton = styles.Blurred.BlurredButton.Bold(true)
 		return styles
 	}))
-	form.NextField()
 	form.NextField()
 	form.NextField()
 	form.NextField()
@@ -115,9 +98,6 @@ func wizardPreferences(account accountConfig, available []string, p *setupInput)
 func editWizardPreferences(account accountConfig, available []string, settings wizardSettings, p *setupInput) (wizardSettings, error) {
 	selected := selectedTools(available, settings.source)
 	history, customHistory := settings.history, "7d"
-	if history == "skip" {
-		history = "all"
-	}
 	if !knownHistory(history) {
 		customHistory, history = history, "custom"
 	}
@@ -129,11 +109,7 @@ func editWizardPreferences(account accountConfig, available []string, settings w
 		if !form.GetBool("continue") {
 			return settings, errors.New("input cancelled; no further changes applied")
 		}
-		if !form.GetBool("includeHistory") {
-			settings.history = "skip"
-		} else {
-			settings.history = history
-		}
+		settings.history = history
 	} else {
 		selected = selected[:0]
 		for _, tool := range available {
