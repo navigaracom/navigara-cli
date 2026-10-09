@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type wizardSettings struct {
@@ -20,14 +22,14 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 	}
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().Title("Tools to connect").
-			Options(tools...).Value(selected).Height(len(available)+2).
+			Options(tools...).Value(selected).Height(len(available)+1).
 			Validate(func(selected []string) error {
 				if len(selected) == 0 {
 					return errors.New("select at least one tool")
 				}
 				return nil
 			}),
-		huh.NewInput().Title("Your email").Value(&settings.email).
+		huh.NewInput().Title("Your email").Prompt("  ").Value(&settings.email).
 			Validate(func(email string) error { return validEmail(strings.TrimSpace(email)) }),
 		huh.NewSelect[string]().Title("Import history").Options(
 			huh.NewOption("All available history", "all"),
@@ -36,23 +38,39 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			huh.NewOption("Last 24 hours", "24h"),
 			huh.NewOption("Only sync new activity", "skip"),
 			huh.NewOption("Custom duration", "custom"),
-		).Value(history).Height(2),
-		huh.NewConfirm().Key("continue").Title("Ready to preview your connection").
-			Description("Close running sessions first.\nEnter to continue; Shift+Tab to edit.").
-			Affirmative("Continue").Negative("Cancel").Value(&continueSetup),
-	).Title("Connect this computer to Navigara").Description(fmt.Sprintf("Account: %q\nOrg: %q\nInstance: %q", account.Email, account.OrganizationName, account.Host)))
+		).Value(history).Height(7),
+		huh.NewConfirm().Key("continue").Title("Close running sessions first.").
+			Description("Enter to continue; Shift+Tab to edit.").
+			Affirmative("Continue").Negative("Cancel").Value(&continueSetup).
+			WithButtonAlignment(lipgloss.Left),
+	).Title("  Connect this computer to Navigara").Description(fmt.Sprintf("  Account       %s\n  Organization  %s\n  Instance      %s", wizardHeaderValue(account.Email), wizardHeaderValue(account.OrganizationName), wizardHeaderValue(account.Host))))
 	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeCharm(isDark)
+		styles.FieldSeparator = lipgloss.NewStyle().SetString("\n")
+		styles.Focused.Base = styles.Focused.Base.BorderForeground(styles.Focused.Title.GetForeground())
 		styles.Focused.SelectedPrefix = styles.Focused.SelectedPrefix.SetString("[x] ")
 		styles.Focused.UnselectedPrefix = styles.Focused.UnselectedPrefix.SetString("[ ] ")
-		styles.Blurred.SelectedPrefix = styles.Blurred.SelectedPrefix.SetString("[x] ")
+		styles.Blurred.Title = styles.Blurred.Option.Bold(true)
+		styles.Blurred.SelectedOption = styles.Blurred.Option
+		styles.Blurred.SelectedPrefix = styles.Blurred.Option.SetString("[x] ")
 		styles.Blurred.UnselectedPrefix = styles.Blurred.UnselectedPrefix.SetString("[ ] ")
+		styles.Blurred.MultiSelectSelector = lipgloss.NewStyle().SetString("  ")
+		styles.Blurred.SelectSelector = styles.Blurred.Option.SetString("● ")
+		styles.Blurred.TextInput.Prompt = lipgloss.NewStyle()
+		styles.Blurred.TextInput.Cursor = lipgloss.NewStyle()
+		styles.Blurred.TextInput.Text = styles.Blurred.Option
+		styles.Blurred.FocusedButton = styles.Blurred.BlurredButton.Bold(true)
 		return styles
 	}))
 	form.NextField()
 	form.NextField()
 	form.NextField()
 	return form
+}
+
+func wizardHeaderValue(value string) string {
+	quoted := strconv.Quote(value)
+	return quoted[1 : len(quoted)-1]
 }
 
 func wizardPreferences(account accountConfig, available []string, p *setupInput) (wizardSettings, error) {

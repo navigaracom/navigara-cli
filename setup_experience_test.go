@@ -14,6 +14,55 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestWizardFormHeaderFitsFortyColumns(t *testing.T) {
+	account := accountConfig{
+		Email:            "dev@example.com",
+		OrganizationName: "Example Developer Organization",
+		Host:             "https://dev.navigara.com",
+	}
+	settings := wizardSettings{source: "all", email: account.Email, history: "all"}
+	selected, history := []string{"claude", "codex"}, settings.history
+	form := newWizardForm(account, []string{"claude", "codex"}, &settings, &selected, &history).WithWidth(40)
+	form.Init()
+	form.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+
+	view := ansi.Strip(form.View())
+	for _, line := range strings.Split(view, "\n") {
+		if width := ansi.StringWidth(line); width > 40 {
+			t.Fatalf("wizard line is %d columns wide: %q", width, line)
+		}
+	}
+	compactView := strings.Join(strings.Fields(view), "")
+	for _, value := range []string{
+		account.Email,
+		account.OrganizationName,
+		account.Host,
+		"All available history",
+		"Last 30 days",
+		"Last 7 days",
+		"Last 24 hours",
+		"Only sync new activity",
+		"Custom duration",
+		"[x] Claude Code",
+		"[x] Codex",
+		"Continue",
+		"Enter to continue; Shift+Tab to edit.",
+	} {
+		if !strings.Contains(compactView, strings.Join(strings.Fields(value), "")) {
+			t.Fatalf("narrow wizard hides %q: %s", value, view)
+		}
+	}
+	injected := account
+	injected.OrganizationName = "Acme\nForged prompt\x1b[2J"
+	form = newWizardForm(injected, []string{"claude", "codex"}, &settings, &selected, &history).WithWidth(72)
+	form.Init()
+	form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+	injectedView := ansi.Strip(form.View())
+	if strings.Contains(injectedView, "\x1b") || strings.Contains(injectedView, "\nForged prompt") || !strings.Contains(injectedView, `Acme\nForged prompt\x1b[2J`) {
+		t.Fatalf("organization value altered the form: %q", injectedView)
+	}
+}
+
 func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 	account := accountConfig{Email: "dev@example.com", OrganizationName: "Acme", Host: "https://app.example", IngestToken: "secret"}
 	for _, available := range [][]string{{"claude", "codex"}, {"claude"}, {"codex"}} {
@@ -28,8 +77,16 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 				t.Fatalf("detected tool is invisible: %s", view)
 			}
 		}
-		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, `"dev@example.com"`) || !strings.Contains(view, `"Acme"`) || !strings.Contains(view, `"https://app.example"`) || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
+		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "Acme") || !strings.Contains(view, "https://app.example") || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
 			t.Fatalf("default account or history is invisible: %s", view)
+		}
+		if strings.Contains(view, "> ") || !strings.Contains(view, "● All available history") {
+			t.Fatalf("inactive fields look focused or lose their selection: %s", view)
+		}
+		for _, label := range []string{"Last 30 days", "Last 7 days", "Last 24 hours", "Only sync new activity", "Custom duration"} {
+			if !strings.Contains(view, label) {
+				t.Fatalf("history choice is hidden: %s", view)
+			}
 		}
 		narrow := newWizardForm(account, available, &settings, &selected, &history).WithWidth(40)
 		narrow.Init()
