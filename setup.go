@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -109,7 +110,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		return err
 	}
 	if len(selected) == 0 {
-		fmt.Fprintln(p.out, "Cancelled. Your tool settings have not changed.")
+		p.cancelled()
 		return nil
 	}
 	opts.source = setupSource(selected)
@@ -121,7 +122,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		return err
 	}
 	if !yes {
-		fmt.Fprintln(p.out, "Cancelled. Your tool settings have not changed.")
+		p.cancelled()
 		return nil
 	}
 	opts.until = time.Now().UTC()
@@ -176,10 +177,10 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		return err
 	}
 	if history != nil {
-		fmt.Fprint(p.out, historyOut.String())
+		p.status("History prepared", historyOut.String())
 		fmt.Fprint(stderr, historyErr.String())
 	}
-	fmt.Fprintln(p.out, "Connecting your tools...")
+	p.status("New activity sync", "Connecting your tools...\n")
 	// Keep the original snapshots as the concurrency boundary while replacing
 	// only token-dependent output after the receiver capability check.
 	for _, f := range files {
@@ -199,9 +200,21 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		return fmt.Errorf("settings update failed: %w", err)
 	}
 	keep = true
-	for _, f := range files {
-		if f.backup != "" {
-			fmt.Fprintln(p.out, "Previous settings saved at:", f.backup)
+	if p.interactive() {
+		var backups strings.Builder
+		for _, f := range files {
+			if f.backup != "" {
+				fmt.Fprintln(&backups, "Previous settings saved at:", wizardHeaderValue(f.backup))
+			}
+		}
+		if backups.Len() > 0 {
+			p.status("Settings backup", backups.String())
+		}
+	} else {
+		for _, f := range files {
+			if f.backup != "" {
+				fmt.Fprintln(p.out, "Previous settings saved at:", f.backup)
+			}
 		}
 	}
 	progress := newSetupProgress(p)
@@ -209,8 +222,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		progress.stop()
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
-	fmt.Fprintf(p.out, "\nConnected. Navigara accepted %d upload batches.\nNew activity syncing is configured, not yet verified.\n", s.sent)
-	fmt.Fprintln(p.out, "Open a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.")
+	p.status("Setup complete", fmt.Sprintf("\nConnected. Navigara accepted %d upload batches.\nNew activity syncing is configured, not yet verified.\nOpen a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.\n", s.sent))
 	return nil
 }
 
