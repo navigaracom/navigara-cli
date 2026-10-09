@@ -208,7 +208,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	if len(backups) > 0 && p.interactive() {
 		p.status("Settings backup", "Your previous settings are saved here:\n")
 		for _, backup := range backups {
-			fmt.Fprintf(p.out, "  %s\n", wizardHeaderValue(backup))
+			fmt.Fprintf(p.out, "  %s\n", wizardPathValue(backup))
 		}
 	} else {
 		for _, backup := range backups {

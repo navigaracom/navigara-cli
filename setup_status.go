@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/term"
@@ -35,6 +37,24 @@ func wizardStatusWidth(p *setupInput) int {
 		width = min(width, max(wizardStatusInset+1, columns-1))
 	}
 	return width
+}
+
+func wizardPathValue(value string) string {
+	var escaped strings.Builder
+	escaped.Grow(len(value))
+	for len(value) > 0 {
+		r, size := utf8.DecodeRuneInString(value)
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&escaped, `\x%02X`, value[0])
+		} else if strconv.IsGraphic(r) {
+			escaped.WriteString(value[:size])
+		} else {
+			quoted := strconv.QuoteRune(r)
+			escaped.WriteString(quoted[1 : len(quoted)-1])
+		}
+		value = value[size:]
+	}
+	return escaped.String()
 }
 
 func (p *setupInput) cancelled() {
