@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -146,17 +147,37 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		}
 	}()
 	opts.output = filepath.Join(dir, "payload")
+	var history *setupHistoryProgress
+	var historyOut, historyErr bytes.Buffer
 	if window != "skip" {
-		fmt.Fprintln(p.out, "Preparing session history...")
 		opts.humanSummary = true
-		if exportSessions(opts, p.out, stderr) != 0 {
+		history = newSetupHistoryProgress(p)
+		history.discovering()
+		if exportSessionsWithProgress(opts, &historyOut, &historyErr, history.processed) != 0 {
+			history.stop()
+			fmt.Fprint(p.out, historyOut.String())
+			fmt.Fprint(stderr, historyErr.String())
 			return errors.New("could not prepare backfill; no configuration changed")
 		}
 	} else if err = os.Mkdir(opts.output, 0700); err != nil {
 		return err
 	}
-	if err = saveSetupBatches(opts.output, opts.url, c.OrganizationID); err != nil {
+	if history != nil {
+		history.finalizing()
+	}
+	err = saveSetupBatches(opts.output, opts.url, c.OrganizationID)
+	if history != nil {
+		history.stop()
+	}
+	if err != nil {
+		if history != nil {
+			fmt.Fprint(stderr, historyErr.String())
+		}
 		return err
+	}
+	if history != nil {
+		fmt.Fprint(p.out, historyOut.String())
+		fmt.Fprint(stderr, historyErr.String())
 	}
 	fmt.Fprintln(p.out, "Connecting your tools...")
 	// Keep the original snapshots as the concurrency boundary while replacing
