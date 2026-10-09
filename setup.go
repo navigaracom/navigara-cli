@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 )
 
@@ -89,50 +88,41 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	if err != nil {
 		return err
 	}
-	for {
-		edit, err := setupAttempt(ctx, c, opts, home, &preferences, p, stderr)
-		if err != nil || !edit {
-			return err
-		}
-		preferences, err = editWizardPreferences(c, available, preferences, p)
-		if err != nil {
-			return err
-		}
-	}
+	return setupAttempt(ctx, c, opts, home, preferences, p, stderr)
 }
 
-func setupAttempt(ctx context.Context, c accountConfig, opts options, home string, preferences *wizardSettings, p *setupInput, stderr io.Writer) (edit bool, err error) {
+func setupAttempt(ctx context.Context, c accountConfig, opts options, home string, preferences wizardSettings, p *setupInput, stderr io.Writer) error {
 	opts.source, opts.email = preferences.source, preferences.email
 	selected := selectedTools([]string{"claude", "codex"}, preferences.source)
 	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
 	window := preferences.history
 	var last time.Duration
 	if window != "all" && window != "skip" {
+		var err error
 		last, err = parseLast(window)
 		if err != nil {
-			return false, err
+			return err
 		}
 	}
-	files, selected, err := wizardPlans(opts, home, selected, p)
+	files, selected, err := wizardPlans(&opts, home, selected, p)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if len(selected) == 0 {
 		fmt.Fprintln(p.out, "Cancelled. Your tool settings have not changed.")
-		return false, nil
+		return nil
 	}
 	opts.source = setupSource(selected)
-	preferences.source = opts.source
 	yes := true
 	if !p.interactive() {
 		yes, err = p.yes("Finish and close your running sessions so we can import complete history. Continue")
 	}
 	if err != nil {
-		return false, err
+		return err
 	}
 	if !yes {
 		fmt.Fprintln(p.out, "Cancelled. Your tool settings have not changed.")
-		return false, nil
+		return nil
 	}
 	opts.until = time.Now().UTC()
 	if last > 0 {
@@ -140,15 +130,15 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	}
 	state, err := os.UserConfigDir()
 	if err != nil {
-		return false, err
+		return err
 	}
 	root := filepath.Join(state, "navigara", "backfills")
 	if err = os.MkdirAll(root, 0700); err != nil {
-		return false, err
+		return err
 	}
 	dir, err := os.MkdirTemp(root, "setup-")
 	if err != nil {
-		return false, err
+		return err
 	}
 	keep := false
 	defer func() {
@@ -157,62 +147,56 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		}
 	}()
 	opts.output = filepath.Join(dir, "payload")
-	var summary bytes.Buffer
+	var history *setupHistoryProgress
+	var historyOut, historyErr bytes.Buffer
 	if window != "skip" {
-		fmt.Fprintln(p.out, "Preparing your session history...")
 		opts.humanSummary = true
-		if exportSessions(opts, &summary, stderr) != 0 {
-			return false, errors.New("could not prepare backfill; no configuration changed")
+		history = newSetupHistoryProgress(p)
+		history.discovering()
+		if exportSessionsWithProgress(opts, &historyOut, &historyErr, history.processed) != 0 {
+			history.stop()
+			fmt.Fprint(p.out, historyOut.String())
+			fmt.Fprint(stderr, historyErr.String())
+			return errors.New("could not prepare backfill; no configuration changed")
 		}
 	} else if err = os.Mkdir(opts.output, 0700); err != nil {
-		return false, err
+		return err
 	}
-	if err = saveSetupBatches(opts.output, opts.url, c.OrganizationID); err != nil {
-		return false, err
+	if history != nil {
+		history.finalizing()
 	}
-	fmt.Fprintln(p.out, "\nReview your connection")
-	fmt.Fprintf(p.out, "Organization: %q\nActivity belongs to: %s\n", c.OrganizationName, opts.email)
-	if window == "skip" {
-		fmt.Fprintln(p.out, "History: none; only new activity will be synced.")
-	} else {
-		fmt.Fprintf(p.out, "History: %s\n", window)
-		fmt.Fprint(p.out, summary.String())
+	err = saveSetupBatches(opts.output, opts.url, c.OrganizationID)
+	if history != nil {
+		history.stop()
 	}
-	names := make([]string, len(selected))
-	for i, tool := range selected {
-		names[i] = setupToolName(tool)
-	}
-	fmt.Fprintf(p.out, "Keep new activity in sync: %s\n", strings.Join(names, ", "))
-	fmt.Fprintln(p.out, "Sync usage and activity; prompt text and tool contents stay disabled. History already received live will be skipped, including partially synced sessions.")
-	fmt.Fprintln(p.out, "Navigara will update your tool settings, save private backups, and store a credential for future syncing.")
-	action, err := wizardReview(window, p)
 	if err != nil {
-		return false, err
+		if history != nil {
+			fmt.Fprint(stderr, historyErr.String())
+		}
+		return err
 	}
-	if action == wizardEdit {
-		return true, nil
+	if history != nil {
+		fmt.Fprint(p.out, historyOut.String())
+		fmt.Fprint(stderr, historyErr.String())
 	}
-	if action == wizardCancel {
-		fmt.Fprintln(p.out, "Cancelled. No tool settings changed or session data sent.")
-		return false, nil
-	}
-	// Keep the preview's snapshots as the concurrency boundary while replacing
-	// only its token-dependent output after the user consents.
+	fmt.Fprintln(p.out, "Connecting your tools...")
+	// Keep the original snapshots as the concurrency boundary while replacing
+	// only token-dependent output after the receiver capability check.
 	for _, f := range files {
 		if err := f.check(); err != nil {
-			return false, err
+			return err
 		}
 	}
 	if err = ensureIngestion(ctx, &c); err != nil {
-		return false, err
+		return err
 	}
 	opts.token = c.IngestToken
 	if err = refreshSetupPlans(files, opts, home); err != nil {
-		return false, err
+		return err
 	}
 	s := newSender(opts.url, opts.token)
 	if err = applySetupFiles(files, s.checkSetup); err != nil {
-		return false, fmt.Errorf("settings update failed: %w", err)
+		return fmt.Errorf("settings update failed: %w", err)
 	}
 	keep = true
 	for _, f := range files {
@@ -220,12 +204,14 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 			fmt.Fprintln(p.out, "Previous settings saved at:", f.backup)
 		}
 	}
-	if err = sendSetupBatches(opts.output, s); err != nil {
-		return false, fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
+	progress := newSetupProgress(p)
+	if err = sendSetupBatches(opts.output, s, progress.upload); err != nil {
+		progress.stop()
+		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
 	fmt.Fprintf(p.out, "\nConnected. Navigara accepted %d upload batches.\nNew activity syncing is configured, not yet verified.\n", s.sent)
 	fmt.Fprintln(p.out, "Open a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.")
-	return false, nil
+	return nil
 }
 
 func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func(string) error) error {
@@ -279,7 +265,9 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 	if err = s.checkSetup(); err != nil {
 		return err
 	}
-	if err = sendSetupBatches(dir, s); err != nil {
+	progress := newSetupProgress(p)
+	if err = sendSetupBatches(dir, s, progress.upload); err != nil {
+		progress.stop()
 		return err
 	}
 	fmt.Fprintf(p.out, "Receiver accepted %d batches; session deduplication handles repeated data.\n", s.sent)

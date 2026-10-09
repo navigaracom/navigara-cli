@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -76,22 +77,36 @@ func TestClaudeSettingsRejectsConflictingOrContentTelemetry(t *testing.T) {
 
 func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	input := []byte("model = \"o3\"\n\n# comment\n")
-	first, err := codexSettings(input, testEndpoint, "a\"b")
+	first, err := codexSettings(input, testEndpoint, "a\"b", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(first, []byte("model = \"o3\"\n\n# comment\n")) || !bytes.Contains(first, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/metrics"`)) || !bytes.Contains(first, []byte(`Authorization = "Bearer a\"b"`)) {
 		t.Fatalf("missing expected content:\n%s", first)
 	}
-	second, err := codexSettings(first, testEndpoint, "new")
+	second, err := codexSettings(first, testEndpoint, "new", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Count(second, []byte("# >>> navigara telemetry >>>")) != 1 || bytes.Contains(second, []byte(`Bearer a\"b`)) || !bytes.Contains(second, []byte(`Bearer new`)) {
 		t.Fatalf("managed block was not replaced:\n%s", second)
 	}
+	suffix := []byte("\n# keep this separation\n[projects.keep]\ntrust_level = \"trusted\"\n")
+	withSuffix := append(append([]byte(nil), second...), suffix...)
+	updated, err := codexSettings(withSuffix, testEndpoint, "next", false)
+	if err != nil || !bytes.HasSuffix(updated, suffix) {
+		t.Fatalf("managed update changed its suffix: %q, %v", updated, err)
+	}
+	crlfPrefix := []byte("model = \"o3\"\r\n\r\n# comment\r\n")
+	crlfSuffix := []byte("\r\n# keep this CRLF separation\r\n[projects.keep]\r\ntrust_level = \"trusted\"\r\n")
+	crlfManaged := bytes.ReplaceAll(first, []byte("\n"), []byte("\r\n"))
+	crlfInput := append(append([]byte(nil), crlfManaged...), crlfSuffix...)
+	crlfUpdated, err := codexSettings(crlfInput, testEndpoint, "crlf-token", false)
+	if err != nil || !bytes.HasPrefix(crlfUpdated, crlfPrefix) || !bytes.HasSuffix(crlfUpdated, crlfSuffix) || bytes.Count(crlfUpdated, []byte(telemetryBegin)) != 1 || !bytes.Contains(crlfUpdated, []byte("Bearer crlf-token")) {
+		t.Fatalf("CRLF managed update changed surrounding content: %q, %v", crlfUpdated, err)
+	}
 	withRootSuffix := append(append([]byte(nil), first...), []byte("model = \"other\"\n")...)
-	if _, err := codexSettings(withRootSuffix, testEndpoint, "new"); err == nil {
+	if _, err := codexSettings(withRootSuffix, testEndpoint, "new", false); err == nil {
 		t.Fatal("managed block followed by root keys succeeded")
 	}
 }
@@ -104,12 +119,47 @@ func TestCodexSettingsRejectsOtherOTELAndMalformedMarkers(t *testing.T) {
 		[]byte("'otel' = \"foreign\"\n"),
 		[]byte("note = \"\"\"unterminated\n"),
 		[]byte("model = \"x\" # '''\n[otel.metrics_exporter.otlp-http]\n"),
+		[]byte("model = \"x\"\nmodel = \"duplicate\"\n"),
 		[]byte("# >>> navigara telemetry >>>\n"),
 		[]byte("# <<< navigara telemetry <<<\n"),
 	} {
-		if _, err := codexSettings(input, testEndpoint, "token"); err == nil {
+		if _, err := codexSettings(input, testEndpoint, "token", false); err == nil {
 			t.Errorf("codexSettings(%q) succeeded", input)
 		}
+	}
+}
+
+func TestCodexSettingsPreservesMarkerTextInValues(t *testing.T) {
+	input := []byte("note = \"# >>> navigara telemetry >>>\"\n")
+	got, err := codexSettings(input, testEndpoint, "token", false)
+	if err != nil || !bytes.HasPrefix(got, input) {
+		t.Fatalf("marker text in a value was not preserved: %q, %v", got, err)
+	}
+}
+
+func TestCodexSettingsRequiresConsentToReplaceExistingExporters(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/codex-existing-telemetry.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, suffix := []byte("model = \"fixture\"\n"), []byte("[mcp_servers.example]\ncommand = \"example\"\n")
+	input := append(append(append([]byte(nil), prefix...), fixture...), suffix...)
+	if _, err := codexSettings(input, testEndpoint, "new", false); !errors.Is(err, errCodexTelemetry) {
+		t.Fatalf("expected a replaceable conflict, got %v", err)
+	}
+	got, err := codexSettings(input, testEndpoint, "new", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(got, prefix) || !bytes.HasSuffix(got, suffix) || bytes.Contains(got, []byte("fixture-old")) || bytes.Count(got, []byte(telemetryBegin)) != 1 {
+		t.Fatal("replacement changed unrelated settings or retained the old exporters")
+	}
+	if _, err := codexSettings(append(got, fixture...), testEndpoint, "next", true); err == nil {
+		t.Fatal("mixed managed and unmanaged telemetry was accepted")
+	}
+	foreignRoot := append([]byte("otel.environment = \"dev\"\n"), fixture...)
+	if got, err := codexSettings(foreignRoot, testEndpoint, "new", true); err == nil || got != nil {
+		t.Fatalf("legacy exporters with root OTEL settings were accepted: %q, %v", got, err)
 	}
 }
 

@@ -183,7 +183,7 @@ func TestSetupDeclineDoesNotMintIngestionKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	code := runSetup(nil, strings.NewReader("y\nn\n\nskip\ny\nn\n"), &out, &errs)
+	code := runSetup(nil, strings.NewReader("y\nn\n\nskip\nn\n"), &out, &errs)
 	if code != 0 || posts != 0 {
 		t.Fatalf("decline: %d %s", code, &errs)
 	}
@@ -330,7 +330,7 @@ func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	concurrent := []byte("{\"concurrent\":true}\n")
-	out := &mutateSetupWriter{match: "Connect this computer to Navigara (y/n/edit)", mutate: func() {
+	out := &mutateSetupWriter{match: "Connecting your tools...", mutate: func() {
 		if err := os.WriteFile(settings, concurrent, 0600); err != nil {
 			t.Fatal(err)
 		}

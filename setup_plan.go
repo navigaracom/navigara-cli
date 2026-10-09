@@ -40,7 +40,9 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		}
 	}
 	if opts.source == "all" || opts.source == "codex" {
-		if err := add(filepath.Join(opts.codexHome, "config.toml"), func(b []byte) ([]byte, error) { return codexSettings(b, endpoint, opts.token) }); err != nil {
+		if err := add(filepath.Join(opts.codexHome, "config.toml"), func(b []byte) ([]byte, error) {
+			return codexSettings(b, endpoint, opts.token, opts.replaceCodexTelemetry)
+		}); err != nil {
 			return nil, err
 		}
 		var profiles []string

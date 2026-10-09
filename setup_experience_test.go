@@ -14,6 +14,55 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestWizardFormHeaderFitsFortyColumns(t *testing.T) {
+	account := accountConfig{
+		Email:            "dev@example.com",
+		OrganizationName: "Example Developer Organization",
+		Host:             "https://dev.navigara.com",
+	}
+	settings := wizardSettings{source: "all", email: account.Email, history: "all"}
+	selected, history := []string{"claude", "codex"}, settings.history
+	form := newWizardForm(account, []string{"claude", "codex"}, &settings, &selected, &history).WithWidth(40)
+	form.Init()
+	form.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+
+	view := ansi.Strip(form.View())
+	for _, line := range strings.Split(view, "\n") {
+		if width := ansi.StringWidth(line); width > 40 {
+			t.Fatalf("wizard line is %d columns wide: %q", width, line)
+		}
+	}
+	compactView := strings.Join(strings.Fields(view), "")
+	for _, value := range []string{
+		account.Email,
+		account.OrganizationName,
+		account.Host,
+		"All available history",
+		"Last 30 days",
+		"Last 7 days",
+		"Last 24 hours",
+		"Only sync new activity",
+		"Custom duration",
+		"[x] Claude Code",
+		"[x] Codex",
+		"Continue",
+		"Enter to continue; Shift+Tab to edit.",
+	} {
+		if !strings.Contains(compactView, strings.Join(strings.Fields(value), "")) {
+			t.Fatalf("narrow wizard hides %q: %s", value, view)
+		}
+	}
+	injected := account
+	injected.OrganizationName = "Acme\nForged prompt\x1b[2J"
+	form = newWizardForm(injected, []string{"claude", "codex"}, &settings, &selected, &history).WithWidth(72)
+	form.Init()
+	form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+	injectedView := ansi.Strip(form.View())
+	if strings.Contains(injectedView, "\x1b") || strings.Contains(injectedView, "\nForged prompt") || !strings.Contains(injectedView, `Acme\nForged prompt\x1b[2J`) {
+		t.Fatalf("organization value altered the form: %q", injectedView)
+	}
+}
+
 func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 	account := accountConfig{Email: "dev@example.com", OrganizationName: "Acme", Host: "https://app.example", IngestToken: "secret"}
 	for _, available := range [][]string{{"claude", "codex"}, {"claude"}, {"codex"}} {
@@ -28,8 +77,16 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 				t.Fatalf("detected tool is invisible: %s", view)
 			}
 		}
-		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, `"dev@example.com"`) || !strings.Contains(view, `"Acme"`) || !strings.Contains(view, `"https://app.example"`) || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
+		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "Acme") || !strings.Contains(view, "https://app.example") || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
 			t.Fatalf("default account or history is invisible: %s", view)
+		}
+		if strings.Contains(view, "> ") || !strings.Contains(view, "● All available history") {
+			t.Fatalf("inactive fields look focused or lose their selection: %s", view)
+		}
+		for _, label := range []string{"Last 30 days", "Last 7 days", "Last 24 hours", "Only sync new activity", "Custom duration"} {
+			if !strings.Contains(view, label) {
+				t.Fatalf("history choice is hidden: %s", view)
+			}
 		}
 		narrow := newWizardForm(account, available, &settings, &selected, &history).WithWidth(40)
 		narrow.Init()
@@ -135,7 +192,7 @@ func TestOrganizationNamesCannotAlterTerminalChoices(t *testing.T) {
 func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 	for _, action := range []string{"cancel", "skip", "connect"} {
 		t.Run(action, func(t *testing.T) {
-			skip, apply := action != "cancel", action == "connect"
+			apply := action == "connect"
 			claude, codex := fixtureHomes(t)
 			home := filepath.Dir(claude)
 			t.Setenv("HOME", home)
@@ -173,23 +230,24 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 				io.WriteString(w, `{}`)
 			}))
 			defer srv.Close()
-			answer := "n"
-			if skip {
-				answer = "y"
+			skip, closeSessions := "n", "n"
+			if action != "cancel" {
+				skip = "y"
 			}
-			consent := "n"
-			if apply {
-				consent = "y"
+			if action == "connect" {
+				closeSessions = "y"
+			}
+			input := "y\ny\n\nall\n" + skip + "\n"
+			if action != "cancel" {
+				input += closeSessions + "\n"
 			}
 			var out, errs bytes.Buffer
-			code := runSetup(nil, strings.NewReader("y\ny\n\nall\n"+answer+"\ny\n"+consent+"\n"), &out, &errs)
+			code := runSetup(nil, strings.NewReader(input), &out, &errs)
 			if code != 0 {
 				t.Fatalf("wizard failed rather than offering recovery: %d %s", code, &errs)
 			}
-			if skip && (!strings.Contains(out.String(), "2 sessions") || !strings.Contains(out.String(), "Keep new activity in sync: Claude Code")) {
-				t.Fatalf("preview did not reflect the remaining tool: %s", &out)
-			}
-			if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, existing) {
+			got, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(got, existing) {
 				t.Fatalf("conflicting settings changed: %q %v", got, err)
 			}
 			data, err := os.ReadFile(filepath.Join(claude, "settings.json"))
@@ -199,6 +257,73 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 				}
 			} else if !os.IsNotExist(err) || posts != 0 {
 				t.Fatal("cancel/decline changed settings or contacted ingestion")
+			}
+		})
+	}
+}
+
+func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
+	for action, connect := range map[string]bool{"cancel": false, "connect": true} {
+		t.Run(action, func(t *testing.T) {
+			claude, codex := fixtureHomes(t)
+			home := filepath.Dir(claude)
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			t.Setenv("CLAUDE_CONFIG_DIR", claude)
+			t.Setenv("CODEX_HOME", codex)
+			t.Setenv("SHELL", "/bin/zsh")
+			t.Setenv("ZDOTDIR", home)
+			original, err := os.ReadFile("testdata/codex-existing-telemetry.toml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(codex, "config.toml")
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out, errs bytes.Buffer
+			requests := 0
+			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if !connect || !strings.Contains(out.String(), "Connecting your tools...") {
+					t.Error("ingestion request before confirmation")
+				}
+				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+				io.WriteString(w, `{}`)
+			}))
+			defer srv.Close()
+			final := "n"
+			if connect {
+				final = "y"
+			}
+			input := "n\ny\n\nskip\ny\n" + final + "\n"
+			if code := runSetup(nil, strings.NewReader(input), &out, &errs); code != 0 {
+				t.Fatalf("wizard = %d: %s", code, &errs)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backups, err := filepath.Glob(filepath.Join(codex, ".navigara-backup-*", "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !connect {
+				if requests != 0 || len(backups) != 0 || !bytes.Equal(got, original) {
+					t.Fatal("cancel changed settings, created a backup, or contacted ingestion")
+				}
+				return
+			}
+			if requests == 0 || len(backups) != 1 || !bytes.Contains(got, []byte("test-secret")) || bytes.Contains(got, []byte("fixture-old")) {
+				t.Fatal("Connect did not refresh the credential and back up the original")
+			}
+			backup, err := os.ReadFile(backups[0])
+			if err != nil || !bytes.Equal(backup, original) {
+				t.Fatal("backup did not retain the original settings")
+			}
+			info, err := os.Stat(filepath.Dir(backups[0]))
+			if err != nil || info.Mode().Perm() != 0700 {
+				t.Fatal("backup directory is not private")
 			}
 		})
 	}

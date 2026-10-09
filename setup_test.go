@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestSetupPreviewConsentAndNativeStreaming(t *testing.T) {
+func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 	for _, apply := range []bool{false, true} {
 		t.Run(map[bool]string{false: "decline", true: "apply"}[apply], func(t *testing.T) {
 			claudeHome, codexHome := fixtureHomes(t)
@@ -40,7 +40,7 @@ func TestSetupPreviewConsentAndNativeStreaming(t *testing.T) {
 			if apply {
 				answer = "y"
 			}
-			input := strings.Join([]string{"y", "y", "dev@example.com", "all", "y", answer, ""}, "\n")
+			input := strings.Join([]string{"y", "y", "dev@example.com", "all", answer, ""}, "\n")
 			var out, errs bytes.Buffer
 			code := runSetup(nil, strings.NewReader(input), &out, &errs)
 			if code != 0 {
@@ -48,6 +48,9 @@ func TestSetupPreviewConsentAndNativeStreaming(t *testing.T) {
 			}
 			if strings.Contains(out.String()+errs.String(), "test-secret") {
 				t.Fatal("token leaked")
+			}
+			if strings.Contains(out.String(), "Review your connection") || strings.Contains(out.String(), "y/n/edit") {
+				t.Fatalf("wizard retained a second approval screen: %s", out.String())
 			}
 			data, _ := os.ReadFile(filepath.Join(claudeHome, "settings.json"))
 			if !strings.Contains(string(data), "keep-me") {
@@ -61,6 +64,9 @@ func TestSetupPreviewConsentAndNativeStreaming(t *testing.T) {
 			}
 			if requests < 2 || !strings.Contains(string(data), "test-secret") {
 				t.Fatal("no upload or missing native auth")
+			}
+			if !strings.Contains(out.String(), "Connecting your tools...") {
+				t.Fatal("Continue did not begin direct setup")
 			}
 			for _, path := range []string{filepath.Join(codexHome, "config.toml"), filepath.Join(home, ".zshrc")} {
 				data, err := os.ReadFile(path)

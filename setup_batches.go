@@ -105,15 +105,18 @@ func validBatch(data []byte) bool {
 	return err == nil && len(plain) <= maxOTLPBody && json.Valid(plain)
 }
 
-func sendSetupBatches(dir string, s *sender) error {
+func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) error {
 	m, err := loadSetupBatches(dir)
 	if err != nil {
 		return err
 	}
 	if s.base != otlpBase(m.URL) {
-		return errors.New("resume destination differs from preview")
+		return errors.New("resume destination differs from frozen upload")
 	}
-	for _, b := range m.Batches {
+	if uploaded != nil {
+		uploaded(0, len(m.Batches))
+	}
+	for done, b := range m.Batches {
 		data, err := readBatch(dir, b.Name)
 		if err != nil {
 			return err
@@ -125,6 +128,9 @@ func sendSetupBatches(dir string, s *sender) error {
 		kind, _, _ := strings.Cut(b.Name, "-")
 		if err := s.post(telemetry.Body{Path: "/v1/" + kind, Data: data}); err != nil {
 			return err
+		}
+		if uploaded != nil {
+			uploaded(done+1, len(m.Batches))
 		}
 	}
 	return nil

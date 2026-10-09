@@ -21,6 +21,12 @@ import (
 // exportSessions rebuilds each selected session's telemetry, writes the OTLP bodies and,
 // with --send, posts them to the Navigara OTLP endpoint.
 func exportSessions(opts options, stdout, stderr io.Writer) int {
+	return exportSessionsWithProgress(opts, stdout, stderr, nil)
+}
+
+// exportSessionsWithProgress reports discovered and inspected sessions without
+// affecting export order or output.
+func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress func(done, total int)) int {
 	var sender *sender
 	if opts.send {
 		if err := prepareUploadAccount(context.Background(), &opts); err != nil {
@@ -146,6 +152,12 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		}
 		return jobs[i].id < jobs[j].id
 	})
+	report := func(done int) {
+		if progress != nil {
+			progress(done, len(jobs))
+		}
+	}
+	report(0)
 
 	if err := os.Mkdir(opts.output, 0700); err != nil {
 		fmt.Fprintf(stderr, "navigara: output %q: %v\n", opts.output, err)
@@ -156,15 +168,17 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 	exported, failed, events, points, bodies := 0, 0, 0, 0, 0
 	estimated, partial := 0, 0
 	var lines []string
-	for _, j := range jobs {
+	for index, j := range jobs {
 		s, err := j.build()
 		if err != nil {
 			failed++
 			fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
+			report(index + 1)
 			continue
 		}
 		s.Within(opts.since, opts.until)
 		if len(s.Events) == 0 && len(s.Points) == 0 {
+			report(index + 1)
 			continue
 		}
 		encoded, err := telemetry.Encode([]*telemetry.Session{s})
@@ -202,6 +216,7 @@ func exportSessions(opts options, stdout, stderr io.Writer) int {
 		if len(s.Missing) > 0 {
 			partial++
 		}
+		report(index + 1)
 		if opts.humanSummary {
 			continue
 		}

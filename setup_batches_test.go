@@ -69,10 +69,10 @@ func TestSetupBatchesRetryExactBodiesAndNoRescan(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newSender(srv.URL+"/api", "secret-token")
-	if err := sendSetupBatches(d, s); err != nil {
+	if err := sendSetupBatches(d, s, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := sendSetupBatches(d, s); err != nil {
+	if err := sendSetupBatches(d, s, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 4 || got[0] != got[2] || got[1] != got[3] {
@@ -102,7 +102,7 @@ func TestSetupBatchesRejectInvalidBeforeRequest(t *testing.T) {
 			defer srv.Close()
 			d := writeBatchFixture(t, srv.URL+"/api")
 			tc.change(d)
-			if err := sendSetupBatches(d, newSender(srv.URL+"/api", "secret")); err == nil {
+			if err := sendSetupBatches(d, newSender(srv.URL+"/api", "secret"), nil); err == nil {
 				t.Fatal("accepted invalid batch")
 			}
 			if requests != 0 {
@@ -115,7 +115,7 @@ func TestSetupBatchesRejectInvalidBeforeRequest(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++ }))
 		defer srv.Close()
 		d := writeBatchFixture(t, srv.URL+"/api")
-		if err := sendSetupBatches(d, newSender(srv.URL+"/other", "secret")); err == nil {
+		if err := sendSetupBatches(d, newSender(srv.URL+"/other", "secret"), nil); err == nil {
 			t.Fatal("accepted destination mismatch")
 		}
 		if requests != 0 {
@@ -141,6 +141,30 @@ func mustGzip(t *testing.T, body string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestSetupBatchesReportOnlyAcceptedProgress(t *testing.T) {
+	accepted := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if accepted == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		accepted++
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+	d := writeBatchFixture(t, srv.URL+"/api")
+	var progress [][2]int
+	err := sendSetupBatches(d, newSender(srv.URL+"/api", "secret"), func(done, total int) {
+		progress = append(progress, [2]int{done, total})
+	})
+	if err == nil {
+		t.Fatal("accepted a rejected batch")
+	}
+	if !reflect.DeepEqual(progress, [][2]int{{0, 2}, {1, 2}}) {
+		t.Fatalf("progress = %#v", progress)
+	}
 }
 
 func mustRead(t *testing.T, path string) []byte {
