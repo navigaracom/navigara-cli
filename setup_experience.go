@@ -73,6 +73,20 @@ func wizardHeaderValue(value string) string {
 	return quoted[1 : len(quoted)-1]
 }
 
+func (p *setupInput) confirmCodexReplacement() (bool, error) {
+	if !p.interactive() {
+		return p.yes("Replace Codex's existing telemetry with Navigara and save a private backup")
+	}
+	value := false
+	err := p.form(huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().Title("Replace Codex telemetry?").
+			Description("Stream new activity to Navigara.\nSave a private settings backup.").
+			Affirmative("Replace").Negative("Keep existing").Value(&value).
+			WithButtonAlignment(lipgloss.Left),
+	)))
+	return value, err
+}
+
 func wizardPreferences(account accountConfig, available []string, p *setupInput) (wizardSettings, error) {
 	if len(available) == 0 {
 		return wizardSettings{}, errors.New("no tools selected; run Claude Code or Codex once, then rerun navigara wizard")
@@ -191,7 +205,7 @@ func wizardPlans(opts *options, home string, selected []string, p *setupInput) (
 		toolOpts.source = tool
 		planned, err := setupPlans(toolOpts, home)
 		if tool == "codex" && errors.Is(err, errCodexTelemetry) {
-			replace, inputErr := p.yes("Replace Codex's existing telemetry with Navigara and save a private backup")
+			replace, inputErr := p.confirmCodexReplacement()
 			if inputErr != nil {
 				return nil, nil, inputErr
 			}
