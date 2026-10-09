@@ -26,13 +26,12 @@ navigara wizard
 ```
 
 On macOS and Linux, the wizard checks your saved login and opens the browser when
-sign-in is needed. Choose your organization, then review the prefilled form:
+sign-in is needed. Choose your organization, then complete the prefilled form:
 all detected tools, your account email, and all available history. Press Enter
 once to keep the defaults, or use Shift+Tab to edit and Space to toggle tools.
-Review the preview before applying changes.
-Choose Edit settings from the preview to return to the prefilled form and
-generate a new preview.
-Close running tool sessions before taking the preview.
+Continue prepares history, verifies the receiver can safely deduplicate it,
+updates the selected tools, and uploads the frozen batches. Close running tool
+sessions before continuing.
 
 Interactive terminals show keyboard-driven forms. Redirected input/output,
 `TERM=dumb`, or `NO_COLOR` use plain prompts instead.
@@ -63,7 +62,7 @@ terminal to inherit identity. Setup reports configuration, not observed live tra
 
 The receiver must advertise session backfill deduplication. Live data wins over
 backfill for the same session; partial live sessions are not filled in automatically.
-Uploads reuse the exact preview files. If interrupted, retry the printed directory:
+Uploads reuse the exact frozen files. If interrupted, retry the printed directory:
 
 ```sh
 navigara wizard --resume '/path/to/saved/payload'
