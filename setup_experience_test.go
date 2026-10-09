@@ -23,8 +23,8 @@ func TestWizardFormHeaderFitsFortyColumns(t *testing.T) {
 	settings := wizardSettings{source: "all", email: account.Email, history: "all"}
 	selected, history := []string{"claude", "codex"}, settings.history
 	form := newWizardForm(account, []string{"claude", "codex"}, &settings, &selected, &history).WithWidth(40)
-	form.Init()
-	form.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	dispatchWizardCommand(form, form.Init())
+	dispatchWizardMessage(form, tea.WindowSizeMsg{Width: 40, Height: 24})
 
 	view := ansi.Strip(form.View())
 	for _, line := range strings.Split(view, "\n") {
@@ -57,8 +57,8 @@ func TestWizardFormHeaderFitsFortyColumns(t *testing.T) {
 	injected := account
 	injected.OrganizationName = "Acme\nForged prompt\x1b[2J"
 	form = newWizardForm(injected, []string{"claude", "codex"}, &settings, &selected, &history).WithWidth(72)
-	form.Init()
-	form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+	dispatchWizardCommand(form, form.Init())
+	dispatchWizardMessage(form, tea.WindowSizeMsg{Width: 72, Height: 24})
 	injectedView := ansi.Strip(form.View())
 	if strings.Contains(injectedView, "\x1b") || strings.Contains(injectedView, "\nForged prompt") || !strings.Contains(injectedView, `Acme\nForged prompt\x1b[2J`) {
 		t.Fatalf("organization value altered the form: %q", injectedView)
@@ -71,8 +71,8 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 		settings := wizardSettings{source: setupSource(available), email: "dev@example.com", history: "all"}
 		selected, history := selectedTools(available, settings.source), settings.history
 		form := newWizardForm(account, available, &settings, &selected, &history).WithWidth(72)
-		form.Init()
-		form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+		dispatchWizardCommand(form, form.Init())
+		dispatchWizardMessage(form, tea.WindowSizeMsg{Width: 72, Height: 24})
 		view := ansi.Strip(form.View())
 		if !form.GetBool("includeHistory") {
 			t.Fatal("default history import is disabled")
@@ -94,8 +94,8 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 			}
 		}
 		narrow := newWizardForm(account, available, &settings, &selected, &history).WithWidth(40)
-		narrow.Init()
-		narrow.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+		dispatchWizardCommand(narrow, narrow.Init())
+		dispatchWizardMessage(narrow, tea.WindowSizeMsg{Width: 40, Height: 24})
 		narrowView := ansi.Strip(narrow.View())
 		expected := []string{"dev@example.com", "All available history", "Import past sessions", "Connect"}
 		for _, tool := range available {
@@ -144,8 +144,8 @@ func TestWizardFormStartsHistoryDisabledForSkippedHistory(t *testing.T) {
 	settings := wizardSettings{source: "claude", email: account.Email, history: "skip"}
 	selected, history := []string{"claude"}, "all"
 	form := newWizardForm(account, []string{"claude"}, &settings, &selected, &history).WithWidth(72)
-	form.Init()
-	form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+	dispatchWizardCommand(form, form.Init())
+	dispatchWizardMessage(form, tea.WindowSizeMsg{Width: 72, Height: 24})
 	view := ansi.Strip(form.View())
 	if form.GetBool("includeHistory") || !strings.Contains(view, "Disabled — sync new activity only") || strings.Contains(view, "All available history") {
 		t.Fatalf("disabled history form = %q", view)
