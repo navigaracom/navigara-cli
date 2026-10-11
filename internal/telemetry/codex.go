@@ -90,6 +90,11 @@ type codexTokens struct {
 	Total           int64 `json:"total_tokens"`
 }
 
+type codexNativeToolCall struct {
+	Name  string
+	Model string
+}
+
 // BuildCodex rebuilds a Codex thread's telemetry from its rollout file.
 func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) {
 	f, err := os.Open(path)
@@ -106,6 +111,10 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 	scanner.Buffer(make([]byte, 0, 1<<20), 256<<20)
 	model := ""
 	var last *codexTokens
+	legacyToolIDs := map[string]bool{}
+	nativeToolCalls := map[string]codexNativeToolCall{}
+	nativeToolOutputs := map[string]time.Time{}
+	nativeToolOutputIDs := []string{}
 	line := 0
 	for scanner.Scan() {
 		line++
@@ -177,6 +186,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			case "item_completed":
 				var p struct {
 					Item struct {
+						ID       string          `json:"id"`
 						Type     string          `json:"type"`
 						Content  json.RawMessage `json:"content"`
 						Server   string          `json:"server"`
@@ -205,8 +215,17 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 					}
 					s.event("codex.user_prompt", at, map[string]any{"model": model, "prompt_length": fmt.Sprint(length)})
 				case "McpToolCall", "CommandExecution", "FileChange", "Extension", "ImageView", "CollabAgentToolCall":
+					if it.ID != "" {
+						if legacyToolIDs[it.ID] {
+							continue
+						}
+						legacyToolIDs[it.ID] = true
+					}
 					attrs := map[string]any{"model": model, "tool_name": codexToolName(it.Type, it.Tool, it.Kind),
 						"success": it.Status == "" || it.Status == "completed"}
+					if it.ID != "" {
+						attrs["call_id"] = it.ID
+					}
 					if it.Type == "McpToolCall" {
 						attrs["mcp_server"] = it.Server
 					}
@@ -248,6 +267,26 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 					}
 				}
 			}
+		case "response_item":
+			var item struct {
+				Type   string `json:"type"`
+				CallID string `json:"call_id"`
+				Name   string `json:"name"`
+			}
+			if json.Unmarshal(r.Payload, &item) != nil || item.CallID == "" {
+				continue
+			}
+			switch item.Type {
+			case "function_call", "custom_tool_call":
+				if item.Name != "" {
+					nativeToolCalls[item.CallID] = codexNativeToolCall{Name: item.Name, Model: model}
+				}
+			case "function_call_output", "custom_tool_call_output":
+				if _, seen := nativeToolOutputs[item.CallID]; !seen {
+					nativeToolOutputs[item.CallID] = at
+					nativeToolOutputIDs = append(nativeToolOutputIDs, item.CallID)
+				}
+			}
 		}
 		if future {
 			break
@@ -258,6 +297,19 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 	}
 	if s.SessionID == "" {
 		return nil, fmt.Errorf("no session_meta")
+	}
+	for _, callID := range nativeToolOutputIDs {
+		if legacyToolIDs[callID] {
+			continue
+		}
+		at := nativeToolOutputs[callID]
+		call, ok := nativeToolCalls[callID]
+		if !ok {
+			s.miss("codex.native_tool_output_missing_metadata")
+			continue
+		}
+		attrs := map[string]any{"model": call.Model, "tool_name": call.Name, "call_id": callID}
+		s.event("codex.tool_result", at, attrs)
 	}
 	s.mergePoints()
 	s.sortRecords()

@@ -123,6 +123,98 @@ func TestBuildCodexKeepsCanonicalServiceForFriendlyOriginators(t *testing.T) {
 	}
 }
 
+func TestBuildCodexMapsNativeCompletedToolsWithoutDoubleCountingLegacyItems(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-native-tools.jsonl")
+	legacy := func(at, id string, duplicate bool) map[string]any {
+		item := map[string]any{"type": "CommandExecution", "id": id, "status": "completed", "duration": map[string]any{"secs": 2}}
+		if duplicate {
+			item["duration"] = map[string]any{"secs": 9}
+		}
+		return codexEvent(at, "item_completed", map[string]any{"item": item})
+	}
+	response := func(at, kind string, payload map[string]any) map[string]any {
+		payload["type"] = kind
+		return map[string]any{"timestamp": at, "type": "response_item", "payload": payload}
+	}
+	writeLines(t, path,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "child"}},
+		map[string]any{"timestamp": "2026-10-03T09:59:59Z", "type": "session_meta", "payload": map[string]any{"id": "parent"}},
+		map[string]any{"timestamp": "2026-10-03T10:00:01Z", "type": "turn_context", "payload": map[string]any{"model": "model-a"}},
+		response("2026-10-03T10:00:02Z", "function_call", map[string]any{"call_id": "native", "name": "exec_command", "arguments": "{}"}),
+		response("2026-10-03T10:00:03Z", "function_call_output", map[string]any{"call_id": "native", "output": "redacted"}),
+		response("2026-10-03T10:00:04Z", "custom_tool_call", map[string]any{"call_id": "custom", "name": "mcp.lookup", "status": "completed", "input": "{}"}),
+		response("2026-10-03T10:00:05Z", "custom_tool_call_output", map[string]any{"call_id": "custom", "output": "redacted"}),
+		response("2026-10-03T10:00:06Z", "custom_tool_call_output", map[string]any{"call_id": "custom", "output": "redacted-repeat"}),
+		legacy("2026-10-03T10:00:07Z", "before", false),
+		response("2026-10-03T10:00:08Z", "function_call", map[string]any{"call_id": "before", "name": "exec_command", "arguments": "{}"}),
+		response("2026-10-03T10:00:09Z", "function_call_output", map[string]any{"call_id": "before", "output": "redacted"}),
+		response("2026-10-03T10:00:10Z", "function_call", map[string]any{"call_id": "after", "name": "exec_command", "arguments": "{}"}),
+		response("2026-10-03T10:00:11Z", "function_call_output", map[string]any{"call_id": "after", "output": "redacted"}),
+		legacy("2026-10-03T10:00:12Z", "after", false),
+		legacy("2026-10-03T10:00:13Z", "after", true),
+		codexEvent("2026-10-03T10:00:14Z", "item_completed", map[string]any{"item": map[string]any{"type": "CommandExecution", "status": "failed"}}),
+		response("2026-10-03T10:00:15Z", "function_call_output", map[string]any{"call_id": "missing", "output": "redacted"}),
+		response("2026-10-03T10:00:16Z", "function_call", map[string]any{"call_id": "parallel-a", "name": "parallel", "arguments": "{}"}),
+		response("2026-10-03T10:00:16Z", "function_call", map[string]any{"call_id": "parallel-b", "name": "parallel", "arguments": "{}"}),
+		response("2026-10-03T10:00:17Z", "function_call_output", map[string]any{"call_id": "parallel-a", "output": "redacted"}),
+		response("2026-10-03T10:00:17Z", "function_call_output", map[string]any{"call_id": "parallel-b", "output": "redacted"}),
+	)
+
+	s, err := BuildCodex(path, Identity{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.SessionID != "child" {
+		t.Fatalf("session id = %q", s.SessionID)
+	}
+	got := events(s, "codex.tool_result")
+	if len(got) != 7 {
+		t.Fatalf("tool results = %+v", got)
+	}
+	if got[0].Time.Format(time.RFC3339) != "2026-10-03T10:00:03Z" || got[0].Attrs["tool_name"] != "exec_command" || got[0].Attrs["model"] != "model-a" || got[0].Attrs["call_id"] != "native" || got[0].Attrs["success"] != nil || got[0].Attrs["duration_ms"] != nil {
+		t.Errorf("native function result = %+v", got[0])
+	}
+	if got[1].Time.Format(time.RFC3339) != "2026-10-03T10:00:05Z" || got[1].Attrs["tool_name"] != "mcp.lookup" || got[1].Attrs["call_id"] != "custom" || got[1].Attrs["success"] != nil || got[1].Attrs["duration_ms"] != nil {
+		t.Errorf("native custom result = %+v", got[1])
+	}
+	if got[2].Attrs["duration_ms"] != int64(2000) || got[2].Attrs["call_id"] != "before" || got[3].Attrs["duration_ms"] != int64(2000) || got[3].Attrs["call_id"] != "after" || got[4].Attrs["success"] != false || got[4].Attrs["call_id"] != nil {
+		t.Errorf("legacy results = %+v", got[2:])
+	}
+	if got[5].Time != got[6].Time || got[5].Attrs["tool_name"] != "parallel" || got[6].Attrs["tool_name"] != "parallel" || got[5].Attrs["call_id"] != "parallel-a" || got[6].Attrs["call_id"] != "parallel-b" {
+		t.Errorf("same-time native results = %+v", got[5:])
+	}
+	if s.Missing["codex.native_tool_output_missing_metadata"] != 1 {
+		t.Errorf("missing = %+v", s.Missing)
+	}
+
+	cutoff, err := time.Parse(time.RFC3339, "2026-10-03T10:00:04Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut, err := BuildCodex(path, Identity{}, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results := events(cut, "codex.tool_result"); len(results) != 1 || results[0].Attrs["tool_name"] != "exec_command" {
+		t.Errorf("cutoff results = %+v", results)
+	}
+
+	other := filepath.Join(t.TempDir(), "rollout-second-session.jsonl")
+	writeLines(t, other,
+		map[string]any{"timestamp": "2026-10-03T11:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "other"}},
+		map[string]any{"timestamp": "2026-10-03T11:00:01Z", "type": "turn_context", "payload": map[string]any{"model": "model-b"}},
+		response("2026-10-03T11:00:02Z", "function_call", map[string]any{"call_id": "native", "name": "other_tool", "arguments": "{}"}),
+		response("2026-10-03T11:00:03Z", "function_call_output", map[string]any{"call_id": "native", "output": "redacted"}),
+	)
+	otherSession, err := BuildCodex(other, Identity{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results := events(otherSession, "codex.tool_result"); len(results) != 1 || results[0].Attrs["tool_name"] != "other_tool" || results[0].Attrs["model"] != "model-b" {
+		t.Errorf("second session results = %+v", results)
+	}
+}
+
 func TestCodexDiscoveryErrors(t *testing.T) {
 	home := t.TempDir()
 	if paths, err := CodexRollouts(home); err != nil || len(paths) != 0 {
