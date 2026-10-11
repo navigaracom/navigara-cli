@@ -98,6 +98,31 @@ func TestBuildCodexKeepsFutureSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildCodexKeepsCanonicalServiceForFriendlyOriginators(t *testing.T) {
+	for _, originator := range []string{"Claude Code", "Codex Desktop"} {
+		t.Run(originator, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rollout.jsonl")
+			writeLines(t, path,
+				map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{
+					"id": "friendly-originator", "originator": originator}},
+				map[string]any{"timestamp": "2026-10-03T10:00:01Z", "type": "turn_context", "payload": map[string]any{"model": "gpt-6-astra"}},
+				tokenCount("2026-10-03T10:00:02Z", 100, 40, 10, 110),
+			)
+
+			s, err := BuildCodex(path, Identity{}, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Source != "codex" || s.Service != "codex_tui" || s.Common["originator"] != originator {
+				t.Fatalf("source=%q service=%q originator=%q", s.Source, s.Service, s.Common["originator"])
+			}
+			if len(s.Points) != 4 || s.Points[0].Metric != "token.usage" || s.Points[0].Model != "gpt-6-astra" || s.Points[0].Type != "input" {
+				t.Fatalf("token dimensions = %+v", s.Points)
+			}
+		})
+	}
+}
+
 func TestCodexDiscoveryErrors(t *testing.T) {
 	home := t.TempDir()
 	if paths, err := CodexRollouts(home); err != nil || len(paths) != 0 {
