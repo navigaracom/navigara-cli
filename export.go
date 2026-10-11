@@ -124,6 +124,9 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			fmt.Fprintln(stderr, "navigara:", err)
 			incomplete = true
 		} else {
+			type rollout struct{ id, path string }
+			rollouts := make([]rollout, 0, len(paths))
+			byID := make(map[string]string, len(paths))
 			for _, path := range paths {
 				id, err := telemetry.CodexSessionID(path)
 				if err != nil {
@@ -131,12 +134,19 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 					incomplete = true
 					continue
 				}
+				rollouts = append(rollouts, rollout{id: id, path: path})
+				if _, exists := byID[id]; !exists {
+					byID[id] = path
+				}
+			}
+			for _, rollout := range rollouts {
+				id, path := rollout.id, rollout.path
 				if seen[id] || !want(id) {
 					continue
 				}
 				seen[id] = true
 				jobs = append(jobs, job{"codex", id, func() (*telemetry.Session, error) {
-					return telemetry.BuildCodex(path, ident, opts.until)
+					return telemetry.BuildCodex(telemetry.CodexInput{Path: path, Rollouts: byID, Until: opts.until}, ident)
 				}})
 			}
 		}

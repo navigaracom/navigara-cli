@@ -1,0 +1,5 @@
+{"timestamp":"2026-10-02T07:42:49.357Z","type":"session_meta","ordinal":0,"payload":{"id":"child-thread","session_id":"child-thread","forked_from_id":"parent-thread","parent_thread_id":"parent-thread","subagent_history_start_ordinal":10,"originator":"codex-tui"}}
+{"timestamp":"2026-10-02T07:42:49.358Z","type":"session_meta","ordinal":1,"payload":{"id":"parent-thread","session_id":"parent-thread","originator":"codex-tui"}}
+{"timestamp":"2026-10-02T07:42:51.059Z","type":"turn_context","ordinal":15,"payload":{"model":"gpt-5.6-terra"}}
+{"timestamp":"2026-10-02T07:42:54.792Z","type":"event_msg","ordinal":24,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":22404,"cached_input_tokens":6912,"cache_write_input_tokens":0,"output_tokens":140,"reasoning_output_tokens":0,"total_tokens":22544}}}}
+{"timestamp":"2026-10-02T07:42:59.815Z","type":"event_msg","ordinal":31,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":54890,"cached_input_tokens":29184,"cache_write_input_tokens":0,"output_tokens":302,"reasoning_output_tokens":40,"total_tokens":55192}}}}

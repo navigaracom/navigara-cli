@@ -53,7 +53,7 @@ func TestBuildCodex(t *testing.T) {
 	if err != nil || id != "child-thread" {
 		t.Fatalf("rollouts = %v; a child thread is its own session", paths)
 	}
-	s, err := BuildCodex(paths[0], Identity{CodexEmail: "dev@example.com"}, time.Time{})
+	s, err := BuildCodex(CodexInput{Path: paths[0]}, Identity{CodexEmail: "dev@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +84,135 @@ func TestBuildCodex(t *testing.T) {
 	}
 }
 
+func TestBuildCodexExcludesCompleteCopiedForkHistory(t *testing.T) {
+	fixtureHome := t.TempDir()
+	for _, name := range []string{"codex-fork-complete-parent.jsonl", "codex-fork-complete-child.jsonl"} {
+		data, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixtureHome, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	actual, err := BuildCodex(CodexInput{Path: filepath.Join(fixtureHome, "codex-fork-complete-child.jsonl"), Rollouts: map[string]string{"parent-thread": filepath.Join(fixtureHome, "codex-fork-complete-parent.jsonl")}}, Identity{})
+	if err != nil || len(actual.Points) != 0 {
+		t.Fatalf("actual complete-copy usage = %+v, err=%v", actual.Points, err)
+	}
+
+	home := t.TempDir()
+	parent := filepath.Join(home, "rollout-parent.jsonl")
+	child := filepath.Join(home, "rollout-child.jsonl")
+	parentRows := []map[string]any{
+		{"timestamp": "2026-10-03T09:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "parent"}},
+		{"timestamp": "2026-10-03T09:00:01Z", "type": "turn_context", "ordinal": 1, "payload": map[string]any{"model": "model-parent"}},
+		{"timestamp": "2026-10-03T09:00:02Z", "type": "event_msg", "ordinal": 2, "payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": "UserMessage", "content": []any{map[string]any{"text": "inherited"}}}}},
+		tokenCount("2026-10-03T09:00:03Z", 100, 0, 10, 110),
+	}
+	parentOnly := tokenCount("2026-10-03T09:00:04Z", 110, 0, 12, 122)
+	writeLines(t, parent, append(parentRows, parentOnly)...)
+	writeLines(t, child,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{
+			"id": "child", "forked_from_id": "parent", "parent_thread_id": "parent", "subagent_history_start_ordinal": 8}},
+		parentRows[0],
+		parentRows[1], parentRows[2], parentRows[3],
+	)
+
+	s, err := BuildCodex(CodexInput{Path: child, Rollouts: map[string]string{"parent": parent}}, Identity{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(events(s, "codex.conversation_starts")); got != 1 {
+		t.Fatalf("conversation starts = %d, want 1", got)
+	}
+	if got := len(events(s, "codex.user_prompt")); got != 0 {
+		t.Fatalf("inherited prompts = %d, want 0", got)
+	}
+	if got := len(s.Points); got != 0 {
+		t.Fatalf("inherited token points = %+v, want none", s.Points)
+	}
+	withTail := filepath.Join(home, "rollout-child-tail.jsonl")
+	writeLines(t, withTail,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "child-tail", "forked_from_id": "parent", "subagent_history_start_ordinal": 8}},
+		parentRows[0], parentRows[1], parentRows[2], parentRows[3],
+		tokenCount("2026-10-03T10:00:04Z", 360, 0, 14, 374),
+	)
+	tail, err := BuildCodex(CodexInput{Path: withTail, Rollouts: map[string]string{"parent": parent}}, Identity{})
+	if err != nil || sum(tail, "token.usage", "total") != 374 {
+		t.Fatalf("owned token baseline = %v, err=%v", tail.Points, err)
+	}
+}
+
+func TestBuildCodexActualForkOrdinalOwnsFirstTokenSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-child.jsonl")
+	fixture, err := os.ReadFile("testdata/codex-fork-ordinal-owned.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Join(t.TempDir(), "rollout-parent.jsonl")
+	writeLines(t, parent, map[string]any{"timestamp": "2026-10-02T08:55:01.112Z", "type": "session_meta", "payload": map[string]any{"id": "parent-thread"}})
+	s, err := BuildCodex(CodexInput{Path: path, Rollouts: map[string]string{"parent-thread": parent}}, Identity{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sum(s, "token.usage", "total"); got != 23004 {
+		t.Fatalf("first owned token total = %v, want 23004", got)
+	}
+}
+
+func TestBuildCodexActualSingleHeaderForkSkipsInheritedToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-child.jsonl")
+	fixture, err := os.ReadFile("testdata/codex-fork-single-header.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := BuildCodex(CodexInput{Path: path}, Identity{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.SessionID != "child-thread" || len(events(s, "codex.conversation_starts")) != 1 || len(s.Points) != 0 {
+		t.Fatalf("single-header fork = %+v", s)
+	}
+}
+
+func TestBuildCodexUsesInheritedNativeCallForOwnedOutput(t *testing.T) {
+	home := t.TempDir()
+	parent := filepath.Join(home, "rollout-parent.jsonl")
+	child := filepath.Join(home, "rollout-child.jsonl")
+	parentHeader := map[string]any{"timestamp": "2026-10-03T09:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "parent"}}
+	call := map[string]any{"timestamp": "2026-10-03T09:00:01Z", "type": "response_item", "ordinal": 1, "payload": map[string]any{"type": "function_call", "call_id": "call", "name": "exec_command"}}
+	writeLines(t, parent, parentHeader, call)
+	writeLines(t, child,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "child", "forked_from_id": "parent", "subagent_history_start_ordinal": 1}},
+		parentHeader, call,
+		map[string]any{"timestamp": "2026-10-03T10:00:02Z", "type": "response_item", "ordinal": 2, "payload": map[string]any{"type": "function_call_output", "call_id": "call"}},
+	)
+	s, err := BuildCodex(CodexInput{Path: child, Rollouts: map[string]string{"parent": parent}}, Identity{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results := events(s, "codex.tool_result"); len(results) != 1 || results[0].Attrs["call_id"] != "call" {
+		t.Fatalf("owned output result = %+v", results)
+	}
+}
+
+func TestBuildCodexReportsMissingCopiedForkParent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-child.jsonl")
+	writeLines(t, path,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "child", "forked_from_id": "parent", "subagent_history_start_ordinal": 1}},
+		map[string]any{"timestamp": "2026-10-03T09:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "parent"}},
+	)
+	if _, err := BuildCodex(CodexInput{Path: path}, Identity{}); err == nil || !strings.Contains(err.Error(), "was not discovered") {
+		t.Fatalf("missing copied parent error = %v", err)
+	}
+}
+
 func TestBuildCodexClientToolSearch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	writeLines(t, path,
@@ -95,7 +224,7 @@ func TestBuildCodexClientToolSearch(t *testing.T) {
 		map[string]any{"timestamp": "2026-10-03T10:00:03Z", "type": "response_item", "payload": map[string]any{
 			"type": "tool_search_output", "call_id": "search-call", "execution": "client", "status": "completed", "tools": []any{}}},
 	)
-	s, err := BuildCodex(path, Identity{}, time.Time{})
+	s, err := BuildCodex(CodexInput{Path: path}, Identity{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,13 +242,13 @@ func TestBuildCodexClientToolSearch(t *testing.T) {
 func TestBuildCodexKeepsFutureSessionIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout-future.jsonl")
 	writeLines(t, path, map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "future"}})
-	s, err := BuildCodex(path, Identity{}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	s, err := BuildCodex(CodexInput{Path: path, Until: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)}, Identity{})
 	if err != nil || s.SessionID != "future" || len(s.Events) != 0 || len(s.Points) != 0 {
 		t.Fatalf("session=%+v err=%v", s, err)
 	}
 
 	writeLines(t, path, map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "future", "originator": 123}})
-	if _, err := BuildCodex(path, Identity{}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)); err == nil {
+	if _, err := BuildCodex(CodexInput{Path: path, Until: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)}, Identity{}); err == nil {
 		t.Fatal("malformed future metadata accepted")
 	}
 }
@@ -135,7 +264,7 @@ func TestBuildCodexKeepsCanonicalServiceForFriendlyOriginators(t *testing.T) {
 				tokenCount("2026-10-03T10:00:02Z", 100, 40, 10, 110),
 			)
 
-			s, err := BuildCodex(path, Identity{}, time.Time{})
+			s, err := BuildCodex(CodexInput{Path: path}, Identity{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -186,7 +315,7 @@ func TestBuildCodexMapsNativeCompletedToolsWithoutDoubleCountingLegacyItems(t *t
 		response("2026-10-03T10:00:17Z", "function_call_output", map[string]any{"call_id": "parallel-b", "output": "redacted"}),
 	)
 
-	s, err := BuildCodex(path, Identity{}, time.Time{})
+	s, err := BuildCodex(CodexInput{Path: path}, Identity{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +346,7 @@ func TestBuildCodexMapsNativeCompletedToolsWithoutDoubleCountingLegacyItems(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	cut, err := BuildCodex(path, Identity{}, cutoff)
+	cut, err := BuildCodex(CodexInput{Path: path, Until: cutoff}, Identity{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +361,7 @@ func TestBuildCodexMapsNativeCompletedToolsWithoutDoubleCountingLegacyItems(t *t
 		response("2026-10-03T11:00:02Z", "function_call", map[string]any{"call_id": "native", "name": "other_tool", "arguments": "{}"}),
 		response("2026-10-03T11:00:03Z", "function_call_output", map[string]any{"call_id": "native", "output": "redacted"}),
 	)
-	otherSession, err := BuildCodex(other, Identity{}, time.Time{})
+	otherSession, err := BuildCodex(CodexInput{Path: other}, Identity{})
 	if err != nil {
 		t.Fatal(err)
 	}
