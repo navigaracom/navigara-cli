@@ -30,7 +30,7 @@ func TestBuildCodex(t *testing.T) {
 			"id": "parent", "originator": "codex-tui"}},
 		map[string]any{"timestamp": "2026-10-03T10:00:01Z", "type": "turn_context", "payload": map[string]any{"model": "gpt-6-astra"}},
 		codexEvent("2026-10-03T10:00:02Z", "item_completed", map[string]any{"item": map[string]any{
-			"type": "UserMessage", "content": []any{map[string]any{"type": "text", "text": "review this"}}}}),
+			"type": "UserMessage", "content": []any{map[string]any{"type": "text", "text": "review café"}}}}),
 		codexEvent("2026-10-03T10:00:05Z", "item_completed", map[string]any{"item": map[string]any{
 			"type": "McpToolCall", "server": "linear", "tool": "get_issue", "status": "completed",
 			"duration": map[string]any{"secs": 1, "nanos": 500000000}}}),
@@ -80,6 +80,32 @@ func TestBuildCodex(t *testing.T) {
 	}{{"input", 250}, {"cached_input", 140}, {"output", 30}, {"total", 280}} {
 		if got := sum(s, "token.usage", c.kind); got != c.want {
 			t.Errorf("%s = %v, want %v", c.kind, got, c.want)
+		}
+	}
+}
+
+func TestBuildCodexClientToolSearch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	writeLines(t, path,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "search-thread"}},
+		map[string]any{"timestamp": "2026-10-03T10:00:01Z", "type": "turn_context", "payload": map[string]any{"model": "gpt-6-astra"}},
+		// Sanitized client discovery shapes from local rollouts; no name is supplied.
+		map[string]any{"timestamp": "2026-10-03T10:00:02Z", "type": "response_item", "payload": map[string]any{
+			"type": "tool_search_call", "call_id": "search-call", "execution": "client", "status": "completed", "arguments": map[string]any{}}},
+		map[string]any{"timestamp": "2026-10-03T10:00:03Z", "type": "response_item", "payload": map[string]any{
+			"type": "tool_search_output", "call_id": "search-call", "execution": "client", "status": "completed", "tools": []any{}}},
+	)
+	s, err := BuildCodex(path, Identity{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := events(s, "codex.tool_result")
+	if len(results) != 1 || results[0].Attrs["tool_name"] != "tool_search" || results[0].Attrs["call_id"] != "search-call" {
+		t.Fatalf("client tool discovery result = %v", results)
+	}
+	for _, key := range []string{"arguments", "tools", "success", "duration_ms"} {
+		if _, found := results[0].Attrs[key]; found {
+			t.Fatalf("unexpected content or inferred outcome: %s", key)
 		}
 	}
 }

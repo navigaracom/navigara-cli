@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/navigaracom/navigara-cli/internal/session"
 )
@@ -211,7 +212,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 					_ = json.Unmarshal(it.Content, &parts)
 					length := 0
 					for _, part := range parts {
-						length += len(part.Text)
+						length += utf8.RuneCountInString(part.Text)
 					}
 					s.event("codex.user_prompt", at, map[string]any{"model": model, "prompt_length": fmt.Sprint(length)})
 				case "McpToolCall", "CommandExecution", "FileChange", "Extension", "ImageView", "CollabAgentToolCall":
@@ -269,19 +270,27 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			}
 		case "response_item":
 			var item struct {
-				Type   string `json:"type"`
-				CallID string `json:"call_id"`
-				Name   string `json:"name"`
+				Type      string `json:"type"`
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Execution string `json:"execution"`
 			}
 			if json.Unmarshal(r.Payload, &item) != nil || item.CallID == "" {
 				continue
 			}
 			switch item.Type {
+			case "tool_search_call":
+				if item.Execution == "client" {
+					nativeToolCalls[item.CallID] = codexNativeToolCall{Name: "tool_search", Model: model}
+				}
 			case "function_call", "custom_tool_call":
 				if item.Name != "" {
 					nativeToolCalls[item.CallID] = codexNativeToolCall{Name: item.Name, Model: model}
 				}
-			case "function_call_output", "custom_tool_call_output":
+			case "tool_search_output", "function_call_output", "custom_tool_call_output":
+				if item.Type == "tool_search_output" && item.Execution != "client" {
+					continue
+				}
 				if _, seen := nativeToolOutputs[item.CallID]; !seen {
 					nativeToolOutputs[item.CallID] = at
 					nativeToolOutputIDs = append(nativeToolOutputIDs, item.CallID)
