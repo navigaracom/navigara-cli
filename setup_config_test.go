@@ -111,6 +111,104 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	}
 }
 
+func TestCodexSettingsRemovesObsoleteRootFeatureFlags(t *testing.T) {
+	input := []byte(`# preserved root setting
+model = "gpt-5"
+
+[features]
+rmcp_client = false # obsolete
+terminal_resize_reflow = true
+js_repl = false
+
+# current feature flags
+goals = true # keep
+prevent_idle_sleep = true # keep
+
+[profiles.work.features]
+rmcp_client = true
+`)
+
+	first, err := codexSettings(input, testEndpoint, "token", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, obsolete := range []string{"rmcp_client = false", "terminal_resize_reflow = true", "js_repl = false"} {
+		if bytes.Contains(first, []byte(obsolete)) {
+			t.Errorf("obsolete root feature flag remained: %q", obsolete)
+		}
+	}
+	for _, preserved := range []string{
+		"# preserved root setting\nmodel = \"gpt-5\"",
+		"[features]\n",
+		"# current feature flags\n",
+		"goals = true # keep",
+		"prevent_idle_sleep = true # keep",
+		"[profiles.work.features]\nrmcp_client = true",
+		`endpoint = "https://app.navigara.com/api/otlp/v1/metrics"`,
+		`endpoint = "https://app.navigara.com/api/otlp/v1/logs"`,
+		`headers = { Authorization = "Bearer token" }`,
+	} {
+		if !bytes.Contains(first, []byte(preserved)) {
+			t.Errorf("expected preserved or configured content %q:\n%s", preserved, first)
+		}
+	}
+
+	second, err := codexSettings(first, testEndpoint, "token", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(second, first) {
+		t.Fatalf("second patch was not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestCodexSettingsRemovesQuotedAndDottedObsoleteRootFeatureFlags(t *testing.T) {
+	for _, input := range [][]byte{
+		[]byte(`["features"]
+"rmcp_client" = false
+"terminal_resize_reflow" = true
+"js_repl" = false
+goals = true
+prevent_idle_sleep = true
+future_flag = true
+`),
+		[]byte(`features.rmcp_client = false
+features.terminal_resize_reflow = true
+features.js_repl = false
+features.goals = true
+features.prevent_idle_sleep = true
+features.future_flag = true
+`),
+	} {
+		got, err := codexSettings(input, testEndpoint, "token", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, obsolete := range []string{"rmcp_client", "terminal_resize_reflow", "js_repl"} {
+			if bytes.Contains(got, []byte(obsolete)) {
+				t.Errorf("obsolete root feature flag remained in %q:\n%s", input, got)
+			}
+		}
+		for _, current := range []string{"goals = true", "prevent_idle_sleep = true", "future_flag = true"} {
+			if !bytes.Contains(got, []byte(current)) {
+				t.Errorf("current root feature flag was removed: %q", current)
+			}
+		}
+	}
+}
+
+func TestCodexSettingsRejectsUnsupportedObsoleteFeatureShapes(t *testing.T) {
+	for _, input := range [][]byte{
+		[]byte("features = { rmcp_client = false, goals = true }\n"),
+		[]byte("[features]\nrmcp_client = \"false\"\n"),
+	} {
+		got, err := codexSettings(input, testEndpoint, "token", false)
+		if !errors.Is(err, errUnsupportedCodexFeatureLayout) || got != nil {
+			t.Fatalf("unsupported feature layout returned %q, %v", got, err)
+		}
+	}
+}
+
 func TestCodexSettingsRejectsOtherOTELAndMalformedMarkers(t *testing.T) {
 	for _, input := range [][]byte{
 		[]byte("[otel.metrics_exporter.otlp-http]\nendpoint = \"elsewhere\"\n"),
