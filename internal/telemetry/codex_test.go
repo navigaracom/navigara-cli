@@ -118,6 +118,9 @@ func TestBuildCodexCountsCopiedHeaderRowAfterBoundary(t *testing.T) {
 	if got := sum(s, "token.usage", "total"); got != 55192 {
 		t.Fatalf("after-boundary token total = %v, want 55192", got)
 	}
+	if got := len(events(s, "codex.conversation_starts")); got != 1 || len(s.Points) != 9 || s.Points[0].Model != "gpt-5.6-terra" {
+		t.Fatalf("after-boundary records = events=%d points=%d", got, len(s.Points))
+	}
 }
 
 func TestBuildCodexActualSingleHeaderForkSkipsInheritedToken(t *testing.T) {
