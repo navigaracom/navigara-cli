@@ -137,9 +137,8 @@ func TestExportProgressCountsFilteredSessions(t *testing.T) {
 	}
 }
 
-func TestUploadPinnedCodexForkResolvesUnselectedParent(t *testing.T) {
+func TestUploadPinnedCodexForkNeedsNoParentRollout(t *testing.T) {
 	claudeHome, codexHome := fixtureHomes(t)
-	parent := filepath.Join(codexHome, "sessions", "rollout-parent.jsonl")
 	child := filepath.Join(codexHome, "sessions", "rollout-child.jsonl")
 	parentHeader := map[string]any{"timestamp": "2026-10-03T09:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "parent"}}
 	body := map[string]any{"timestamp": "2026-10-03T09:00:01Z", "type": "turn_context", "ordinal": 1, "payload": map[string]any{"model": "parent-model"}}
@@ -160,7 +159,6 @@ func TestUploadPinnedCodexForkResolvesUnselectedParent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeRollout(parent, parentHeader, body)
 	writeRollout(child,
 		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "child", "forked_from_id": "parent", "parent_thread_id": "parent", "subagent_history_start_ordinal": 8}},
 		parentHeader, body,

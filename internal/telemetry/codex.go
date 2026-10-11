@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -98,109 +97,9 @@ type codexNativeToolCall struct {
 	Model string
 }
 
-// CodexInput is one Codex rollout and the discovered rollout paths by thread id.
-// Rollouts must include unselected parent threads so forks can exclude copied history.
-type CodexInput struct {
-	Path     string
-	Rollouts map[string]string
-	Until    time.Time
-}
-
-type codexInheritedPrefix struct {
-	file    *os.File
-	scanner *bufio.Scanner
-	start   int64
-	active  bool
-	armed   bool
-	parent  string
-}
-
-func newCodexInheritedPrefix(wantID string, start int64) *codexInheritedPrefix {
-	return &codexInheritedPrefix{start: start, parent: wantID}
-}
-
-func (p *codexInheritedPrefix) arm(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return err
-	}
-	scanner := bufio.NewScanner(io.LimitReader(f, info.Size()))
-	scanner.Buffer(make([]byte, 0, 1<<20), 256<<20)
-	if !scanner.Scan() {
-		f.Close()
-		if err := scanner.Err(); err != nil {
-			return err
-		}
-		return fmt.Errorf("missing session_meta")
-	}
-	var header struct {
-		Type    string `json:"type"`
-		Payload struct {
-			ID string `json:"id"`
-		} `json:"payload"`
-	}
-	if json.Unmarshal(scanner.Bytes(), &header) != nil || header.Type != "session_meta" || header.Payload.ID != p.parent {
-		f.Close()
-		return fmt.Errorf("first session_meta id does not match")
-	}
-	p.file, p.scanner, p.active, p.armed = f, scanner, true, true
-	return nil
-}
-
-func (p *codexInheritedPrefix) close() {
-	if p.file != nil {
-		_ = p.file.Close()
-		p.file = nil
-	}
-}
-
-func (p *codexInheritedPrefix) skip(child []byte, ordinal *int64) (bool, error) {
-	if p.active && p.armed {
-		if p.scanner.Scan() {
-			parent, err := codexCanonicalJSON(p.scanner.Bytes())
-			if err != nil {
-				return false, fmt.Errorf("invalid JSON in inherited body: %w", err)
-			}
-			current, err := codexCanonicalJSON(child)
-			if err != nil {
-				return false, err
-			}
-			if bytes.Equal(parent, current) {
-				return true, nil
-			}
-		} else if err := p.scanner.Err(); err != nil {
-			return false, fmt.Errorf("read inherited body: %w", err)
-		}
-		p.active = false
-		p.close()
-	}
-	return p.start > 0 && ordinal != nil && *ordinal < p.start, nil
-}
-
-func codexCanonicalJSON(raw []byte) ([]byte, error) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, err
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		if err == nil {
-			return nil, fmt.Errorf("multiple JSON values")
-		}
-		return nil, err
-	}
-	return json.Marshal(value)
-}
-
 // BuildCodex rebuilds a Codex thread's telemetry from its rollout file.
-func BuildCodex(in CodexInput, ident Identity) (*Session, error) {
-	f, err := os.Open(in.Path)
+func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +117,7 @@ func BuildCodex(in CodexInput, ident Identity) (*Session, error) {
 	nativeToolCalls := map[string]codexNativeToolCall{}
 	nativeToolOutputs := map[string]time.Time{}
 	nativeToolOutputIDs := []string{}
-	var inherited *codexInheritedPrefix
+	var historyStart int64
 	line := 0
 	for scanner.Scan() {
 		line++
@@ -226,35 +125,9 @@ func BuildCodex(in CodexInput, ident Identity) (*Session, error) {
 		if json.Unmarshal(scanner.Bytes(), &r) != nil {
 			return nil, fmt.Errorf("line %d: invalid JSON", line)
 		}
-		inheritedRecord := false
-		if inherited != nil {
-			if r.Type == "session_meta" && !inherited.armed {
-				var copied struct {
-					ID string `json:"id"`
-				}
-				if json.Unmarshal(r.Payload, &copied) == nil && copied.ID == inherited.parent {
-					parentPath := in.Rollouts[inherited.parent]
-					if parentPath == "" {
-						return nil, fmt.Errorf("fork parent %q for %q was not discovered", inherited.parent, s.SessionID)
-					}
-					if err := inherited.arm(parentPath); err != nil {
-						return nil, fmt.Errorf("fork parent %q for %q: %w", inherited.parent, s.SessionID, err)
-					}
-					continue
-				}
-			}
-			skip, err := inherited.skip(scanner.Bytes(), r.Ordinal)
-			if err != nil {
-				return nil, err
-			}
-			if skip {
-				inheritedRecord = true
-				// A child-owned native output may reference a call definition copied
-				// from its parent; retain those definitions and turn model context only.
-				if r.Type != "turn_context" && r.Type != "response_item" {
-					continue
-				}
-			}
+		inheritedRecord := r.Type != "session_meta" && historyStart > 0 && r.Ordinal != nil && *r.Ordinal < historyStart
+		if inheritedRecord && r.Type != "turn_context" && r.Type != "response_item" {
+			continue
 		}
 		at, err := time.Parse(time.RFC3339Nano, r.Timestamp)
 		if err != nil {
@@ -264,7 +137,7 @@ func BuildCodex(in CodexInput, ident Identity) (*Session, error) {
 			continue
 		}
 		at = at.UTC()
-		future := !in.Until.IsZero() && at.After(in.Until)
+		future := !until.IsZero() && at.After(until)
 		if future && !inheritedRecord && r.Type != "session_meta" {
 			break
 		}
@@ -280,7 +153,6 @@ func BuildCodex(in CodexInput, ident Identity) (*Session, error) {
 				Source        any    `json:"source"`
 				ThreadSource  string `json:"thread_source"`
 				ParentThread  string `json:"parent_thread_id"`
-				ForkedFromID  string `json:"forked_from_id"`
 				HistoryStart  int64  `json:"subagent_history_start_ordinal"`
 				ModelProvider string `json:"model_provider"`
 				Git           *struct {
@@ -290,10 +162,7 @@ func BuildCodex(in CodexInput, ident Identity) (*Session, error) {
 			if json.Unmarshal(r.Payload, &meta) != nil || meta.ID == "" {
 				return nil, fmt.Errorf("invalid session_meta")
 			}
-			if meta.ForkedFromID != "" {
-				inherited = newCodexInheritedPrefix(meta.ForkedFromID, meta.HistoryStart)
-				defer inherited.close()
-			}
+			historyStart = meta.HistoryStart
 			s.SessionID = meta.ID
 			s.Common["session.id"] = meta.ID
 			if meta.Originator != "" {
@@ -307,11 +176,9 @@ func BuildCodex(in CodexInput, ident Identity) (*Session, error) {
 					s.Common["vcs.repository.url.full"] = url
 				}
 			}
-			if in.Until.IsZero() || !at.After(in.Until) {
+			if !future {
 				s.event("codex.conversation_starts", at, map[string]any{})
 			}
-			// A copied parent header follows the child header in forked rollouts.
-			// The first header above owns the child identity and fork metadata.
 		case "turn_context":
 			var tc struct {
 				Model string `json:"model"`
