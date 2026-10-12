@@ -22,8 +22,9 @@ type Result struct {
 // Scan discovers local Claude and Codex histories in fixed source/root order.
 // Known roots may be symlinks; symlinks and nonregular entries found inside them
 // are ignored. Each opened file is bounded to its initial size, excluding appends
-// but allowing concurrent rewrites or truncation to affect the read.
-func Scan(source, claudeHome, codexHome string) Result {
+// but allowing concurrent rewrites or truncation to affect the read. A history that skip
+// reports, when skip is set, is neither read nor counted.
+func Scan(source, claudeHome, codexHome string, skip func(path string) bool) Result {
 	result := Result{Records: []Record{}}
 	if source != "all" && source != "claude" && source != "codex" {
 		result.Errors = append(result.Errors, errors.New("unsupported source"))
@@ -60,13 +61,13 @@ func Scan(source, claudeHome, codexHome string) Result {
 			continue
 		}
 		for _, suffix := range tool.roots {
-			result.walk(tool.reader, filepath.Join(home, suffix))
+			result.walk(tool.reader, filepath.Join(home, suffix), skip)
 		}
 	}
 	return result
 }
 
-func (result *Result) walk(source, root string) {
+func (result *Result) walk(source, root string, skip func(path string) bool) {
 	resolved, err := filepath.EvalSymlinks(root)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
@@ -97,7 +98,7 @@ func (result *Result) walk(source, root string) {
 				return nil
 			}
 		}
-		if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".jsonl" {
+		if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".jsonl" || (skip != nil && skip(path)) {
 			return nil
 		}
 		result.Files++
