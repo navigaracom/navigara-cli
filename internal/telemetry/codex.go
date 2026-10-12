@@ -146,7 +146,6 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			s.Common["session.id"] = meta.ID
 			if meta.Originator != "" {
 				s.Common["originator"] = meta.Originator
-				s.Service = strings.ReplaceAll(meta.Originator, "-", "_")
 			}
 			if src, ok := meta.Source.(string); ok && src != "" {
 				s.Common["session_source"] = src
