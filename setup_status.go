@@ -60,3 +60,18 @@ func wizardPathValue(value string) string {
 func (p *setupInput) cancelled() {
 	p.status("Setup cancelled", "Cancelled. Your tool settings have not changed.\n")
 }
+
+func (p *setupInput) completed(sent int) {
+	if !p.interactive() {
+		fmt.Fprintf(p.out, "\nConnected. Navigara accepted %d upload batches.\nNew activity syncing is configured, not yet verified.\nOpen a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.\n", sent)
+		return
+	}
+
+	blue := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00A8FF"))
+	p.status(
+		blue.Render("🎉 You’re connected to Navigara"),
+		blue.Render(fmt.Sprintf("History: %d upload batches received", sent))+"\n"+
+			"Live sync: Configured; not yet verified\n\n"+
+			"Restart your tools in a new terminal. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.\n",
+	)
+}

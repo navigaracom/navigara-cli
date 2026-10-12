@@ -41,12 +41,13 @@ func TestWizardFormHeaderFitsFortyColumns(t *testing.T) {
 		"Last 30 days",
 		"Last 7 days",
 		"Last 24 hours",
-		"Only sync new activity",
+		"Do not import history",
 		"Custom duration",
+		"Import past sessions",
 		"[x] Claude Code",
 		"[x] Codex",
-		"Continue",
-		"Enter to continue; Shift+Tab to edit.",
+		"Connect",
+		"Enter to connect; Shift+Tab to edit.",
 	} {
 		if !strings.Contains(compactView, strings.Join(strings.Fields(value), "")) {
 			t.Fatalf("narrow wizard hides %q: %s", value, view)
@@ -77,13 +78,13 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 				t.Fatalf("detected tool is invisible: %s", view)
 			}
 		}
-		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "Acme") || !strings.Contains(view, "https://app.example") || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Continue") {
+		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "Acme") || !strings.Contains(view, "https://app.example") || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Import past sessions") || !strings.Contains(view, "Connect") {
 			t.Fatalf("default account or history is invisible: %s", view)
 		}
 		if strings.Contains(view, "> ") || !strings.Contains(view, "● All available history") {
 			t.Fatalf("inactive fields look focused or lose their selection: %s", view)
 		}
-		for _, label := range []string{"Last 30 days", "Last 7 days", "Last 24 hours", "Only sync new activity", "Custom duration"} {
+		for _, label := range []string{"Last 30 days", "Last 7 days", "Last 24 hours", "Do not import history", "Custom duration"} {
 			if !strings.Contains(view, label) {
 				t.Fatalf("history choice is hidden: %s", view)
 			}
@@ -92,7 +93,7 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 		narrow.Init()
 		narrow.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
 		narrowView := ansi.Strip(narrow.View())
-		expected := []string{"dev@example.com", "All available history", "Continue"}
+		expected := []string{"dev@example.com", "All available history", "Import past sessions", "Connect"}
 		for _, tool := range available {
 			expected = append(expected, "[x] "+setupToolName(tool))
 		}
@@ -119,18 +120,39 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 			})
 		}
 		if _, cmd := form.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd == nil {
-			t.Fatal("focused Continue did not handle Enter")
+			t.Fatal("focused Connect did not handle Enter")
 		} else if _, cmd = form.Update(cmd()); cmd != nil {
 			if _, next := form.Update(cmd()); next != nil {
-				t.Fatal("Continue did not complete the form")
+				t.Fatal("Connect did not complete the form")
 			}
 		}
 		if form.State != huh.StateCompleted {
 			t.Fatalf("Enter did not complete defaults form: %v", form.State)
 		}
 		if !form.GetBool("continue") {
-			t.Fatal("Enter did not retain the default Continue action")
+			t.Fatal("Enter did not retain the default Connect action")
 		}
+	}
+}
+
+func TestWizardFormKeepsSavedSkipHistory(t *testing.T) {
+	account := accountConfig{Email: "dev@example.com"}
+	settings := wizardSettings{source: "claude", email: account.Email, history: "skip"}
+	selected, history := []string{"claude"}, settings.history
+	form := newWizardForm(account, []string{"claude"}, &settings, &selected, &history).WithWidth(72)
+	form.Init()
+	form.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+	view := ansi.Strip(form.View())
+	if !strings.Contains(view, "● Do not import history") {
+		t.Fatalf("saved skip history is not selected: %q", view)
+	}
+	if _, cmd := form.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd == nil {
+		t.Fatal("focused Connect did not handle Enter")
+	} else {
+		dispatchWizardCommand(form, cmd)
+	}
+	if form.State != huh.StateCompleted || history != "skip" {
+		t.Fatalf("saved skip was not retained: state=%v history=%q", form.State, history)
 	}
 }
 

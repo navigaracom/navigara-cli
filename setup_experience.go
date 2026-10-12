@@ -31,17 +31,17 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			}),
 		huh.NewInput().Title("Your email").Prompt("  ").Value(&settings.email).
 			Validate(func(email string) error { return validEmail(strings.TrimSpace(email)) }),
-		huh.NewSelect[string]().Title("Import history").Options(
+		huh.NewSelect[string]().Title("Import past sessions").Options(
 			huh.NewOption("All available history", "all"),
 			huh.NewOption("Last 30 days", "30d"),
 			huh.NewOption("Last 7 days", "7d"),
 			huh.NewOption("Last 24 hours", "24h"),
-			huh.NewOption("Only sync new activity", "skip"),
+			huh.NewOption("Do not import history", "skip"),
 			huh.NewOption("Custom duration", "custom"),
 		).Value(history).Height(7),
 		huh.NewConfirm().Key("continue").Title("Close running sessions first.").
-			Description("Enter to continue; Shift+Tab to edit.").
-			Affirmative("Continue").Negative("Cancel").Value(&continueSetup).
+			Description("Enter to connect; Shift+Tab to edit.").
+			Affirmative("Connect").Negative("Cancel").Value(&continueSetup).
 			WithButtonAlignment(lipgloss.Left),
 	).Title("  Connect this computer to Navigara").Description(fmt.Sprintf("  Account       %s\n  Organization  %s\n  Instance      %s", wizardHeaderValue(account.Email), wizardHeaderValue(account.OrganizationName), wizardHeaderValue(account.Host))))
 	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {

@@ -179,24 +179,30 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		p.status("History prepared", historyOut.String())
 		fmt.Fprint(stderr, historyErr.String())
 	}
-	p.status("New activity sync", "Connecting your tools...\n")
-	// Keep the original snapshots as the concurrency boundary while replacing
-	// only token-dependent output after the receiver capability check.
-	for _, f := range files {
-		if err := f.check(); err != nil {
+	var s *sender
+	err = p.busy("Connecting your tools...", func() error {
+		// Keep the original snapshots as the concurrency boundary while replacing
+		// only token-dependent output after the receiver capability check.
+		for _, f := range files {
+			if err := f.check(); err != nil {
+				return err
+			}
+		}
+		if err := ensureIngestion(ctx, &c); err != nil {
 			return err
 		}
-	}
-	if err = ensureIngestion(ctx, &c); err != nil {
+		opts.token = c.IngestToken
+		if err := refreshSetupPlans(files, opts, home); err != nil {
+			return err
+		}
+		s = newSender(opts.url, opts.token)
+		if err := applySetupFiles(files, s.checkSetup); err != nil {
+			return fmt.Errorf("settings update failed: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
 		return err
-	}
-	opts.token = c.IngestToken
-	if err = refreshSetupPlans(files, opts, home); err != nil {
-		return err
-	}
-	s := newSender(opts.url, opts.token)
-	if err = applySetupFiles(files, s.checkSetup); err != nil {
-		return fmt.Errorf("settings update failed: %w", err)
 	}
 	keep = true
 	backups := make([]string, 0, len(files))
@@ -220,7 +226,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		progress.stop()
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
-	p.status("Setup complete", fmt.Sprintf("\nConnected. Navigara accepted %d upload batches.\nNew activity syncing is configured, not yet verified.\nOpen a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.\n", s.sent))
+	p.completed(s.sent)
 	return nil
 }
 
