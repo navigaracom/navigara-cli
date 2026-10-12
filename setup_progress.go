@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -13,6 +15,7 @@ import (
 type setupProgress struct {
 	p       *setupInput
 	started bool
+	since   time.Time
 }
 
 func newSetupProgress(p *setupInput) *setupProgress {
@@ -33,17 +36,18 @@ func (u *setupProgress) upload(done, total int) {
 	}
 	if u.started {
 		fmt.Fprint(u.p.out, "\r\033[2K")
+	} else {
+		fmt.Fprintln(u.p.out)
+		u.started, u.since = true, time.Now()
 	}
-	const label = "Uploading history "
-	width := 32
+	limit := 0
 	if columns, _, err := term.GetSize(u.p.terminal.Fd()); err == nil && columns > 0 {
-		width = min(width, max(1, columns-len(label)-len(fmt.Sprintf("[] %d/%d", done, total))-1))
+		limit = columns - 1 // Avoid a terminal's last-column autowrap.
 	}
-	fmt.Fprintf(u.p.out, "%s%s", label, setupProgressBar(done, total, width))
-	u.started = true
+	fmt.Fprint(u.p.out, setupUploadLine(done, total, setupProgressETA(u.since, time.Now(), done, total), limit))
 	if done == total {
 		fmt.Fprintln(u.p.out)
-		u.started = false
+		u.started, u.since = false, time.Time{}
 	}
 }
 
@@ -51,7 +55,38 @@ func (u *setupProgress) stop() {
 	if u.started && u.p.interactive() {
 		fmt.Fprintln(u.p.out)
 	}
-	u.started = false
+	u.started, u.since = false, time.Time{}
+}
+
+func setupUploadLine(done, total int, eta string, limit int) string {
+	countWidth := ansi.StringWidth(fmt.Sprintf("[] %d/%d", done, total))
+	for _, label := range []string{"Uploading history  ", "Uploading  ", "Upload  ", ""} {
+		available := 32
+		if limit > 0 {
+			available = limit - ansi.StringWidth(label) - countWidth
+		}
+		if available < 1 {
+			continue
+		}
+		width := min(32, available)
+		showETA := eta != ""
+		if showETA && limit > 0 {
+			width = min(width, available-ansi.StringWidth(etaPrefix(eta)))
+			showETA = width >= 3
+			if !showETA {
+				width = min(32, available)
+			}
+		}
+		line := label + setupProgressBar(done, total, width)
+		if showETA {
+			line += etaPrefix(eta)
+		}
+		return line
+	}
+	if limit <= 0 || ansi.StringWidth(fmt.Sprintf("%d/%d", done, total)) <= limit {
+		return fmt.Sprintf("%d/%d", done, total)
+	}
+	return "…"
 }
 
 func setupProgressBar(done, total, width int) string {
