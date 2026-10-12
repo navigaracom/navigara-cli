@@ -116,7 +116,8 @@ func TestExportProgressCountsFilteredSessions(t *testing.T) {
 		claudeHome: claudeHome,
 		codexHome:  codexHome,
 		output:     filepath.Join(t.TempDir(), "out"),
-		since:      time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		// Fresh files keep the stale-file skip off, so the window filters each session by its records.
+		since: time.Now(),
 	}
 	var discovered []int
 	var processed [][2]int
