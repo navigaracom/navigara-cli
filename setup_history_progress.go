@@ -18,6 +18,7 @@ type setupHistoryProgress struct {
 	total   int
 	frame   int
 	active  bool
+	started time.Time
 	last    time.Time
 	stopCh  chan struct{}
 	stopped chan struct{}
@@ -33,8 +34,12 @@ func (u *setupHistoryProgress) discovering() {
 	if u.active {
 		return
 	}
+	now := time.Now()
 	u.phase, u.done, u.total, u.frame, u.active = "discovering", 0, 0, 0, true
-	u.last = time.Now()
+	u.started, u.last = now, now
+	if u.p.interactive() {
+		fmt.Fprintln(u.p.out)
+	}
 	u.renderLocked(false)
 	if u.p.interactive() {
 		u.stopCh, u.stopped = make(chan struct{}), make(chan struct{})
@@ -48,6 +53,9 @@ func (u *setupHistoryProgress) processed(done, total int) {
 	if !u.active {
 		return
 	}
+	if u.phase != "preparing" {
+		u.started = time.Now()
+	}
 	u.phase, u.done, u.total = "preparing", done, total
 	if u.p.interactive() || done == 0 || done == total || done == 1 || time.Since(u.last) >= time.Second {
 		u.renderLocked(true)
@@ -58,7 +66,7 @@ func (u *setupHistoryProgress) finalizing() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.active {
-		u.phase, u.frame = "finalizing", 0
+		u.phase, u.frame, u.started = "finalizing", 0, time.Time{}
 		u.renderLocked(true)
 	}
 }
@@ -127,15 +135,45 @@ func (u *setupHistoryProgress) lineLocked() string {
 	if !u.p.interactive() {
 		return "Preparing history " + spinner + " " + count
 	}
+	eta := setupProgressETA(u.started, time.Now(), u.done, u.total)
 	width := 32
 	limit := u.width()
 	if limit > 0 {
-		width = min(width, limit-len("Preparing history "+spinner+" [] ")-len(count))
+		width = min(width, limit-len("Preparing history "+spinner+" [] ")-len(count)-len(etaPrefix(eta)))
+		if width < 3 && eta != "" {
+			eta = ""
+			width = min(32, limit-len("Preparing history "+spinner+" [] ")-len(count))
+		}
 	}
 	if width < 3 {
 		return u.fit("Preparing history "+spinner+" "+count, "Preparing "+spinner+" "+fmt.Sprintf("%d/%d checked", u.done, u.total), spinner)
 	}
-	return fmt.Sprintf("Preparing history %s %s", spinner, setupProgressBar(u.done, u.total, width)+" sessions checked")
+	return fmt.Sprintf("Preparing history %s %s%s", spinner, setupProgressBar(u.done, u.total, width)+" sessions checked", etaPrefix(eta))
+}
+
+func setupProgressETA(started, now time.Time, done, total int) string {
+	if started.IsZero() || total <= 0 || done < 2 || done >= total {
+		return ""
+	}
+	elapsed := now.Sub(started)
+	if elapsed < time.Second {
+		return ""
+	}
+	seconds := int(elapsed.Seconds() * float64(total-done) / float64(done))
+	if seconds < 1 {
+		return ""
+	}
+	if seconds < 60 {
+		return fmt.Sprintf("~%ds left", seconds)
+	}
+	return fmt.Sprintf("~%dm %02ds left", seconds/60, seconds%60)
+}
+
+func etaPrefix(eta string) string {
+	if eta == "" {
+		return ""
+	}
+	return "  " + eta
 }
 
 func (u *setupHistoryProgress) fit(lines ...string) string {

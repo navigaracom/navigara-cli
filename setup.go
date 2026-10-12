@@ -212,10 +212,12 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		}
 	}
 	if len(backups) > 0 && p.interactive() {
-		p.status("Settings backup", "Your previous settings are saved here:\n")
+		body := "Your previous settings are saved here:\n"
 		for _, backup := range backups {
-			fmt.Fprintf(p.out, "  %s\n", wizardPathValue(backup))
+			body += "  " + wizardPathValue(backup) + "\n"
 		}
+		p.status("Settings backup", body)
+		fmt.Fprintln(p.out)
 	} else {
 		for _, backup := range backups {
 			fmt.Fprintln(p.out, "Previous settings saved at:", backup)
@@ -280,6 +282,9 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 	}
 	if err = s.checkSetup(); err != nil {
 		return err
+	}
+	if p.interactive() {
+		fmt.Fprintln(p.out)
 	}
 	progress := newSetupProgress(p)
 	if err = sendSetupBatches(dir, s, progress.upload); err != nil {
