@@ -169,7 +169,8 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 		fmt.Fprintf(stderr, "navigara: output %q: %v\n", opts.output, err)
 		return 1
 	}
-	// One session at a time: build, write and send it before the next, so memory stays flat.
+	// One session and one body at a time: each body is written and sent before the next is
+	// encoded, so memory stays flat.
 	counts := map[string]int{}
 	exported, failed, events, points, bodies := 0, 0, 0, 0, 0
 	estimated, partial := 0, 0
@@ -187,35 +188,32 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			report(index + 1)
 			continue
 		}
-		encoded, err := telemetry.Encode([]*telemetry.Session{s})
-		if err != nil {
-			fmt.Fprintf(stderr, "navigara: encode %s: %v\n", j.id, err)
-			return 1
-		}
-		for _, b := range encoded {
+		err = telemetry.Encode(s, func(b telemetry.Body) error {
 			data, err := gzipBody(b.Data)
 			if err != nil {
-				fmt.Fprintf(stderr, "navigara: encode %s: %v\n", j.id, err)
-				return 1
+				return fmt.Errorf("encode: %w", err)
 			}
 			kind := strings.TrimPrefix(b.Path, "/v1/")
 			counts[kind]++
+			bodies++
 			path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json.gz", kind, counts[kind]))
 			if err := writeRequest(path, data); err != nil {
-				fmt.Fprintf(stderr, "navigara: output %q: %v\n", path, err)
-				return 1
+				return fmt.Errorf("output %q: %w", path, err)
 			}
 			if sender != nil {
 				if err := sender.post(telemetry.Body{Path: b.Path, Data: data}); err != nil {
-					fmt.Fprintf(stderr, "navigara: send: %v (re-run with a new --output to resume: the receiver drops records it already has)\n", err)
-					return 1
+					return fmt.Errorf("send: %w (re-run with a new --output to resume: the receiver drops records it already has)", err)
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
+			return 1
 		}
 		exported++
 		events += len(s.Events)
 		points += len(s.Points)
-		bodies += len(encoded)
 		if s.Estimated {
 			estimated++
 		}

@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -341,6 +342,20 @@ func TestCodexDiscoveryErrors(t *testing.T) {
 	}
 }
 
+func TestEncodeStopsAtTheFirstEmitError(t *testing.T) {
+	s := &Session{Source: "claude_code", SessionID: sid, Service: "claude-code", Common: map[string]any{"session.id": sid}}
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := range 20000 {
+		s.Events = append(s.Events, Event{Name: "tool_result", Time: start.Add(time.Duration(i) * time.Second),
+			Attrs: map[string]any{"filler": string(make([]byte, 200))}})
+	}
+	stop := errors.New("stop")
+	calls := 0
+	if err := Encode(s, func(Body) error { calls++; return stop }); !errors.Is(err, stop) || calls != 1 {
+		t.Fatalf("err=%v calls=%d; want the emit error after one body", err, calls)
+	}
+}
+
 func TestEncodeBoundsBodies(t *testing.T) {
 	s := &Session{Source: "claude_code", SessionID: sid, Service: "claude-code", Common: map[string]any{"session.id": sid}}
 	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
@@ -349,7 +364,8 @@ func TestEncodeBoundsBodies(t *testing.T) {
 			Attrs: map[string]any{"tool_name": "Bash", "duration_ms": int64(i), "success": "true", "filler": string(make([]byte, 200))}})
 	}
 	s.Points = []Point{{Metric: "cost.usage", Time: start, Model: "m", Value: 1.5}}
-	bodies, err := Encode([]*Session{s})
+	var bodies []Body
+	err := Encode(s, func(b Body) error { bodies = append(bodies, b); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

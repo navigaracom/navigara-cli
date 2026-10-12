@@ -73,24 +73,13 @@ func attributes(maps ...map[string]any) []keyValue {
 
 func nanos(t time.Time) string { return strconv.FormatInt(t.UnixNano(), 10) }
 
-// Encode turns sessions into bounded OTLP/HTTP JSON request bodies, logs before metrics.
-func Encode(sessions []*Session) ([]Body, error) {
-	var out []Body
-	for _, s := range sessions {
-		logs, err := encodeLogs(s)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, logs...)
+// Encode turns a session into bounded OTLP/HTTP JSON request bodies, logs before metrics. It
+// hands each body to emit as soon as the body is full, so memory holds one body at a time.
+func Encode(s *Session, emit func(Body) error) error {
+	if err := encodeLogs(s, emit); err != nil {
+		return err
 	}
-	for _, s := range sessions {
-		metrics, err := encodeMetrics(s)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, metrics...)
-	}
-	return out, nil
+	return encodeMetrics(s, emit)
 }
 
 func resource(s *Session) json.RawMessage {
@@ -98,61 +87,59 @@ func resource(s *Session) json.RawMessage {
 	return b
 }
 
-// chunk packs encoded items into bodies of at most MaxBodyBytes.
-func chunk(path string, items []json.RawMessage, wrap func(items []json.RawMessage) ([]byte, error)) ([]Body, error) {
-	var out []Body
+// chunk encodes items 0..n-1 in order and packs them into bodies of at most MaxBodyBytes.
+// wrap receives the index of a batch's first item.
+func chunk(path string, n int, item func(i int) ([]byte, error), wrap func(first int, batch []json.RawMessage) ([]byte, error), emit func(Body) error) error {
 	var batch []json.RawMessage
-	size := 0
+	size, first := 0, 0
 	flush := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
-		data, err := wrap(batch)
+		data, err := wrap(first, batch)
 		if err != nil {
 			return err
 		}
-		out = append(out, Body{Path: path, Data: data})
+		first += len(batch)
 		batch, size = nil, 0
-		return nil
+		return emit(Body{Path: path, Data: data})
 	}
-	for _, item := range items {
-		if size+len(item)+1024 > MaxBodyBytes {
+	for i := range n {
+		b, err := item(i)
+		if err != nil {
+			return err
+		}
+		if size+len(b)+1024 > MaxBodyBytes {
 			if err := flush(); err != nil {
-				return nil, err
+				return err
 			}
 		}
-		batch = append(batch, item)
-		size += len(item) + 1
+		batch = append(batch, b)
+		size += len(b) + 1
 	}
-	return out, flush()
+	return flush()
 }
 
-func encodeLogs(s *Session) ([]Body, error) {
-	items := make([]json.RawMessage, 0, len(s.Events))
-	for i, e := range s.Events {
+func encodeLogs(s *Session, emit func(Body) error) error {
+	res := resource(s)
+	return chunk("/v1/logs", len(s.Events), func(i int) ([]byte, error) {
+		e := s.Events[i]
 		t := nanos(e.Time)
 		body := map[string]any{"stringValue": eventPrefix(s.Source) + e.Name}
-		record := map[string]any{
+		return json.Marshal(map[string]any{
 			"timeUnixNano": t, "observedTimeUnixNano": t, "eventName": eventPrefix(s.Source) + e.Name, "body": body,
 			"attributes": attributes(s.Common, e.Attrs, map[string]any{
 				"event.name":      e.Name,
 				"event.timestamp": e.Time.UTC().Format("2006-01-02T15:04:05.000Z"),
 				"event.sequence":  int64(i),
 			}),
-		}
-		b, err := json.Marshal(record)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, b)
-	}
-	res := resource(s)
-	return chunk("/v1/logs", items, func(batch []json.RawMessage) ([]byte, error) {
+		})
+	}, func(_ int, batch []json.RawMessage) ([]byte, error) {
 		return json.Marshal(map[string]any{"resourceLogs": []any{map[string]any{
 			"resource":  res,
 			"scopeLogs": []any{map[string]any{"scope": map[string]any{"name": "navigara.backfill"}, "logRecords": batch}},
 		}}})
-	})
+	}, emit)
 }
 
 func eventPrefix(source string) string {
@@ -162,10 +149,10 @@ func eventPrefix(source string) string {
 	return "claude_code."
 }
 
-func encodeMetrics(s *Session) ([]Body, error) {
-	var items []json.RawMessage
-	var names []string
-	for _, p := range s.Points {
+func encodeMetrics(s *Session, emit func(Body) error) error {
+	res := resource(s)
+	return chunk("/v1/metrics", len(s.Points), func(i int) ([]byte, error) {
+		p := s.Points[i]
 		attrs := map[string]any{"model": p.Model}
 		if p.Type != "" {
 			attrs[tokenTypeKey(s.Source)] = p.Type
@@ -177,22 +164,12 @@ func encodeMetrics(s *Session) ([]Body, error) {
 		} else {
 			dp["asInt"] = strconv.FormatInt(int64(math.Round(p.Value)), 10)
 		}
-		b, err := json.Marshal(dp)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, b)
-		names = append(names, metricName(s.Source, p.Metric))
-	}
-	res := resource(s)
-	next := 0
-	return chunk("/v1/metrics", items, func(batch []json.RawMessage) ([]byte, error) {
-		// Batches arrive in item order, so the matching metric names follow on from the last batch.
+		return json.Marshal(dp)
+	}, func(first int, batch []json.RawMessage) ([]byte, error) {
 		byName := map[string][]json.RawMessage{}
 		var order []string
-		for _, dp := range batch {
-			name := names[next]
-			next++
+		for i, dp := range batch {
+			name := metricName(s.Source, s.Points[first+i].Metric)
 			if _, ok := byName[name]; !ok {
 				order = append(order, name)
 			}
@@ -208,7 +185,7 @@ func encodeMetrics(s *Session) ([]Body, error) {
 			"resource":     res,
 			"scopeMetrics": []any{map[string]any{"scope": map[string]any{"name": "navigara.backfill"}, "metrics": metrics}},
 		}}})
-	})
+	}, emit)
 }
 
 func metricName(source, metric string) string {
