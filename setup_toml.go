@@ -9,7 +9,10 @@ import (
 	"github.com/pelletier/go-toml/v2/unstable"
 )
 
-var errInvalidTOML = errors.New("invalid TOML settings")
+var (
+	errInvalidTOML                   = errors.New("invalid TOML settings")
+	errUnsupportedCodexFeatureLayout = errors.New("Codex has obsolete feature flags in an unsupported layout; remove rmcp_client, terminal_resize_reflow, and js_repl manually")
+)
 
 type tomlExpression struct {
 	kind       unstable.Kind
@@ -68,6 +71,66 @@ func validateTOML(data []byte) error {
 		return errInvalidTOML
 	}
 	return nil
+}
+
+// removeObsoleteCodexFeatures removes only the three retired boolean flags
+// from the root features table. It rejects representations of those flags
+// that cannot be removed safely without rewriting user configuration.
+func removeObsoleteCodexFeatures(data []byte) ([]byte, error) {
+	var decoded map[string]any
+	if err := toml.Unmarshal(data, &decoded); err != nil {
+		return nil, errInvalidTOML
+	}
+	features, ok := decoded["features"].(map[string]any)
+	if !ok {
+		return data, nil
+	}
+	remove := make(map[string]struct{}, 3)
+	for _, key := range [...]string{"rmcp_client", "terminal_resize_reflow", "js_repl"} {
+		value, ok := features[key]
+		if !ok {
+			continue
+		}
+		if _, ok := value.(bool); !ok {
+			return nil, errUnsupportedCodexFeatureLayout
+		}
+		remove[key] = struct{}{}
+	}
+	if len(remove) == 0 {
+		return data, nil
+	}
+
+	expressions, err := parseTOML(data)
+	if err != nil {
+		return nil, err
+	}
+	var table []string
+	var out bytes.Buffer
+	last := 0
+	for _, expression := range expressions {
+		switch expression.kind {
+		case unstable.Table, unstable.ArrayTable:
+			table = expression.key
+		case unstable.KeyValue:
+			key := ""
+			switch {
+			case len(table) == 1 && table[0] == "features" && len(expression.key) == 1:
+				key = expression.key[0]
+			case len(table) == 0 && len(expression.key) == 2 && expression.key[0] == "features":
+				key = expression.key[1]
+			}
+			if _, ok := remove[key]; ok {
+				out.Write(data[last:expression.start])
+				last = expression.end
+				delete(remove, key)
+			}
+		}
+	}
+	if len(remove) > 0 {
+		return nil, errUnsupportedCodexFeatureLayout
+	}
+	out.Write(data[last:])
+	return out.Bytes(), nil
 }
 
 func tomlNodeKey(node *unstable.Node) []string {

@@ -102,6 +102,10 @@ func codexSettings(data []byte, endpoint, token string, replace bool) ([]byte, e
 		}
 	}
 	out := spliceManaged(data, block, start, end)
+	out, err = removeObsoleteCodexFeatures(out)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateTOML(out); err != nil {
 		return nil, err
 	}
