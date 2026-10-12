@@ -137,6 +137,43 @@ func TestExportProgressCountsFilteredSessions(t *testing.T) {
 	}
 }
 
+func TestUploadPinnedCodexForkNeedsNoParentRollout(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	child := filepath.Join(codexHome, "sessions", "rollout-child.jsonl")
+	parentHeader := map[string]any{"timestamp": "2026-10-03T09:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "parent"}}
+	body := map[string]any{"timestamp": "2026-10-03T09:00:01Z", "type": "turn_context", "ordinal": 1, "payload": map[string]any{"model": "parent-model"}}
+	writeRollout := func(path string, rows ...map[string]any) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var lines []string
+		for _, row := range rows {
+			encoded, err := json.Marshal(row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, string(encoded))
+		}
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRollout(child,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "child", "forked_from_id": "parent", "parent_thread_id": "parent", "subagent_history_start_ordinal": 8}},
+		parentHeader, body,
+	)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+		"--claude-home", claudeHome, "--codex-home", codexHome, "--session", "child", "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "sessions=1 failed=0 events=1 points=0") || strings.Contains(stdout.String(), "parent") {
+		t.Fatalf("unexpected export summary: %q", stdout.String())
+	}
+}
+
 func TestUploadStopsOnRejectedKey(t *testing.T) {
 	claudeHome, codexHome := fixtureHomes(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -80,6 +80,7 @@ type codexRow struct {
 	Timestamp string          `json:"timestamp"`
 	Type      string          `json:"type"`
 	Payload   json.RawMessage `json:"payload"`
+	Ordinal   *int64          `json:"ordinal"`
 }
 
 type codexTokens struct {
@@ -116,6 +117,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 	nativeToolCalls := map[string]codexNativeToolCall{}
 	nativeToolOutputs := map[string]time.Time{}
 	nativeToolOutputIDs := []string{}
+	var historyStart int64
 	line := 0
 	for scanner.Scan() {
 		line++
@@ -123,13 +125,20 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 		if json.Unmarshal(scanner.Bytes(), &r) != nil {
 			return nil, fmt.Errorf("line %d: invalid JSON", line)
 		}
+		inheritedRecord := r.Type != "session_meta" && historyStart > 0 && r.Ordinal != nil && *r.Ordinal < historyStart
+		if inheritedRecord && r.Type != "turn_context" && r.Type != "response_item" {
+			continue
+		}
 		at, err := time.Parse(time.RFC3339Nano, r.Timestamp)
 		if err != nil {
+			if line == 1 && r.Type == "session_meta" {
+				return nil, fmt.Errorf("line %d: invalid session_meta timestamp", line)
+			}
 			continue
 		}
 		at = at.UTC()
 		future := !until.IsZero() && at.After(until)
-		if future && r.Type != "session_meta" {
+		if future && !inheritedRecord && r.Type != "session_meta" {
 			break
 		}
 		switch r.Type {
@@ -144,6 +153,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 				Source        any    `json:"source"`
 				ThreadSource  string `json:"thread_source"`
 				ParentThread  string `json:"parent_thread_id"`
+				HistoryStart  int64  `json:"subagent_history_start_ordinal"`
 				ModelProvider string `json:"model_provider"`
 				Git           *struct {
 					RepositoryURL string `json:"repository_url"`
@@ -152,6 +162,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			if json.Unmarshal(r.Payload, &meta) != nil || meta.ID == "" {
 				return nil, fmt.Errorf("invalid session_meta")
 			}
+			historyStart = meta.HistoryStart
 			s.SessionID = meta.ID
 			s.Common["session.id"] = meta.ID
 			if meta.Originator != "" {
@@ -278,6 +289,9 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			if json.Unmarshal(r.Payload, &item) != nil || item.CallID == "" {
 				continue
 			}
+			if inheritedRecord && (item.Type == "tool_search_output" || item.Type == "function_call_output" || item.Type == "custom_tool_call_output") {
+				continue
+			}
 			switch item.Type {
 			case "tool_search_call":
 				if item.Execution == "client" {
@@ -297,7 +311,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 				}
 			}
 		}
-		if future {
+		if future && !inheritedRecord {
 			break
 		}
 	}

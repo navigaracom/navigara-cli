@@ -84,6 +84,80 @@ func TestBuildCodex(t *testing.T) {
 	}
 }
 
+func TestBuildCodexActualForkCountsOwnedTokenAfterBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-child.jsonl")
+	fixture, err := os.ReadFile("testdata/codex-fork-ordinal-owned.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := BuildCodex(path, Identity{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sum(s, "token.usage", "total"); got != 23004 {
+		t.Fatalf("owned token total = %v, want 23004", got)
+	}
+}
+
+func TestBuildCodexCountsCopiedHeaderRowAfterBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-child.jsonl")
+	fixture, err := os.ReadFile("testdata/codex-fork-owned-after-boundary.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := BuildCodex(path, Identity{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sum(s, "token.usage", "total"); got != 55192 {
+		t.Fatalf("after-boundary token total = %v, want 55192", got)
+	}
+	if got := len(events(s, "codex.conversation_starts")); got != 1 || len(s.Points) != 9 || s.Points[0].Model != "gpt-5.6-terra" {
+		t.Fatalf("after-boundary records = events=%d points=%d", got, len(s.Points))
+	}
+}
+
+func TestBuildCodexActualSingleHeaderForkSkipsInheritedToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-child.jsonl")
+	fixture, err := os.ReadFile("testdata/codex-fork-single-header.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := BuildCodex(path, Identity{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.SessionID != "child-thread" || len(events(s, "codex.conversation_starts")) != 1 || len(s.Points) != 0 {
+		t.Fatalf("single-header fork = %+v", s)
+	}
+}
+
+func TestBuildCodexUsesInheritedNativeCallForOwnedOutput(t *testing.T) {
+	child := filepath.Join(t.TempDir(), "rollout-child.jsonl")
+	call := map[string]any{"timestamp": "2026-10-03T09:00:01Z", "type": "response_item", "ordinal": 1, "payload": map[string]any{"type": "function_call", "call_id": "call", "name": "exec_command"}}
+	writeLines(t, child,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "child", "forked_from_id": "parent", "subagent_history_start_ordinal": 2}},
+		call,
+		map[string]any{"timestamp": "2026-10-03T10:00:02Z", "type": "response_item", "ordinal": 2, "payload": map[string]any{"type": "function_call_output", "call_id": "call"}},
+	)
+	s, err := BuildCodex(child, Identity{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results := events(s, "codex.tool_result"); len(results) != 1 || results[0].Attrs["call_id"] != "call" {
+		t.Fatalf("owned output result = %+v", results)
+	}
+}
+
 func TestBuildCodexClientToolSearch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	writeLines(t, path,

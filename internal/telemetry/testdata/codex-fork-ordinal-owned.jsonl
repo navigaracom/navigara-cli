@@ -1,0 +1,4 @@
+{"timestamp":"2026-10-02T08:55:01.112Z","type":"session_meta","ordinal":0,"payload":{"id":"child-thread","session_id":"child-thread","forked_from_id":"parent-thread","parent_thread_id":"parent-thread","subagent_history_start_ordinal":9,"originator":"codex-tui"}}
+{"timestamp":"2026-10-02T08:55:01.112Z","type":"session_meta","ordinal":1,"payload":{"id":"parent-thread","session_id":"parent-thread","originator":"codex-tui"}}
+{"timestamp":"2026-10-02T08:55:01.112Z","type":"event_msg","ordinal":2,"payload":{"type":"task_started"}}
+{"timestamp":"2026-10-02T08:55:10.438Z","type":"event_msg","ordinal":23,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":22791,"cached_input_tokens":5888,"cache_write_input_tokens":0,"output_tokens":213,"reasoning_output_tokens":81,"total_tokens":23004}}}}

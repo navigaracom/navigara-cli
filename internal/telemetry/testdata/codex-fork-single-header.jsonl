@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-10T07:01:05.424Z","type":"session_meta","ordinal":0,"payload":{"id":"child-thread","session_id":"child-thread","forked_from_id":"parent-thread","parent_thread_id":"parent-thread","subagent_history_start_ordinal":197,"originator":"codex-tui"}}
+{"timestamp":"2026-08-10T07:01:05.424Z","type":"event_msg","ordinal":2,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":235964381,"cached_input_tokens":231193088,"cache_write_input_tokens":0,"output_tokens":620785,"reasoning_output_tokens":242165,"total_tokens":236585166}}}}
