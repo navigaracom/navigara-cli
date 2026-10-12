@@ -215,8 +215,20 @@ func wizardPlans(opts *options, home string, selected []string, p *setupInput) (
 			}
 		}
 		if err != nil {
-			fmt.Fprintf(p.out, "\n%s couldn't be connected safely. Its settings have not changed.\nDetails: %v\n", setupToolName(tool), err)
-			skip, inputErr := p.yes("Skip " + setupToolName(tool) + " for this setup (history and new activity)")
+			var skip bool
+			var inputErr error
+			if p.interactive() {
+				description := "Its settings have not changed. Skipping excludes both its history and new activity from this setup.\n\nDetails\n" + wizardHeaderValue(err.Error())
+				inputErr = p.form(huh.NewForm(huh.NewGroup(
+					huh.NewConfirm().Title(setupToolName(tool) + " couldn't be connected").
+						Description(lipgloss.Wrap(description, wizardStatusWidth(p)-wizardStatusInset, " /\\?&=._")).
+						Affirmative("Skip").Negative("Cancel").Value(&skip).
+						WithButtonAlignment(lipgloss.Left),
+				)))
+			} else {
+				fmt.Fprintf(p.out, "\n%s couldn't be connected safely. Its settings have not changed.\nDetails: %v\n", setupToolName(tool), err)
+				skip, inputErr = p.yes("Skip " + setupToolName(tool) + " for this setup (history and new activity)")
+			}
 			if inputErr != nil {
 				return nil, nil, inputErr
 			}
