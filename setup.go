@@ -217,6 +217,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 			body += "  " + wizardPathValue(backup) + "\n"
 		}
 		p.status("Settings backup", body)
+		fmt.Fprintln(p.out)
 	} else {
 		for _, backup := range backups {
 			fmt.Fprintln(p.out, "Previous settings saved at:", backup)
@@ -281,6 +282,9 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 	}
 	if err = s.checkSetup(); err != nil {
 		return err
+	}
+	if p.interactive() {
+		fmt.Fprintln(p.out)
 	}
 	progress := newSetupProgress(p)
 	if err = sendSetupBatches(dir, s, progress.upload); err != nil {

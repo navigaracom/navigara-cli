@@ -37,7 +37,6 @@ func (u *setupProgress) upload(done, total int) {
 	if u.started {
 		fmt.Fprint(u.p.out, "\r\033[2K")
 	} else {
-		fmt.Fprintln(u.p.out)
 		u.started, u.since = true, time.Now()
 	}
 	limit := 0
