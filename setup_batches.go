@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,14 +25,14 @@ type setupManifest struct {
 	Batches        []setupBatch
 }
 
-var batchName = regexp.MustCompile(`^(logs|metrics)-[0-9]+\.json$`)
+var batchName = regexp.MustCompile(`^(logs|metrics)-[0-9]+\.json\.gz$`)
 
 func saveSetupBatches(dir, url, organizationID string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	m := setupManifest{Version: 1, URL: url, OrganizationID: organizationID}
+	m := setupManifest{Version: 2, URL: url, OrganizationID: organizationID}
 	for _, e := range entries {
 		if !batchName.MatchString(e.Name()) {
 			return errors.New("unexpected file in setup export")
@@ -57,7 +60,10 @@ func loadSetupBatches(dir string) (setupManifest, error) {
 	if !exists || json.Unmarshal(data, &m) != nil {
 		return m, errors.New("invalid setup manifest")
 	}
-	if m.Version != 1 {
+	if m.Version == 1 {
+		return m, errors.New("this payload was prepared by an older navigara; run navigara wizard again")
+	}
+	if m.Version != 2 {
 		return m, errors.New("unsupported setup manifest version")
 	}
 	seen := map[string]bool{}
@@ -83,10 +89,20 @@ func readBatch(dir, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !exists || !json.Valid(data) {
+	if !exists || !validBatch(data) {
 		return nil, errors.New("missing or invalid OTLP batch")
 	}
 	return data, nil
+}
+
+// validBatch reports whether a gzip body decodes to JSON within the receiver's limit.
+func validBatch(data []byte) bool {
+	zr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return false
+	}
+	plain, err := io.ReadAll(io.LimitReader(zr, maxOTLPBody+1))
+	return err == nil && len(plain) <= maxOTLPBody && json.Valid(plain)
 }
 
 func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) error {

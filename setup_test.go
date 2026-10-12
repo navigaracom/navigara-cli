@@ -28,7 +28,7 @@ func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 				if r.Header.Get("Authorization") != "Bearer test-secret" {
 					t.Error("missing token")
 				}
-				body, _ := io.ReadAll(r.Body)
+				body := mustBody(r)
 				if requests == 1 && string(body) != "{}" {
 					t.Error("first request must only probe")
 				}
@@ -133,7 +133,7 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			fail := true
 			var payloads []string
 			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body, _ := io.ReadAll(r.Body)
+				body := mustBody(r)
 				if failure == "auth" {
 					w.WriteHeader(401)
 					return

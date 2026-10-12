@@ -21,6 +21,9 @@ type sender struct {
 	sent        int
 }
 
+// maxOTLPBody is the receiver's limit for a decoded request body.
+const maxOTLPBody = 16 << 20
+
 var errIngestionAuthRejected = errors.New("the API key needs the analytics ingestor role")
 
 func newSender(base, token string) *sender {
@@ -51,6 +54,7 @@ func (s *sender) checkSetup() error {
 	return s.send(telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)}, true)
 }
 
+// post sends one gzip-compressed OTLP body.
 func (s *sender) post(b telemetry.Body) error { return s.send(b, false) }
 
 func (s *sender) send(b telemetry.Body, probe bool) error {
@@ -70,6 +74,9 @@ func (s *sender) send(b telemetry.Body, probe bool) error {
 			return errors.New("invalid OTLP request")
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if !probe {
+			req.Header.Set("Content-Encoding", "gzip")
+		}
 		req.Header.Set("Authorization", "Bearer "+s.token)
 		resp, err := s.client.Do(req)
 		if err != nil {

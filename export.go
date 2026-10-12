@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -185,15 +187,20 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			return 1
 		}
 		for _, b := range encoded {
+			data, err := gzipBody(b.Data)
+			if err != nil {
+				fmt.Fprintf(stderr, "navigara: encode %s: %v\n", j.id, err)
+				return 1
+			}
 			kind := strings.TrimPrefix(b.Path, "/v1/")
 			counts[kind]++
-			path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json", kind, counts[kind]))
-			if err := writeRequest(path, b.Data); err != nil {
+			path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json.gz", kind, counts[kind]))
+			if err := writeRequest(path, data); err != nil {
 				fmt.Fprintf(stderr, "navigara: output %q: %v\n", path, err)
 				return 1
 			}
 			if sender != nil {
-				if err := sender.post(b); err != nil {
+				if err := sender.post(telemetry.Body{Path: b.Path, Data: data}); err != nil {
 					fmt.Fprintf(stderr, "navigara: send: %v (re-run with a new --output to resume: the receiver drops records it already has)\n", err)
 					return 1
 				}
@@ -288,6 +295,19 @@ func repositoryResolver() func(cwd string) string {
 		cache[cwd] = url
 		return url
 	}
+}
+
+// gzipBody compresses one OTLP body: the repeated attributes shrink it about 40 times.
+func gzipBody(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(data); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func writeRequest(path string, data []byte) error {
