@@ -5,10 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -109,28 +107,34 @@ func TestSetupBatchesRejectInvalidBeforeRequest(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			requests := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++; fmt.Fprint(w, `{}`) }))
-			defer srv.Close()
-			d := writeBatchFixture(t, srv.URL+"/api")
+			var requests atomic.Int32
+			d := writeBatchFixture(t, "http://127.0.0.1/api")
 			tc.change(d)
-			if err := sendSetupBatches(d, newSender(srv.URL+"/api", "secret"), nil); err == nil {
+			s := newSender("http://127.0.0.1/api", "secret")
+			s.client.Transport = parallelRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				requests.Add(1)
+				return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
+			})
+			if err := sendSetupBatches(d, s, nil); err == nil {
 				t.Fatal("accepted invalid batch")
 			}
-			if requests != 0 {
-				t.Fatalf("requested before validation: %d", requests)
+			if requests.Load() != 0 {
+				t.Fatalf("requested before validation: %d", requests.Load())
 			}
 		})
 	}
 	t.Run("destination", func(t *testing.T) {
-		requests := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++ }))
-		defer srv.Close()
-		d := writeBatchFixture(t, srv.URL+"/api")
-		if err := sendSetupBatches(d, newSender(srv.URL+"/other", "secret"), nil); err == nil {
+		var requests atomic.Int32
+		d := writeBatchFixture(t, "http://127.0.0.1/api")
+		s := newSender("http://127.0.0.1/other", "secret")
+		s.client.Transport = parallelRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			requests.Add(1)
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
+		})
+		if err := sendSetupBatches(d, s, nil); err == nil {
 			t.Fatal("accepted destination mismatch")
 		}
-		if requests != 0 {
+		if requests.Load() != 0 {
 			t.Fatal("requested on destination mismatch")
 		}
 	})

@@ -39,6 +39,7 @@ func TestSetupBatchesUsesFourWorkersAndReportsAcceptedProgress(t *testing.T) {
 	var active, maxActive atomic.Int32
 	var calls atomic.Int32
 	started := make(chan struct{}, 4)
+	completed := make(chan int, 4)
 	release := make([]chan struct{}, 4)
 	for i := range release {
 		release[i] = make(chan struct{})
@@ -62,6 +63,7 @@ func TestSetupBatchesUsesFourWorkersAndReportsAcceptedProgress(t *testing.T) {
 		if call <= 4 {
 			started <- struct{}{}
 			<-release[call-1]
+			completed <- call
 		}
 		active.Add(-1)
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
@@ -78,10 +80,17 @@ func TestSetupBatchesUsesFourWorkersAndReportsAcceptedProgress(t *testing.T) {
 			t.Fatal("workers did not reach the transport barrier")
 		}
 	}
-	// Complete the first four in reverse order so completion is observably out of order.
+	// Complete the first four in reverse order and observe each return before the next release.
 	for i := 3; i >= 0; i-- {
 		close(release[i])
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case call := <-completed:
+			if call != i+1 {
+				t.Fatalf("completed call %d; want %d", call, i+1)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("call %d did not return after release", i+1)
+		}
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
