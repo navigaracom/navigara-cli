@@ -38,3 +38,19 @@ func TestReadIdentityReadsParentConfigOnlyForDefaultHome(t *testing.T) {
 		}
 	}
 }
+
+func TestReadIdentityTreatsRelativeDefaultHomeAsDefault(t *testing.T) {
+	user := t.TempDir()
+	t.Setenv("HOME", user)
+	if err := os.Mkdir(filepath.Join(user, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := `{"oauthAccount":{"emailAddress":"personal@example.com"}}`
+	if err := os.WriteFile(filepath.Join(user, ".claude.json"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(user) // --claude-home .claude from $HOME names the default home.
+	if got := ReadIdentity(".claude", "").Email; got != "personal@example.com" {
+		t.Fatalf("email %q, want the default home's ~/.claude.json", got)
+	}
+}

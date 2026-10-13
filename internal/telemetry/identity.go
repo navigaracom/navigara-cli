@@ -65,9 +65,19 @@ func claudeConfigPath(claudeHome string) string {
 	return filepath.Join(filepath.Dir(claudeHome), ".claude.json")
 }
 
+// isDefaultClaudeHome reports whether claudeHome is the directory ~/.claude, however it is
+// spelled: relative, through a symlink, or with a trailing slash.
 func isDefaultClaudeHome(claudeHome string) bool {
 	home, err := os.UserHomeDir()
-	return err == nil && filepath.Clean(claudeHome) == filepath.Join(home, ".claude")
+	if err != nil {
+		return false
+	}
+	given, err := os.Stat(claudeHome)
+	if err != nil {
+		return false
+	}
+	def, err := os.Stat(filepath.Join(home, ".claude"))
+	return err == nil && os.SameFile(given, def)
 }
 
 func fileExists(path string) bool {
