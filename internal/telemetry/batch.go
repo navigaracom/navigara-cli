@@ -87,9 +87,7 @@ func (b *Batcher) flushPath(path string) error {
 	if p == nil || p.data.Len() == len(p.header) {
 		return nil
 	}
-	data := make([]byte, p.data.Len()+len(footer()))
-	copy(data, p.data.Bytes())
-	copy(data[p.data.Len():], footer())
+	data := append(p.data.Bytes(), ']', '}')
 	if err := b.emitBody(Body{Path: p.path, Data: data}); err != nil {
 		return err
 	}
