@@ -75,6 +75,24 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			return 1
 		}
 	}
+	// A missing $CLAUDE_CONFIG_DIR or $CODEX_HOME is reported before anything else: history the
+	// user expects there is not read, and no email can fix that.
+	for _, tool := range []struct {
+		name, home, flag, env string
+		want                  *bool
+	}{
+		{"Claude Code", claudeHome, opts.claudeHome, "CLAUDE_CONFIG_DIR", &wantClaude},
+		{"Codex", codexHome, opts.codexHome, "CODEX_HOME", &wantCodex},
+	} {
+		source := homeSource(tool.flag, tool.env)
+		if !*tool.want || source == "" {
+			continue
+		}
+		if _, err := os.Stat(tool.home); errors.Is(err, fs.ErrNotExist) {
+			*tool.want = false
+			fmt.Fprintf(stderr, "navigara: skipping %s: home %q%s does not exist\n", tool.name, tool.home, source)
+		}
+	}
 	ident := telemetry.ReadIdentity(claudeHome, codexHome)
 	if opts.email != "" {
 		ident = ident.WithEmail(opts.email)
@@ -82,7 +100,7 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 	// Each tool needs its own signed-in email: one tool's account says nothing about the other's.
 	claudeOK := ident.Email != "" || opts.allowAnonymous
 	codexOK := ident.CodexEmail != "" || opts.allowAnonymous
-	if (!wantClaude || !claudeOK) && (!wantCodex || !codexOK) {
+	if (wantClaude || wantCodex) && (!wantClaude || !claudeOK) && (!wantCodex || !codexOK) {
 		fmt.Fprintln(stderr, "navigara: no signed-in email found; pass --email or --allow-anonymous")
 		return 2
 	}
@@ -119,24 +137,9 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 	}
 	var jobs []job
 	incomplete := false
-	// A home that no flag named may be missing. The default then has no history, but a missing
-	// $CLAUDE_CONFIG_DIR or $CODEX_HOME deserves a warning: history elsewhere is not read.
-	for _, tool := range []struct {
-		name, home, flag, env string
-		want                  *bool
-	}{
-		{"Claude Code", claudeHome, opts.claudeHome, "CLAUDE_CONFIG_DIR", &wantClaude},
-		{"Codex", codexHome, opts.codexHome, "CODEX_HOME", &wantCodex},
-	} {
-		if !*tool.want || tool.flag != "" {
-			continue
-		}
-		if _, err := os.Stat(tool.home); errors.Is(err, fs.ErrNotExist) {
-			*tool.want = false
-			if source := homeSource(tool.flag, tool.env); source != "" {
-				fmt.Fprintf(stderr, "navigara: skipping %s: home %q%s does not exist\n", tool.name, tool.home, source)
-			}
-		}
+	// A missing default home has no history to read.
+	if _, err := os.Stat(claudeHome); wantClaude && opts.claudeHome == "" && errors.Is(err, fs.ErrNotExist) {
+		wantClaude = false
 	}
 	if wantClaude {
 		scan := session.Scan("claude", claudeHome, codexHome, func(path string) bool {

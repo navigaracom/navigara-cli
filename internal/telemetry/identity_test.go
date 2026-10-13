@@ -7,7 +7,9 @@ import (
 )
 
 func TestReadIdentityReadsParentConfigOnlyForDefaultHome(t *testing.T) {
-	root := t.TempDir()
+	user := t.TempDir()
+	other := t.TempDir()
+	t.Setenv("HOME", user)
 	writeConfig := func(path, email string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -17,19 +19,21 @@ func TestReadIdentityReadsParentConfigOnlyForDefaultHome(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeConfig(filepath.Join(root, ".claude.json"), "personal@example.com")
-	writeConfig(filepath.Join(root, "inside", ".claude.json"), "inside@example.com")
-	for _, dir := range []string{".claude", "work-claude"} {
-		if err := os.Mkdir(filepath.Join(root, dir), 0o700); err != nil {
+	writeConfig(filepath.Join(user, ".claude.json"), "personal@example.com")
+	writeConfig(filepath.Join(other, ".claude.json"), "other@example.com")
+	writeConfig(filepath.Join(user, "inside", ".claude.json"), "inside@example.com")
+	for _, dir := range []string{filepath.Join(user, ".claude"), filepath.Join(user, "work-claude"), filepath.Join(other, ".claude")} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for home, want := range map[string]string{
-		".claude":     "personal@example.com", // ~/.claude keeps its config at ~/.claude.json.
-		"work-claude": "",                     // Never another home's parent config.
-		"inside":      "inside@example.com",
+		filepath.Join(user, ".claude"):     "personal@example.com", // ~/.claude keeps its config at ~/.claude.json.
+		filepath.Join(user, "work-claude"): "",                     // Never another home's parent config,
+		filepath.Join(other, ".claude"):    "",                     // even for a custom home named .claude.
+		filepath.Join(user, "inside"):      "inside@example.com",
 	} {
-		if got := ReadIdentity(filepath.Join(root, home), "").Email; got != want {
+		if got := ReadIdentity(home, "").Email; got != want {
 			t.Errorf("home %s: email %q, want %q", home, got, want)
 		}
 	}

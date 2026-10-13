@@ -68,3 +68,13 @@ func TestToolHomesNeedNoHomeDirectoryForExplicitHomes(t *testing.T) {
 		t.Fatal("resolved a default without a home directory")
 	}
 }
+
+func TestUploadReportsMissingClaudeConfigDirBeforeEmail(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing"))
+	var out, errs bytes.Buffer
+	code := run([]string{"sessions", "upload", "--source", "claude", "--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
+	if code != 0 || !strings.Contains(errs.String(), "$CLAUDE_CONFIG_DIR") || strings.Contains(errs.String(), "email") {
+		t.Fatalf("exit=%d stderr=%q, want the missing home without an email error", code, errs.String())
+	}
+}
