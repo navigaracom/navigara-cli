@@ -76,11 +76,13 @@ func (f *setupFile) rollback() error {
 	capturedInfo, statErr := os.Lstat(captured)
 	data, _, readErr := readSetupFile(captured)
 	if statErr != nil || f.installed == nil || !os.SameFile(f.installed, capturedInfo) || f.installed.Mode() != capturedInfo.Mode() || readErr != nil || !bytes.Equal(data, f.after) {
+		changed := errors.Join(statErr, readErr, errors.New("file changed during update"))
 		restored, restoreErr := restoreIfAbsent(captured, f.path)
 		if restored {
 			_ = os.RemoveAll(dir)
+			return fmt.Errorf("rollback %s: concurrent change kept in place (original backup %s): %w", f.path, f.backup, changed)
 		}
-		return fmt.Errorf("rollback %s: concurrent change retained (capture %s, original backup %s): %w", f.path, captured, f.backup, errors.Join(statErr, readErr, restoreErr, errors.New("file changed during update")))
+		return fmt.Errorf("rollback %s: concurrent change retained (capture %s, original backup %s): %w", f.path, captured, f.backup, errors.Join(changed, restoreErr))
 	}
 	if f.existed {
 		restored, restoreErr := restoreIfAbsent(f.backup, f.path)
