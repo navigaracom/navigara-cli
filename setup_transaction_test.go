@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -174,8 +175,15 @@ func TestRollbackSetupFilePreservesSameContentReplacement(t *testing.T) {
 	if err != nil || os.SameFile(f.installed, info) {
 		t.Fatalf("replacement did not get a distinct identity: %v", err)
 	}
-	if err := f.rollback(); err == nil {
+	err = f.rollback()
+	if err == nil {
 		t.Fatal("same-content replacement rollback succeeded")
+	}
+	if strings.Contains(err.Error(), ".navigara-rollback-") {
+		t.Fatalf("error names a removed capture: %v", err)
+	}
+	if leftover, _ := filepath.Glob(filepath.Join(dir, ".navigara-rollback-*")); len(leftover) != 0 {
+		t.Fatalf("capture directory left behind: %v", leftover)
 	}
 	if got, _ := os.ReadFile(path); !bytes.Equal(got, []byte("after")) {
 		t.Fatalf("same-content replacement was not retained: %q", got)

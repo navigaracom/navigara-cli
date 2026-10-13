@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -236,5 +237,38 @@ func TestSetupFilePreflightLinkFailureDoesNotCaptureOriginal(t *testing.T) {
 	backups, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".navigara-backup-*"))
 	if len(backups) != 0 {
 		t.Fatal("left backup directory after failed link preflight")
+	}
+}
+
+func TestRestoreIfAbsentKeepsNewerTargetOverSymlinkCapture(t *testing.T) {
+	dir := t.TempDir()
+	captured := filepath.Join(dir, "captured")
+	path := filepath.Join(dir, "settings.json")
+	if err := os.Symlink("target", captured); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("newer"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := restoreIfAbsent(captured, path)
+	if err != nil || restored {
+		t.Fatalf("restored=%v err=%v, want false and no error", restored, err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "newer" {
+		t.Fatal("replaced newer target")
+	}
+}
+
+func TestRestoreIfAbsentReportsSymlinkFailure(t *testing.T) {
+	dir := t.TempDir()
+	captured := filepath.Join(dir, "captured")
+	if err := os.Symlink("target", captured); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "missing", "settings.json")
+	restored, err := restoreIfAbsent(captured, path)
+	var linkErr *os.LinkError
+	if restored || !errors.As(err, &linkErr) || linkErr.Op != "symlink" || linkErr.New != path {
+		t.Fatalf("restored=%v err=%v, want false and the symlink error", restored, err)
 	}
 }
