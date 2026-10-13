@@ -10,7 +10,7 @@ func continueSetup(p *setupInput, host string, interactive bool, open func(strin
 	if err != nil {
 		return
 	}
-	url := host + "/welcome/ai-adoption"
+	url := host + "/welcome"
 	body := "Continue onboarding in Navigara:\n" + url + "\n"
 	if interactive && open != nil {
 		if err := open(url); err != nil {
