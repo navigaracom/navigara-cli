@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/navigaracom/navigara-cli/internal/telemetry"
@@ -20,6 +21,7 @@ type sender struct {
 	client      *http.Client
 	base, token string
 	sent        int
+	sentMu      sync.Mutex
 }
 
 // maxOTLPBody is the receiver's limit for a decoded request body.
@@ -76,6 +78,9 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 			case <-backoff.C:
 			}
 		}
+		if ctx.Err() != nil {
+			return cancelled(ctx, lastErr)
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base+b.Path, bytes.NewReader(b.Data))
 		if err != nil {
 			return errors.New("invalid OTLP request")
@@ -119,7 +124,9 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 					return errors.New("server must support session backfill deduplication before setup can continue")
 				}
 			} else {
+				s.sentMu.Lock()
 				s.sent++
+				s.sentMu.Unlock()
 			}
 			return nil
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
@@ -133,10 +140,12 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 	return lastErr
 }
 
-// cancelled reports why ctx ended, with the last failed attempt when there was one.
+// cancelled reports why ctx ended, with the last failed attempt when there was one. The cause
+// set by a parallel upload, such as another batch's failure, is reported in place of Canceled.
 func cancelled(ctx context.Context, last error) error {
+	cause := context.Cause(ctx)
 	if last == nil {
-		return ctx.Err()
+		return cause
 	}
-	return fmt.Errorf("%w; last attempt: %w", ctx.Err(), last)
+	return fmt.Errorf("%w; last attempt: %w", cause, last)
 }

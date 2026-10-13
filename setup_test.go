@@ -3,11 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -23,14 +29,14 @@ func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 			t.Setenv("SHELL", "/bin/zsh")
 			t.Setenv("ZDOTDIR", home)
 			os.WriteFile(filepath.Join(claudeHome, "settings.json"), []byte(`{"model":"keep-me"}`), 0600)
-			requests := 0
+			var requests atomic.Int32
 			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
+				request := requests.Add(1)
 				if r.Header.Get("Authorization") != "Bearer test-secret" {
 					t.Error("missing token")
 				}
 				body := mustBody(r)
-				if requests == 1 && string(body) != "{}" {
+				if request == 1 && string(body) != "{}" {
 					t.Error("first request must only probe")
 				}
 				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
@@ -58,12 +64,12 @@ func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 				t.Fatal("unrelated setting removed")
 			}
 			if !apply {
-				if requests != 0 || strings.Contains(string(data), "TELEMETRY") {
+				if requests.Load() != 0 || strings.Contains(string(data), "TELEMETRY") {
 					t.Fatal("decline had side effects")
 				}
 				return
 			}
-			if requests < 2 || !strings.Contains(string(data), "test-secret") {
+			if requests.Load() < 2 || !strings.Contains(string(data), "test-secret") {
 				t.Fatal("no upload or missing native auth")
 			}
 			if !strings.Contains(out.String(), "Connecting your tools...") {
@@ -132,9 +138,19 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			t.Setenv("SHELL", "/bin/zsh")
 			t.Setenv("ZDOTDIR", home)
 			fail := true
-			var payloads []string
+			var payloadsMu sync.Mutex
+			failedPayloads := map[string]int{}
+			retriedPayloads := map[string]int{}
+			routeHash := func(path string, body []byte) string {
+				sum := sha256.Sum256(body)
+				return path + ":" + hex.EncodeToString(sum[:])
+			}
 			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body := mustBody(r)
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
 				if failure == "auth" {
 					w.WriteHeader(401)
 					return
@@ -143,8 +159,15 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 					w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
 				}
 				if string(body) != "{}" {
-					payloads = append(payloads, string(body))
-					if fail {
+					payloadsMu.Lock()
+					failing := fail
+					payloads := failedPayloads
+					if !failing {
+						payloads = retriedPayloads
+					}
+					payloads[routeHash(r.URL.Path, body)]++
+					payloadsMu.Unlock()
+					if failing {
 						w.WriteHeader(400)
 						return
 					}
@@ -159,7 +182,10 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			}
 			_, err := os.Stat(filepath.Join(claudeHome, "settings.json"))
 			if failure != "upload" {
-				if !os.IsNotExist(err) || len(payloads) != 0 {
+				payloadsMu.Lock()
+				gotPayloads := len(failedPayloads) + len(retriedPayloads)
+				payloadsMu.Unlock()
+				if !os.IsNotExist(err) || gotPayloads != 0 {
 					t.Fatal("failed preflight changed config/uploaded data")
 				}
 				return
@@ -172,14 +198,41 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			if len(dirs) != 1 {
 				t.Fatal("missing frozen payload")
 			}
+			manifest, err := loadSetupBatches(dirs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedPayloads := map[string]int{}
+			for _, batch := range manifest.Batches {
+				body, err := os.ReadFile(filepath.Join(dirs[0], batch.Name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				kind, _, _ := strings.Cut(batch.Name, "-")
+				expectedPayloads[routeHash("/api/otlp/v1/"+kind, body)]++
+			}
 			// Changes to source history after preview cannot affect the retry.
 			os.RemoveAll(filepath.Join(claudeHome, "projects"))
+			payloadsMu.Lock()
 			fail = false
+			payloadsMu.Unlock()
 			if runSetup(context.Background(), []string{"--resume", dirs[0]}, strings.NewReader("y\n"), &out, &errs) != 0 {
 				t.Fatal(errs.String())
 			}
-			if len(payloads) < 2 || payloads[0] != payloads[1] {
-				t.Fatal("retry rebuilt history")
+			payloadsMu.Lock()
+			gotFailedPayloads := maps.Clone(failedPayloads)
+			gotRetriedPayloads := maps.Clone(retriedPayloads)
+			payloadsMu.Unlock()
+			if len(gotFailedPayloads) == 0 {
+				t.Fatal("initial upload did not send a frozen batch")
+			}
+			for payload, count := range gotFailedPayloads {
+				if count > expectedPayloads[payload] {
+					t.Fatalf("initial upload changed frozen history: failed=%v expected=%v", gotFailedPayloads, expectedPayloads)
+				}
+			}
+			if !reflect.DeepEqual(gotRetriedPayloads, expectedPayloads) {
+				t.Fatalf("retry rebuilt history: failed=%v retried=%v expected=%v", gotFailedPayloads, gotRetriedPayloads, expectedPayloads)
 			}
 			if strings.Contains(out.String()+errs.String(), "test-secret") {
 				t.Fatal("token exposed")
