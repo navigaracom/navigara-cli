@@ -16,7 +16,7 @@ func TestCompleteSetupInteractiveOpensValidatedContinuation(t *testing.T) {
 		return nil
 	})
 
-	if len(opened) != 1 || opened[0] != "https://app.example/welcome/ai-adoption" {
+	if len(opened) != 1 || opened[0] != "https://app.example/welcome" {
 		t.Fatalf("opened URLs = %v", opened)
 	}
 	if !strings.Contains(out.String(), opened[0]) {
@@ -31,7 +31,7 @@ func TestCompleteSetupBrowserFailureKeepsContinuationLink(t *testing.T) {
 		return errors.New("browser unavailable")
 	})
 
-	if got := out.String(); !strings.Contains(got, "couldn't be opened") || !strings.Contains(got, "https://app.example/welcome/ai-adoption") {
+	if got := out.String(); !strings.Contains(got, "couldn't be opened") || !strings.Contains(got, "https://app.example/welcome") {
 		t.Fatalf("failure output lost continuation URL: %q", got)
 	}
 }
@@ -48,7 +48,7 @@ func TestCompleteSetupHeadlessPrintsLinkWithoutOpening(t *testing.T) {
 	if opened {
 		t.Fatal("headless completion opened a browser")
 	}
-	if !strings.Contains(out.String(), "http://127.0.0.1:8080/welcome/ai-adoption") {
+	if !strings.Contains(out.String(), "http://127.0.0.1:8080/welcome") {
 		t.Fatalf("continuation link missing: %q", out.String())
 	}
 }
@@ -62,7 +62,7 @@ func TestCompleteSetupLegacyResumeDoesNotInventHost(t *testing.T) {
 		return nil
 	})
 
-	if opened || strings.Contains(out.String(), "welcome/ai-adoption") {
+	if opened || strings.Contains(out.String(), "/welcome") {
 		t.Fatalf("legacy completion invented a continuation route: %q", out.String())
 	}
 }
