@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/navigaracom/navigara-cli/internal/telemetry"
 )
@@ -113,25 +115,90 @@ func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) err
 	if s.base != otlpBase(m.URL) {
 		return errors.New("resume destination differs from frozen upload")
 	}
+	if err := s.validate(); err != nil {
+		return err
+	}
 	if uploaded != nil {
 		uploaded(0, len(m.Batches))
 	}
-	for done, b := range m.Batches {
-		data, err := readBatch(dir, b.Name)
-		if err != nil {
-			return err
+	if len(m.Batches) == 0 {
+		return nil
+	}
+
+	type result struct{ err error }
+	jobs := make(chan setupBatch, 4)
+	results := make(chan result, 4)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	var workers sync.WaitGroup
+	worker := func() {
+		defer workers.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case batch, ok := <-jobs:
+				if !ok {
+					return
+				}
+				data, err := readBatch(dir, batch.Name)
+				if err == nil {
+					sum := sha256.Sum256(data)
+					if hex.EncodeToString(sum[:]) != batch.SHA256 {
+						err = errors.New("batch changed during upload")
+					}
+				}
+				if err == nil {
+					kind, _, _ := strings.Cut(batch.Name, "-")
+					err = s.postContext(ctx, telemetry.Body{Path: "/v1/" + kind, Data: data})
+				}
+				if err != nil {
+					cancel(err)
+				}
+				results <- result{err: err}
+			}
 		}
-		sum := sha256.Sum256(data)
-		if hex.EncodeToString(sum[:]) != b.SHA256 {
-			return errors.New("batch changed during upload")
+	}
+	workerCount := len(m.Batches)
+	if workerCount > 4 {
+		workerCount = 4
+	}
+	workers.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+	go func() {
+		defer close(jobs)
+		for _, batch := range m.Batches {
+			select {
+			case jobs <- batch:
+			case <-ctx.Done():
+				return
+			}
 		}
-		kind, _, _ := strings.Cut(b.Name, "-")
-		if err := s.post(telemetry.Body{Path: "/v1/" + kind, Data: data}); err != nil {
-			return err
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	accepted := 0
+	var firstErr error
+	for result := range results {
+		if result.err == nil {
+			accepted++
+			if uploaded != nil {
+				uploaded(accepted, len(m.Batches))
+			}
+		} else if firstErr == nil {
+			firstErr = result.err
 		}
-		if uploaded != nil {
-			uploaded(done+1, len(m.Batches))
-		}
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
 	}
 	return nil
 }

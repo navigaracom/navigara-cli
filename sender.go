@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/navigaracom/navigara-cli/internal/telemetry"
@@ -19,6 +21,7 @@ type sender struct {
 	client      *http.Client
 	base, token string
 	sent        int
+	sentMu      sync.Mutex
 }
 
 // maxOTLPBody is the receiver's limit for a decoded request body.
@@ -58,6 +61,14 @@ func (s *sender) checkSetup() error {
 func (s *sender) post(b telemetry.Body) error { return s.send(b, false) }
 
 func (s *sender) send(b telemetry.Body, probe bool) error {
+	return s.sendContext(context.Background(), b, probe)
+}
+
+func (s *sender) postContext(ctx context.Context, b telemetry.Body) error {
+	return s.sendContext(ctx, b, false)
+}
+
+func (s *sender) sendContext(ctx context.Context, b telemetry.Body, probe bool) error {
 	if err := s.validate(); err != nil {
 		return err
 	}
@@ -67,9 +78,24 @@ func (s *sender) send(b telemetry.Body, probe bool) error {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			timer := time.NewTimer(time.Duration(1<<attempt) * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				if cause := context.Cause(ctx); cause != nil {
+					return cause
+				}
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
-		req, err := http.NewRequest(http.MethodPost, s.base+b.Path, bytes.NewReader(b.Data))
+		if err := ctx.Err(); err != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+			return err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base+b.Path, bytes.NewReader(b.Data))
 		if err != nil {
 			return errors.New("invalid OTLP request")
 		}
@@ -80,6 +106,12 @@ func (s *sender) send(b telemetry.Body, probe bool) error {
 		req.Header.Set("Authorization", "Bearer "+s.token)
 		resp, err := s.client.Do(req)
 		if err != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			lastErr = errors.New("OTLP connection failed; check network and TLS settings")
 			continue
 		}
@@ -106,7 +138,9 @@ func (s *sender) send(b telemetry.Body, probe bool) error {
 					return errors.New("server must support session backfill deduplication before setup can continue")
 				}
 			} else {
+				s.sentMu.Lock()
 				s.sent++
+				s.sentMu.Unlock()
 			}
 			return nil
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
