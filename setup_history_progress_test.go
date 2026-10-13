@@ -35,6 +35,30 @@ func TestSetupProgressETAWaitsForUsefulKnownTotalSample(t *testing.T) {
 	}
 }
 
+func TestSetupProgressETACacheUsesRecentCompletedWork(t *testing.T) {
+	base := time.Date(2026, time.October, 12, 10, 0, 0, 0, time.UTC)
+	var eta setupProgressETACache
+
+	if got := eta.update(base, 0, 3600); got != "" {
+		t.Fatalf("initial ETA = %q, want empty", got)
+	}
+	if got := eta.update(base.Add(22*time.Second), 60, 3600); got != "" {
+		t.Fatalf("warmup ETA = %q, want empty", got)
+	}
+	if got := eta.update(base.Add(27*time.Second), 900, 3600); got != "~16s left" {
+		t.Fatalf("recent ETA = %q, want ~16s left", got)
+	}
+	if got := eta.update(base.Add(28*time.Second), 950, 3600); got != "~16s left" {
+		t.Fatalf("idle ETA = %q, want cached ~16s left", got)
+	}
+	if got := eta.update(base.Add(32*time.Second), 1900, 3600); got != "~8s left" {
+		t.Fatalf("refreshed ETA = %q, want ~8s left", got)
+	}
+	if got := eta.update(base.Add(33*time.Second), 3600, 3600); got != "" {
+		t.Fatalf("completed ETA = %q, want empty", got)
+	}
+}
+
 func TestSetupHistoryProgressPlainPhasesAreANSIless(t *testing.T) {
 	var out bytes.Buffer
 	p := &setupInput{out: &out}

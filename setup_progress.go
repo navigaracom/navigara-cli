@@ -15,7 +15,7 @@ import (
 type setupProgress struct {
 	p       *setupInput
 	started bool
-	since   time.Time
+	eta     setupProgressETACache
 }
 
 func newSetupProgress(p *setupInput) *setupProgress {
@@ -24,6 +24,7 @@ func newSetupProgress(p *setupInput) *setupProgress {
 
 func (u *setupProgress) upload(done, total int) {
 	if total == 0 {
+		u.eta.reset()
 		if !u.started {
 			fmt.Fprintln(u.p.out, "No session history to upload.")
 			u.started = true
@@ -37,16 +38,17 @@ func (u *setupProgress) upload(done, total int) {
 	if u.started {
 		fmt.Fprint(u.p.out, "\r\033[2K")
 	} else {
-		u.started, u.since = true, time.Now()
+		u.started = true
 	}
 	limit := 0
 	if columns, _, err := term.GetSize(u.p.terminal.Fd()); err == nil && columns > 0 {
 		limit = columns - 1 // Avoid a terminal's last-column autowrap.
 	}
-	fmt.Fprint(u.p.out, setupUploadLine(done, total, setupProgressETA(u.since, time.Now(), done, total), limit))
+	fmt.Fprint(u.p.out, setupUploadLine(done, total, u.eta.update(time.Now(), done, total), limit))
 	if done == total {
 		fmt.Fprintln(u.p.out)
-		u.started, u.since = false, time.Time{}
+		u.started = false
+		u.eta.reset()
 	}
 }
 
@@ -54,7 +56,8 @@ func (u *setupProgress) stop() {
 	if u.started && u.p.interactive() {
 		fmt.Fprintln(u.p.out)
 	}
-	u.started, u.since = false, time.Time{}
+	u.started = false
+	u.eta.reset()
 }
 
 func setupUploadLine(done, total int, eta string, limit int) string {
