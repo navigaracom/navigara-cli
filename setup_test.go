@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"maps"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -144,13 +144,6 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 				sum := sha256.Sum256(body)
 				return path + ":" + hex.EncodeToString(sum[:])
 			}
-			clonePayloads := func(src map[string]int) map[string]int {
-				clone := make(map[string]int, len(src))
-				for payload, count := range src {
-					clone[payload] = count
-				}
-				return clone
-			}
 			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, err := io.ReadAll(r.Body)
 				if err != nil {
@@ -208,10 +201,6 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			u, err := url.Parse(manifest.URL)
-			if err != nil {
-				t.Fatal(err)
-			}
 			expectedPayloads := map[string]int{}
 			for _, batch := range manifest.Batches {
 				body, err := os.ReadFile(filepath.Join(dirs[0], batch.Name))
@@ -219,7 +208,7 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 					t.Fatal(err)
 				}
 				kind, _, _ := strings.Cut(batch.Name, "-")
-				expectedPayloads[routeHash(strings.TrimRight(u.Path, "/")+"/otlp/v1/"+kind, body)]++
+				expectedPayloads[routeHash("/api/otlp/v1/"+kind, body)]++
 			}
 			// Changes to source history after preview cannot affect the retry.
 			os.RemoveAll(filepath.Join(claudeHome, "projects"))
@@ -230,8 +219,8 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 				t.Fatal(errs.String())
 			}
 			payloadsMu.Lock()
-			gotFailedPayloads := clonePayloads(failedPayloads)
-			gotRetriedPayloads := clonePayloads(retriedPayloads)
+			gotFailedPayloads := maps.Clone(failedPayloads)
+			gotRetriedPayloads := maps.Clone(retriedPayloads)
 			payloadsMu.Unlock()
 			if len(gotFailedPayloads) == 0 {
 				t.Fatal("initial upload did not send a frozen batch")
