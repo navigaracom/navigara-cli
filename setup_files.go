@@ -167,15 +167,7 @@ func restoreIfAbsent(backup, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(backup)
-		if err != nil {
-			return false, err
-		}
-		err = os.Symlink(target, path)
-	} else {
-		err = os.Link(backup, path)
-	}
+	err = linkEntry(info, backup, path)
 	if err == nil {
 		return true, nil
 	}
@@ -183,6 +175,18 @@ func restoreIfAbsent(backup, path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+// linkEntry creates path as the same entry as backup without following or replacing anything.
+func linkEntry(info os.FileInfo, backup, path string) error {
+	if info.Mode()&os.ModeSymlink == 0 {
+		return os.Link(backup, path)
+	}
+	target, err := os.Readlink(backup)
+	if err != nil {
+		return err
+	}
+	return os.Symlink(target, path)
 }
 
 func privateFile(dir, pattern string, data []byte) (string, error) {
