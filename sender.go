@@ -95,6 +95,9 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 65537))
 		resp.Body.Close()
+		if readErr != nil && ctx.Err() != nil {
+			return cancelled(ctx, lastErr)
+		}
 		switch {
 		case resp.StatusCode == http.StatusOK:
 			if readErr != nil || len(data) > 65536 {

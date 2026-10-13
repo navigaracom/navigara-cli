@@ -154,3 +154,27 @@ func TestSenderKeepsTransportErrorWithoutToken(t *testing.T) {
 		t.Fatal("token in error")
 	}
 }
+
+func TestSenderReportsCancellationWhileReadingResponse(t *testing.T) {
+	headers := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		close(headers)
+		<-release // Never finish the body.
+	}))
+	defer srv.Close()
+	defer close(release)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-headers
+		time.Sleep(50 * time.Millisecond) // Let the client start reading the body.
+		cancel()
+	}()
+	err := newSender(srv.URL, "secret").post(ctx, telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context.Canceled while reading a 200 response", err)
+	}
+}
