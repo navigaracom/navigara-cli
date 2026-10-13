@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -239,9 +240,9 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(codex, "sessions", "rollout-existing.jsonl"), fixture, 0600); err != nil {
 				t.Fatal(err)
 			}
-			posts := 0
+			var posts atomic.Int32 // Uploads run concurrently.
 			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				posts++
+				posts.Add(1)
 				if !apply {
 					t.Error("ingestion request without consent")
 				}
@@ -275,10 +276,10 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 			}
 			data, err := os.ReadFile(filepath.Join(claude, "settings.json"))
 			if apply {
-				if err != nil || !bytes.Contains(data, []byte("test-secret")) || posts < 2 {
+				if err != nil || !bytes.Contains(data, []byte("test-secret")) || posts.Load() < 2 {
 					t.Fatal("remaining Claude tool was not configured and imported")
 				}
-			} else if !os.IsNotExist(err) || posts != 0 {
+			} else if !os.IsNotExist(err) || posts.Load() != 0 {
 				t.Fatal("cancel/decline changed settings or contacted ingestion")
 			}
 		})
