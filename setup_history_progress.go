@@ -18,8 +18,8 @@ type setupHistoryProgress struct {
 	total   int
 	frame   int
 	active  bool
-	started time.Time
 	last    time.Time
+	eta     setupProgressETACache
 	stopCh  chan struct{}
 	stopped chan struct{}
 }
@@ -36,7 +36,8 @@ func (u *setupHistoryProgress) discovering() {
 	}
 	now := time.Now()
 	u.phase, u.done, u.total, u.frame, u.active = "discovering", 0, 0, 0, true
-	u.started, u.last = now, now
+	u.last = now
+	u.eta.reset()
 	if u.p.interactive() {
 		fmt.Fprintln(u.p.out)
 	}
@@ -53,10 +54,12 @@ func (u *setupHistoryProgress) processed(done, total int) {
 	if !u.active {
 		return
 	}
+	now := time.Now()
 	if u.phase != "preparing" {
-		u.started = time.Now()
+		u.eta.reset()
 	}
 	u.phase, u.done, u.total = "preparing", done, total
+	u.eta.update(now, done, total)
 	if u.p.interactive() || done == 0 || done == total || done == 1 || time.Since(u.last) >= time.Second {
 		u.renderLocked(true)
 	}
@@ -66,7 +69,8 @@ func (u *setupHistoryProgress) finalizing() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.active {
-		u.phase, u.frame, u.started = "finalizing", 0, time.Time{}
+		u.phase, u.frame = "finalizing", 0
+		u.eta.reset()
 		u.renderLocked(true)
 	}
 }
@@ -97,6 +101,7 @@ func (u *setupHistoryProgress) stop() {
 		return
 	}
 	u.active = false
+	u.eta.reset()
 	stop, stopped := u.stopCh, u.stopped
 	u.stopCh, u.stopped = nil, nil
 	if u.p.interactive() {
@@ -135,7 +140,7 @@ func (u *setupHistoryProgress) lineLocked() string {
 	if !u.p.interactive() {
 		return "Preparing history " + spinner + " " + count
 	}
-	eta := setupProgressETA(u.started, time.Now(), u.done, u.total)
+	eta := u.eta.value
 	width := 32
 	limit := u.width()
 	if limit > 0 {
@@ -151,22 +156,59 @@ func (u *setupHistoryProgress) lineLocked() string {
 	return fmt.Sprintf("Preparing history %s %s%s", spinner, setupProgressBar(u.done, u.total, width)+" sessions checked", etaPrefix(eta))
 }
 
-func setupProgressETA(started, now time.Time, done, total int) string {
-	if started.IsZero() || total <= 0 || done < 2 || done >= total {
+// setupProgressETACache keeps a recent rate sample for a single progress phase.
+// Its value is updated by completed-work callbacks and read by render ticks.
+type setupProgressETACache struct {
+	at    time.Time
+	done  int
+	total int
+	value string
+}
+
+func (e *setupProgressETACache) reset() {
+	*e = setupProgressETACache{}
+}
+
+func (e *setupProgressETACache) update(now time.Time, done, total int) string {
+	if total <= 0 || done >= total {
+		e.reset()
 		return ""
 	}
-	elapsed := now.Sub(started)
-	if elapsed < time.Second {
-		return ""
+	if e.total != total {
+		e.reset()
 	}
-	seconds := int(elapsed.Seconds() * float64(total-done) / float64(done))
+	if e.at.IsZero() {
+		e.at, e.done, e.total = now, done, total
+		return e.value
+	}
+	if done <= e.done || now.Sub(e.at) < 5*time.Second {
+		return e.value
+	}
+
+	elapsed := now.Sub(e.at)
+	delta := done - e.done
+	e.at, e.done = now, done
+	// Keep collecting baselines during warmup, but hide the estimate until
+	// enough work has completed to make the first sample representative.
+	warmup := (total + 9) / 10
+	if warmup < 2 {
+		warmup = 2
+	}
+	if done < warmup {
+		e.value = ""
+		return e.value
+	}
+	seconds := int(float64(total-done) * elapsed.Seconds() / float64(delta))
 	if seconds < 1 {
-		return ""
+		e.value = ""
+		return e.value
 	}
 	if seconds < 60 {
-		return fmt.Sprintf("~%ds left", seconds)
+		e.value = fmt.Sprintf("~%ds left", seconds)
+	} else {
+		e.value = fmt.Sprintf("~%dm %02ds left", seconds/60, seconds%60)
 	}
-	return fmt.Sprintf("~%dm %02ds left", seconds/60, seconds%60)
+	return e.value
 }
 
 func etaPrefix(eta string) string {
