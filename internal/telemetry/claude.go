@@ -753,7 +753,13 @@ func (s *Session) settleRun(from, to time.Time, totals map[string]claudeModelCos
 	if to.Year() == 9999 {
 		at = s.End.Add(time.Millisecond)
 	}
-	for model, t := range totals {
+	models := make([]string, 0, len(totals))
+	for model := range totals {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	for _, model := range models {
+		t := totals[model]
 		x := seen[model]
 		if x == nil {
 			x = &sums{}

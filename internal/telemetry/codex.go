@@ -77,10 +77,21 @@ func CodexSessionID(path string) (string, error) {
 }
 
 type codexRow struct {
-	Timestamp string          `json:"timestamp"`
-	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload"`
-	Ordinal   *int64          `json:"ordinal"`
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+	Ordinal   *int64 `json:"ordinal"`
+}
+
+// codexPayload is called only for row kinds with a typed handler. Unhandled
+// rows therefore avoid retaining or copying their potentially large payload.
+func codexPayload(data []byte) json.RawMessage {
+	var row struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if json.Unmarshal(data, &row) != nil {
+		return nil
+	}
+	return row.Payload
 }
 
 type codexTokens struct {
@@ -121,8 +132,9 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 	line := 0
 	for scanner.Scan() {
 		line++
+		data := scanner.Bytes()
 		var r codexRow
-		if json.Unmarshal(scanner.Bytes(), &r) != nil {
+		if json.Unmarshal(data, &r) != nil {
 			return nil, fmt.Errorf("line %d: invalid JSON", line)
 		}
 		inheritedRecord := r.Type != "session_meta" && historyStart > 0 && r.Ordinal != nil && *r.Ordinal < historyStart
@@ -159,7 +171,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 					RepositoryURL string `json:"repository_url"`
 				} `json:"git"`
 			}
-			if json.Unmarshal(r.Payload, &meta) != nil || meta.ID == "" {
+			if json.Unmarshal(codexPayload(data), &meta) != nil || meta.ID == "" {
 				return nil, fmt.Errorf("invalid session_meta")
 			}
 			historyStart = meta.HistoryStart
@@ -183,15 +195,15 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			var tc struct {
 				Model string `json:"model"`
 			}
-			if json.Unmarshal(r.Payload, &tc) == nil && tc.Model != "" {
+			if json.Unmarshal(codexPayload(data), &tc) == nil && tc.Model != "" {
 				model = tc.Model
 			}
 		case "event_msg":
+			payload := codexPayload(data)
 			var head struct {
 				Type string `json:"type"`
-				Item json.RawMessage
 			}
-			if json.Unmarshal(r.Payload, &head) != nil {
+			if json.Unmarshal(payload, &head) != nil {
 				continue
 			}
 			switch head.Type {
@@ -211,7 +223,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 						} `json:"duration"`
 					} `json:"item"`
 				}
-				if json.Unmarshal(r.Payload, &p) != nil {
+				if json.Unmarshal(payload, &p) != nil {
 					continue
 				}
 				it := p.Item
@@ -252,7 +264,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 						Total codexTokens `json:"total_token_usage"`
 					} `json:"info"`
 				}
-				if json.Unmarshal(r.Payload, &p) != nil || p.Info == nil {
+				if json.Unmarshal(payload, &p) != nil || p.Info == nil {
 					continue
 				}
 				total := p.Info.Total
@@ -280,15 +292,18 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 				}
 			}
 		case "response_item":
-			var item struct {
-				Type      string `json:"type"`
-				CallID    string `json:"call_id"`
-				Name      string `json:"name"`
-				Execution string `json:"execution"`
+			var envelope struct {
+				Payload struct {
+					Type      string `json:"type"`
+					CallID    string `json:"call_id"`
+					Name      string `json:"name"`
+					Execution string `json:"execution"`
+				} `json:"payload"`
 			}
-			if json.Unmarshal(r.Payload, &item) != nil || item.CallID == "" {
+			if json.Unmarshal(data, &envelope) != nil || envelope.Payload.CallID == "" {
 				continue
 			}
+			item := envelope.Payload
 			if inheritedRecord && (item.Type == "tool_search_output" || item.Type == "function_call_output" || item.Type == "custom_tool_call_output") {
 				continue
 			}

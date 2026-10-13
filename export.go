@@ -173,6 +173,8 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 	// encoded, so memory stays flat.
 	counts := map[string]int{}
 	exported, failed, events, points, bodies := 0, 0, 0, 0, 0
+	compressor := gzip.NewWriter(io.Discard)
+	defer compressor.Close()
 	estimated, partial := 0, 0
 	var lines []string
 	for index, j := range jobs {
@@ -189,10 +191,15 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			continue
 		}
 		err = telemetry.Encode(s, func(b telemetry.Body) error {
-			data, err := gzipBody(b.Data)
-			if err != nil {
+			var compressed bytes.Buffer
+			compressor.Reset(&compressed)
+			if _, err := compressor.Write(b.Data); err != nil {
 				return fmt.Errorf("encode: %w", err)
 			}
+			if err := compressor.Close(); err != nil {
+				return fmt.Errorf("encode: %w", err)
+			}
+			data := compressed.Bytes()
 			kind := strings.TrimPrefix(b.Path, "/v1/")
 			counts[kind]++
 			bodies++
