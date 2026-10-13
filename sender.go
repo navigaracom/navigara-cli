@@ -123,13 +123,19 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 			if len(result.Partial) != 0 && string(result.Partial) != "{}" && string(result.Partial) != "null" {
 				return errors.New("receiver reported partial success; inspect server diagnostics before retrying")
 			}
-			skipped := -1
+			skipped := -1 // No acknowledgment means the omission count is unavailable.
 			if b.Path == "/v1/metrics" && resp.Header.Get("X-Navigara-Backfill-Receipt") != "" {
+				if resp.Header.Get("X-Navigara-Backfill-Receipt") != "v1" {
+					return errors.New("unsupported backfill receipt version")
+				}
 				count := resp.Header.Get("X-Navigara-Backfill-Skipped-Codex-Datapoints")
 				var err error
 				skipped, err = strconv.Atoi(count)
-				if resp.Header.Get("X-Navigara-Backfill-Receipt") != "v1" || err != nil || skipped < 0 || strings.Trim(count, "0123456789") != "" || (skipped > 0 && resp.Header.Get("X-Navigara-Backfill-Codex-Skip-Reason") != "overlap-unverified-v1") {
-					return errors.New("invalid backfill receipt")
+				if err != nil || skipped < 0 || strings.Trim(count, "0123456789") != "" {
+					return errors.New("invalid Codex omission count in backfill receipt")
+				}
+				if skipped > 0 && resp.Header.Get("X-Navigara-Backfill-Codex-Skip-Reason") != "overlap-unverified-v1" {
+					return errors.New("unsupported Codex omission reason in backfill receipt")
 				}
 			}
 			if probe {
