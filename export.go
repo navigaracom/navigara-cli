@@ -189,6 +189,30 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 	defer compressor.Close()
 	estimated, partial := 0, 0
 	var lines []string
+	batcher := telemetry.NewBatcher(func(b telemetry.Body) error {
+		var compressed bytes.Buffer
+		compressor.Reset(&compressed)
+		if _, err := compressor.Write(b.Data); err != nil {
+			return fmt.Errorf("encode: %w", err)
+		}
+		if err := compressor.Close(); err != nil {
+			return fmt.Errorf("encode: %w", err)
+		}
+		data := compressed.Bytes()
+		kind := strings.TrimPrefix(b.Path, "/v1/")
+		counts[kind]++
+		bodies++
+		path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json.gz", kind, counts[kind]))
+		if err := writeRequest(path, data); err != nil {
+			return fmt.Errorf("output %q: %w", path, err)
+		}
+		if sender != nil {
+			if err := sender.post(telemetry.Body{Path: b.Path, Data: data}); err != nil {
+				return fmt.Errorf("send: %w (re-run with a new --output to resume: the receiver drops records it already has)", err)
+			}
+		}
+		return nil
+	})
 	for index := 0; index < len(jobs); index += 2 {
 		pairSize := 2
 		if remaining := len(jobs) - index; remaining < pairSize {
@@ -221,30 +245,7 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 				report(index + pairIndex + 1)
 				continue
 			}
-			err = telemetry.Encode(s, func(b telemetry.Body) error {
-				var compressed bytes.Buffer
-				compressor.Reset(&compressed)
-				if _, err := compressor.Write(b.Data); err != nil {
-					return fmt.Errorf("encode: %w", err)
-				}
-				if err := compressor.Close(); err != nil {
-					return fmt.Errorf("encode: %w", err)
-				}
-				data := compressed.Bytes()
-				kind := strings.TrimPrefix(b.Path, "/v1/")
-				counts[kind]++
-				bodies++
-				path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json.gz", kind, counts[kind]))
-				if err := writeRequest(path, data); err != nil {
-					return fmt.Errorf("output %q: %w", path, err)
-				}
-				if sender != nil {
-					if err := sender.post(telemetry.Body{Path: b.Path, Data: data}); err != nil {
-						return fmt.Errorf("send: %w (re-run with a new --output to resume: the receiver drops records it already has)", err)
-					}
-				}
-				return nil
-			})
+			err = telemetry.Encode(s, batcher.Add)
 			if err != nil {
 				fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
 				return 1
@@ -276,6 +277,10 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			}
 			lines = append(lines, fmt.Sprintf("%s %s events=%d points=%d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
 		}
+	}
+	if err := batcher.Flush(); err != nil {
+		fmt.Fprintf(stderr, "navigara: %v\n", err)
+		return 1
 	}
 	if opts.humanSummary {
 		fmt.Fprintf(stdout, "%d sessions ready to import (%d activity events, %d usage measurements).\n", exported, events, points)
