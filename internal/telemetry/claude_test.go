@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,47 @@ func TestBuildClaudeEvents(t *testing.T) {
 	}
 	if starts := events(s, "session_start"); len(starts) != 1 || !starts[0].Time.Equal(time.UnixMilli(1790762300000).UTC()) {
 		t.Errorf("session start = %v", starts)
+	}
+}
+
+func TestBuildClaudeEncodeIsDeterministicWithMultipleModelResiduals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), sid+".jsonl")
+	writeLines(t, path, user("2026-10-01T10:00:00Z", "p1", "hello"), map[string]any{
+		"type": "cost-state", "sessionId": sid, "startTime": 1790762300000,
+		"modelUsage": map[string]any{
+			"z-model": map[string]any{"inputTokens": 3, "outputTokens": 2, "costUSD": 0.3},
+			"a-model": map[string]any{"inputTokens": 5, "outputTokens": 4, "costUSD": 0.4},
+			"m-model": map[string]any{"inputTokens": 7, "outputTokens": 6, "costUSD": 0.5},
+		},
+	})
+	var previous [][]byte
+	for attempt := 0; attempt < 20; attempt++ {
+		s, err := BuildClaude(ClaudeInput{Path: path}, Identity{}, func(string) string { return "" })
+		if err != nil {
+			t.Fatal(err)
+		}
+		var order []string
+		if err := Encode(s, func(b Body) error {
+			if b.Path == "/v1/metrics" {
+				previous = append(previous, append([]byte(nil), b.Data...))
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range s.Points {
+			if p.Metric == "token.usage" && (len(order) == 0 || order[len(order)-1] != p.Model) {
+				order = append(order, p.Model)
+			}
+		}
+		if !reflect.DeepEqual(order, []string{"a-model", "m-model", "z-model"}) {
+			t.Fatalf("residual model order = %v", order)
+		}
+	}
+	for i := 1; i < len(previous); i++ {
+		if !reflect.DeepEqual(previous[0], previous[i]) {
+			t.Fatal("identical histories produced different encoded metric bodies")
+		}
 	}
 }
 

@@ -185,6 +185,21 @@ func TestBuildCodexClientToolSearch(t *testing.T) {
 	}
 }
 
+func TestBuildCodexKeepsOpaqueResponsePayloadsOpaque(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-opaque.jsonl")
+	writeLines(t, path,
+		map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "opaque"}},
+		// Payload types used by unrelated response rows are intentionally not
+		// interpreted, even when they cannot match a native tool shape.
+		map[string]any{"timestamp": "2026-10-03T10:00:01Z", "type": "response_item", "payload": []any{map[string]any{"private": "ignored"}}},
+		map[string]any{"timestamp": "2026-10-03T10:00:02Z", "type": "response_item", "payload": false},
+	)
+	s, err := BuildCodex(path, Identity{}, time.Time{})
+	if err != nil || s.SessionID != "opaque" || len(s.Events) != 1 {
+		t.Fatalf("opaque response rows changed session output: session=%+v err=%v", s, err)
+	}
+}
+
 func TestBuildCodexKeepsFutureSessionIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout-future.jsonl")
 	writeLines(t, path, map[string]any{"timestamp": "2026-10-03T10:00:00Z", "type": "session_meta", "payload": map[string]any{"id": "future"}})
