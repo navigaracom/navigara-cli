@@ -23,32 +23,37 @@ type Identity struct {
 // Only identifiers are read; tokens are never kept.
 func ReadIdentity(claudeHome, codexHome string) Identity {
 	var id Identity
-	if b, err := os.ReadFile(claudeConfigPath(claudeHome)); err == nil {
-		var cfg struct {
-			UserID       string `json:"userID"`
-			OAuthAccount struct {
-				EmailAddress     string `json:"emailAddress"`
-				AccountUUID      string `json:"accountUuid"`
-				OrganizationUUID string `json:"organizationUuid"`
-			} `json:"oauthAccount"`
-		}
-		if json.Unmarshal(b, &cfg) == nil {
-			id.Email = strings.ToLower(cfg.OAuthAccount.EmailAddress)
-			id.UserID = cfg.UserID
-			id.AccountUUID = cfg.OAuthAccount.AccountUUID
-			id.Organization = cfg.OAuthAccount.OrganizationUUID
+	// An empty home is unknown: never read a relative path in the working directory instead.
+	if claudeHome != "" {
+		if b, err := os.ReadFile(claudeConfigPath(claudeHome)); err == nil {
+			var cfg struct {
+				UserID       string `json:"userID"`
+				OAuthAccount struct {
+					EmailAddress     string `json:"emailAddress"`
+					AccountUUID      string `json:"accountUuid"`
+					OrganizationUUID string `json:"organizationUuid"`
+				} `json:"oauthAccount"`
+			}
+			if json.Unmarshal(b, &cfg) == nil {
+				id.Email = strings.ToLower(cfg.OAuthAccount.EmailAddress)
+				id.UserID = cfg.UserID
+				id.AccountUUID = cfg.OAuthAccount.AccountUUID
+				id.Organization = cfg.OAuthAccount.OrganizationUUID
+			}
 		}
 	}
-	if b, err := os.ReadFile(filepath.Join(codexHome, "auth.json")); err == nil {
-		var auth struct {
-			Tokens struct {
-				IDToken   string `json:"id_token"`
-				AccountID string `json:"account_id"`
-			} `json:"tokens"`
-		}
-		if json.Unmarshal(b, &auth) == nil {
-			id.CodexAccount = auth.Tokens.AccountID
-			id.CodexEmail = jwtEmail(auth.Tokens.IDToken)
+	if codexHome != "" {
+		if b, err := os.ReadFile(filepath.Join(codexHome, "auth.json")); err == nil {
+			var auth struct {
+				Tokens struct {
+					IDToken   string `json:"id_token"`
+					AccountID string `json:"account_id"`
+				} `json:"tokens"`
+			}
+			if json.Unmarshal(b, &auth) == nil {
+				id.CodexAccount = auth.Tokens.AccountID
+				id.CodexEmail = jwtEmail(auth.Tokens.IDToken)
+			}
 		}
 	}
 	return id

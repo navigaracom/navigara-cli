@@ -47,13 +47,13 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			return 1
 		}
 	}
+	wantClaude := opts.source == "all" || opts.source == "claude"
+	wantCodex := opts.source == "all" || opts.source == "codex"
 	claudeHome, codexHome, err := toolHomes(opts.claudeHome, opts.codexHome)
-	if err != nil {
+	if (wantClaude && claudeHome == "") || (wantCodex && codexHome == "") {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
-	wantClaude := opts.source == "all" || opts.source == "claude"
-	wantCodex := opts.source == "all" || opts.source == "codex"
 	for _, tool := range []struct {
 		name, home string
 		selected   bool

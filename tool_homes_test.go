@@ -64,8 +64,9 @@ func TestToolHomesNeedNoHomeDirectoryForExplicitHomes(t *testing.T) {
 	if err != nil || claude != "/flag/claude" || codex != "/env/codex" {
 		t.Fatalf("got %q, %q, %v", claude, codex, err)
 	}
-	if _, _, err := toolHomes("", ""); err == nil {
-		t.Fatal("resolved a default without a home directory")
+	t.Setenv("CODEX_HOME", "")
+	if claude, codex, err := toolHomes("/flag/claude", ""); err == nil || claude != "/flag/claude" || codex != "" {
+		t.Fatalf("got %q, %q, %v; want the flag, an empty unresolved default and an error", claude, codex, err)
 	}
 }
 
@@ -76,5 +77,18 @@ func TestUploadReportsMissingClaudeConfigDirBeforeEmail(t *testing.T) {
 	code := run([]string{"sessions", "upload", "--source", "claude", "--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
 	if code != 0 || !strings.Contains(errs.String(), "$CLAUDE_CONFIG_DIR") || strings.Contains(errs.String(), "email") {
 		t.Fatalf("exit=%d stderr=%q, want the missing home without an email error", code, errs.String())
+	}
+}
+
+func TestUploadNeedsNoHomeDirectoryForOneExplicitHome(t *testing.T) {
+	claudeHome, _ := fixtureHomes(t)
+	t.Setenv("HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	var out, errs bytes.Buffer
+	code := run([]string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome, "--email", "dev@example.com",
+		"--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
+	if code != 0 || !strings.HasPrefix(out.String(), "sessions=2 ") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q, want the Claude sessions without $HOME", code, out.String(), errs.String())
 	}
 }

@@ -8,7 +8,8 @@ import (
 // toolHomes resolves the Claude Code and Codex homes the way the tools find them: an explicit
 // flag, else $CLAUDE_CONFIG_DIR or $CODEX_HOME, else ~/.claude or ~/.codex. Every command uses
 // it, so settings are configured in the same homes that history is read from. The user's home
-// directory is needed only for a default.
+// directory is needed only for a default: without it, a home that needs one is left empty and
+// err says why, so a command fails only when it uses that home.
 func toolHomes(claudeFlag, codexFlag string) (claude, codex string, err error) {
 	claude = firstNonEmpty(claudeFlag, os.Getenv("CLAUDE_CONFIG_DIR"))
 	codex = firstNonEmpty(codexFlag, os.Getenv("CODEX_HOME"))
@@ -17,7 +18,7 @@ func toolHomes(claudeFlag, codexFlag string) (claude, codex string, err error) {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", "", err
+		return claude, codex, err
 	}
 	claude = firstNonEmpty(claude, filepath.Join(home, ".claude"))
 	codex = firstNonEmpty(codex, filepath.Join(home, ".codex"))
