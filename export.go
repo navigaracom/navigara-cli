@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/navigaracom/navigara-cli/internal/session"
@@ -95,6 +96,17 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 
 	repos := repositoryResolver()
 	commits := &commitIndex{email: ident.Email, byRepo: map[string][]commit{}}
+	var reposMu, commitsMu sync.Mutex
+	lookupRepo := func(cwd string) string {
+		reposMu.Lock()
+		defer reposMu.Unlock()
+		return repos(cwd)
+	}
+	lookupCommits := func(repo string, from, to time.Time) []telemetry.Commit {
+		commitsMu.Lock()
+		defer commitsMu.Unlock()
+		return commits.between(repo, from, to)
+	}
 	type job struct {
 		source, id string
 		build      func() (*telemetry.Session, error)
@@ -118,7 +130,7 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			seen[id] = true
 			jobs = append(jobs, job{"claude_code", id, func() (*telemetry.Session, error) {
 				return telemetry.BuildClaude(telemetry.ClaudeInput{Path: path, Subagents: telemetry.ClaudeSubagents(path),
-					Until: opts.until, Commits: commits.between}, ident, repos)
+					Until: opts.until, Commits: lookupCommits}, ident, lookupRepo)
 			}})
 		}
 	}
@@ -169,81 +181,101 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 		fmt.Fprintf(stderr, "navigara: output %q: %v\n", opts.output, err)
 		return 1
 	}
-	// One session and one body at a time: each body is written and sent before the next is
-	// encoded, so memory stays flat.
+	// Prepare at most two sessions at a time, then encode, write and send their
+	// bodies serially in sorted session order.
 	counts := map[string]int{}
 	exported, failed, events, points, bodies := 0, 0, 0, 0, 0
 	compressor := gzip.NewWriter(io.Discard)
 	defer compressor.Close()
 	estimated, partial := 0, 0
 	var lines []string
-	for index, j := range jobs {
-		s, err := j.build()
-		if err != nil {
-			failed++
-			fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
-			report(index + 1)
-			continue
+	for index := 0; index < len(jobs); index += 2 {
+		pairSize := 2
+		if remaining := len(jobs) - index; remaining < pairSize {
+			pairSize = remaining
 		}
-		s.Within(opts.since, opts.until)
-		if len(s.Events) == 0 && len(s.Points) == 0 {
-			report(index + 1)
-			continue
+		prepared := make([]struct {
+			s   *telemetry.Session
+			err error
+		}, pairSize)
+		var wg sync.WaitGroup
+		wg.Add(pairSize)
+		for pairIndex := 0; pairIndex < pairSize; pairIndex++ {
+			go func(pairIndex int) {
+				defer wg.Done()
+				prepared[pairIndex].s, prepared[pairIndex].err = jobs[index+pairIndex].build()
+			}(pairIndex)
 		}
-		err = telemetry.Encode(s, func(b telemetry.Body) error {
-			var compressed bytes.Buffer
-			compressor.Reset(&compressed)
-			if _, err := compressor.Write(b.Data); err != nil {
-				return fmt.Errorf("encode: %w", err)
+		wg.Wait()
+		for pairIndex := 0; pairIndex < pairSize; pairIndex++ {
+			j := jobs[index+pairIndex]
+			s, err := prepared[pairIndex].s, prepared[pairIndex].err
+			if err != nil {
+				failed++
+				fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
+				report(index + pairIndex + 1)
+				continue
 			}
-			if err := compressor.Close(); err != nil {
-				return fmt.Errorf("encode: %w", err)
+			s.Within(opts.since, opts.until)
+			if len(s.Events) == 0 && len(s.Points) == 0 {
+				report(index + pairIndex + 1)
+				continue
 			}
-			data := compressed.Bytes()
-			kind := strings.TrimPrefix(b.Path, "/v1/")
-			counts[kind]++
-			bodies++
-			path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json.gz", kind, counts[kind]))
-			if err := writeRequest(path, data); err != nil {
-				return fmt.Errorf("output %q: %w", path, err)
-			}
-			if sender != nil {
-				if err := sender.post(telemetry.Body{Path: b.Path, Data: data}); err != nil {
-					return fmt.Errorf("send: %w (re-run with a new --output to resume: the receiver drops records it already has)", err)
+			err = telemetry.Encode(s, func(b telemetry.Body) error {
+				var compressed bytes.Buffer
+				compressor.Reset(&compressed)
+				if _, err := compressor.Write(b.Data); err != nil {
+					return fmt.Errorf("encode: %w", err)
 				}
+				if err := compressor.Close(); err != nil {
+					return fmt.Errorf("encode: %w", err)
+				}
+				data := compressed.Bytes()
+				kind := strings.TrimPrefix(b.Path, "/v1/")
+				counts[kind]++
+				bodies++
+				path := filepath.Join(opts.output, fmt.Sprintf("%s-%06d.json.gz", kind, counts[kind]))
+				if err := writeRequest(path, data); err != nil {
+					return fmt.Errorf("output %q: %w", path, err)
+				}
+				if sender != nil {
+					if err := sender.post(telemetry.Body{Path: b.Path, Data: data}); err != nil {
+						return fmt.Errorf("send: %w (re-run with a new --output to resume: the receiver drops records it already has)", err)
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
+				return 1
 			}
-			return nil
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
-			return 1
+			exported++
+			events += len(s.Events)
+			points += len(s.Points)
+			if s.Estimated {
+				estimated++
+			}
+			if len(s.Missing) > 0 {
+				partial++
+			}
+			report(index + pairIndex + 1)
+			if opts.humanSummary {
+				continue
+			}
+			note := ""
+			if s.Estimated {
+				note = " cost=estimated"
+			}
+			reasons := make([]string, 0, len(s.Missing))
+			for reason := range s.Missing {
+				reasons = append(reasons, reason)
+			}
+			sort.Strings(reasons)
+			for _, reason := range reasons {
+				note += fmt.Sprintf(" missing[%s]=%d", reason, s.Missing[reason])
+			}
+			lines = append(lines, fmt.Sprintf("%s %s events=%d points=%d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
 		}
-		exported++
-		events += len(s.Events)
-		points += len(s.Points)
-		if s.Estimated {
-			estimated++
-		}
-		if len(s.Missing) > 0 {
-			partial++
-		}
-		report(index + 1)
-		if opts.humanSummary {
-			continue
-		}
-		note := ""
-		if s.Estimated {
-			note = " cost=estimated"
-		}
-		reasons := make([]string, 0, len(s.Missing))
-		for reason := range s.Missing {
-			reasons = append(reasons, reason)
-		}
-		sort.Strings(reasons)
-		for _, reason := range reasons {
-			note += fmt.Sprintf(" missing[%s]=%d", reason, s.Missing[reason])
-		}
-		lines = append(lines, fmt.Sprintf("%s %s events=%d points=%d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
 	}
 	if opts.humanSummary {
 		fmt.Fprintf(stdout, "%d sessions ready to import (%d activity events, %d usage measurements).\n", exported, events, points)
