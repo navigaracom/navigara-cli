@@ -1,16 +1,22 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
 var version = "dev"
+
+// exitInterrupted is the conventional status of a command stopped by an interrupt.
+const exitInterrupted = 130
 
 type options struct {
 	source, output        string
@@ -25,9 +31,9 @@ type options struct {
 	host, url, token      string
 }
 
-func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	invalid := func(message string) int {
 		fmt.Fprintln(stderr, "navigara:", message)
 		return 2
@@ -38,11 +44,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	switch args[0] {
 	case "login":
-		return runLogin(args[1:], os.Stdin, stdout, stderr)
+		return runLogin(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "logout":
-		return runLogout(args[1:], stdout, stderr)
+		return runLogout(ctx, args[1:], stdout, stderr)
 	case "wizard", "setup":
-		return runSetup(args[1:], os.Stdin, stdout, stderr)
+		return runSetup(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "--help", "-h", "--version":
 		if len(args) != 1 {
 			return invalid("unexpected argument: " + args[1])
@@ -51,7 +57,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "navigara", version)
 			return 0
 		}
-		return run(nil, stdout, stderr)
+		return run(ctx, nil, stdout, stderr)
 	case "sessions":
 		args = args[1:]
 	default:
@@ -68,7 +74,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if len(args) < 2 || args[1] != "patch" {
 			return invalid("unknown command: sessions config")
 		}
-		return runConfigPatch(args[2:], stdout, stderr)
+		return runConfigPatch(ctx, args[2:], stdout, stderr)
 	}
 	if args[0] != "upload" {
 		return invalid("unknown command: sessions " + args[0])
@@ -155,5 +161,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		opts.since = opts.until.Add(-last)
 	}
-	return exportSessions(opts, stdout, stderr)
+	return exportSessions(ctx, opts, stdout, stderr)
+}
+
+// interruptible cancels ctx on the first interrupt, so a long export or upload stops between
+// requests and leaves its frozen bodies for a retry. A second interrupt exits as usual.
+func interruptible(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
 }

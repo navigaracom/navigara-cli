@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"os"
@@ -264,7 +265,7 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 				input += closeSessions + "\n"
 			}
 			var out, errs bytes.Buffer
-			code := runSetup(nil, strings.NewReader(input), &out, &errs)
+			code := runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs)
 			if code != 0 {
 				t.Fatalf("wizard failed rather than offering recovery: %d %s", code, &errs)
 			}
@@ -319,7 +320,7 @@ func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 				final = "y"
 			}
 			input := "n\ny\n\nskip\ny\n" + final + "\n"
-			if code := runSetup(nil, strings.NewReader(input), &out, &errs); code != 0 {
+			if code := runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs); code != 0 {
 				t.Fatalf("wizard = %d: %s", code, &errs)
 			}
 			got, err := os.ReadFile(path)

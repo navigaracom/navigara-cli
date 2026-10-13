@@ -181,7 +181,7 @@ func TestLoginHelpIsOffline(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	var out, errs bytes.Buffer
-	if code := run([]string{"login", "--help"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "--host") {
+	if code := run(context.Background(), []string{"login", "--help"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "--host") {
 		t.Fatalf("exit=%d %s %s", code, &out, &errs)
 	}
 	dir, _ := os.UserConfigDir()

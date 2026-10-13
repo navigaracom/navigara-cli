@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,14 +51,14 @@ func (s *sender) validate() error {
 
 // An empty export verifies authorization and the deployed session policy, without
 // manufacturing a session or usage. A plain 200 from an older server is insufficient.
-func (s *sender) checkSetup() error {
-	return s.send(telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)}, true)
+func (s *sender) checkSetup(ctx context.Context) error {
+	return s.send(ctx, telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)}, true)
 }
 
 // post sends one gzip-compressed OTLP body.
-func (s *sender) post(b telemetry.Body) error { return s.send(b, false) }
+func (s *sender) post(ctx context.Context, b telemetry.Body) error { return s.send(ctx, b, false) }
 
-func (s *sender) send(b telemetry.Body, probe bool) error {
+func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 	if err := s.validate(); err != nil {
 		return err
 	}
@@ -67,9 +68,15 @@ func (s *sender) send(b telemetry.Body, probe bool) error {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			backoff := time.NewTimer(time.Duration(1<<attempt) * time.Second)
+			select {
+			case <-ctx.Done():
+				backoff.Stop()
+				return cancelled(ctx, lastErr)
+			case <-backoff.C:
+			}
 		}
-		req, err := http.NewRequest(http.MethodPost, s.base+b.Path, bytes.NewReader(b.Data))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base+b.Path, bytes.NewReader(b.Data))
 		if err != nil {
 			return errors.New("invalid OTLP request")
 		}
@@ -80,7 +87,10 @@ func (s *sender) send(b telemetry.Body, probe bool) error {
 		req.Header.Set("Authorization", "Bearer "+s.token)
 		resp, err := s.client.Do(req)
 		if err != nil {
-			lastErr = errors.New("OTLP connection failed; check network and TLS settings")
+			if ctx.Err() != nil {
+				return cancelled(ctx, lastErr)
+			}
+			lastErr = fmt.Errorf("OTLP connection failed; check network and TLS settings: %w", err)
 			continue
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 65537))
@@ -118,4 +128,12 @@ func (s *sender) send(b telemetry.Body, probe bool) error {
 		}
 	}
 	return lastErr
+}
+
+// cancelled reports why ctx ended, with the last failed attempt when there was one.
+func cancelled(ctx context.Context, last error) error {
+	if last == nil {
+		return ctx.Err()
+	}
+	return fmt.Errorf("%w; last attempt: %w", ctx.Err(), last)
 }

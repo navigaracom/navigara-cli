@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -81,7 +82,7 @@ func TestConfigPatchPreviewReadsAccountWithoutWritingOrPosting(t *testing.T) {
 	beforeClaude, _ := os.ReadFile(claudePath)
 	beforeCodex, _ := os.ReadFile(codexPath)
 	var out, errOut bytes.Buffer
-	if code := runConfigPatch([]string{"--host", srv.URL, "--source", "all", "--claude-home", claude, "--codex-home", codex}, &out, &errOut); code != 0 {
+	if code := runConfigPatch(context.Background(), []string{"--host", srv.URL, "--source", "all", "--claude-home", claude, "--codex-home", codex}, &out, &errOut); code != 0 {
 		t.Fatalf("code=%d err=%s", code, errOut.String())
 	}
 	if posts != 0 {
@@ -97,7 +98,7 @@ func TestConfigPatchPreviewReadsAccountWithoutWritingOrPosting(t *testing.T) {
 	}
 	revoked = true
 	args := []string{"--apply", "--claude-home", claude, "--codex-home", codex}
-	if code := runConfigPatch(args, &out, &errOut); code == 0 || posts != 0 {
+	if code := runConfigPatch(context.Background(), args, &out, &errOut); code == 0 || posts != 0 {
 		t.Fatal("revoked membership accepted or posted")
 	}
 	afterClaude, _ = os.ReadFile(claudePath)
@@ -171,7 +172,7 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 	}
 	args := []string{"--host", srv.URL, "--source", "all", "--claude-home", claude, "--codex-home", codex, "--apply"}
 	var out, errOut bytes.Buffer
-	if code := runConfigPatch(args, &out, &errOut); code != 0 {
+	if code := runConfigPatch(context.Background(), args, &out, &errOut); code != 0 {
 		t.Fatalf("first apply code=%d err=%s", code, errOut.String())
 	}
 	firstClaude, _ := os.ReadFile(claudePath)
@@ -186,7 +187,7 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 		t.Fatal("unrelated Claude settings were lost")
 	}
 	rejectCachedKey = true
-	if code := runConfigPatch(args, &out, &errOut); code != 0 {
+	if code := runConfigPatch(context.Background(), args, &out, &errOut); code != 0 {
 		t.Fatalf("replacement apply code=%d err=%s", code, errOut.String())
 	}
 	secondClaude, _ := os.ReadFile(claudePath)
@@ -194,7 +195,7 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 	if !bytes.Contains(secondClaude, []byte("replacement-secret")) || !bytes.Contains(secondCodex, []byte("replacement-secret")) {
 		t.Fatal("native configs did not receive the replacement key")
 	}
-	if code := runConfigPatch(args[:len(args)-1], &out, &errOut); code != 0 {
+	if code := runConfigPatch(context.Background(), args[:len(args)-1], &out, &errOut); code != 0 {
 		t.Fatalf("preview after apply failed: %s", &errOut)
 	}
 	if strings.Contains(out.String()+errOut.String(), "secret") {
@@ -238,7 +239,7 @@ func TestConfigPatchInvalidSettingsDoesNotMintIngestionKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if code := runConfigPatch([]string{"--apply", "--host", srv.URL, "--source", "claude", "--claude-home", claude}, &out, &errOut); code != 1 {
+	if code := runConfigPatch(context.Background(), []string{"--apply", "--host", srv.URL, "--source", "claude", "--claude-home", claude}, &out, &errOut); code != 1 {
 		t.Fatalf("code = %d, want 1: %s", code, errOut.String())
 	}
 	if keyPosts != 0 {
