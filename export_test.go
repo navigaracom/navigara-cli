@@ -21,10 +21,12 @@ import (
 	"github.com/navigaracom/navigara-cli/internal/telemetry"
 )
 
-// fixtureHomes writes two Claude Code sessions and a ~/.claude.json with the signed-in account.
+// fixtureHomes writes two Claude Code sessions and a ~/.claude.json with the signed-in account
+// into a new $HOME.
 func fixtureHomes(t *testing.T) (claudeHome, codexHome string) {
 	t.Helper()
 	root := t.TempDir()
+	t.Setenv("HOME", root) // The default layout: ~/.claude with ~/.claude.json next to it.
 	claudeHome = filepath.Join(root, ".claude")
 	codexHome = filepath.Join(root, ".codex")
 	for _, id := range []string{"aaaaaaaa-0000-0000-0000-000000000001", "aaaaaaaa-0000-0000-0000-000000000002"} {

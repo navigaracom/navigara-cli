@@ -65,7 +65,10 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	if err != nil {
 		return err
 	}
-	opts := options{claudeHome: firstNonEmpty(os.Getenv("CLAUDE_CONFIG_DIR"), filepath.Join(home, ".claude")), codexHome: firstNonEmpty(os.Getenv("CODEX_HOME"), filepath.Join(home, ".codex"))}
+	var opts options
+	if opts.claudeHome, opts.codexHome, err = toolHomes("", ""); err != nil {
+		return err
+	}
 	if !p.interactive() {
 		writeAccountSummary(p.out, c)
 		fmt.Fprintln(p.out, "\nConnect this computer to Navigara\nImport past sessions and keep new activity in sync.")

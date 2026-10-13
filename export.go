@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,9 +47,13 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			return 1
 		}
 	}
-	claudeHome, codexHome := toolHome(opts.claudeHome, ".claude"), toolHome(opts.codexHome, ".codex")
 	wantClaude := opts.source == "all" || opts.source == "claude"
 	wantCodex := opts.source == "all" || opts.source == "codex"
+	claudeHome, codexHome, err := toolHomes(opts.claudeHome, opts.codexHome)
+	if (wantClaude && claudeHome == "") || (wantCodex && codexHome == "") {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
 	for _, tool := range []struct {
 		name, home string
 		selected   bool
@@ -69,6 +75,24 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			return 1
 		}
 	}
+	// A missing $CLAUDE_CONFIG_DIR or $CODEX_HOME is reported before anything else: history the
+	// user expects there is not read, and no email can fix that.
+	for _, tool := range []struct {
+		name, home, flag, env string
+		want                  *bool
+	}{
+		{"Claude Code", claudeHome, opts.claudeHome, "CLAUDE_CONFIG_DIR", &wantClaude},
+		{"Codex", codexHome, opts.codexHome, "CODEX_HOME", &wantCodex},
+	} {
+		source := homeSource(tool.flag, tool.env)
+		if !*tool.want || source == "" {
+			continue
+		}
+		if _, err := os.Stat(tool.home); errors.Is(err, fs.ErrNotExist) {
+			*tool.want = false
+			fmt.Fprintf(stderr, "navigara: skipping %s: home %q%s does not exist\n", tool.name, tool.home, source)
+		}
+	}
 	ident := telemetry.ReadIdentity(claudeHome, codexHome)
 	if opts.email != "" {
 		ident = ident.WithEmail(opts.email)
@@ -76,7 +100,7 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 	// Each tool needs its own signed-in email: one tool's account says nothing about the other's.
 	claudeOK := ident.Email != "" || opts.allowAnonymous
 	codexOK := ident.CodexEmail != "" || opts.allowAnonymous
-	if (!wantClaude || !claudeOK) && (!wantCodex || !codexOK) {
+	if (wantClaude || wantCodex) && (!wantClaude || !claudeOK) && (!wantCodex || !codexOK) {
 		fmt.Fprintln(stderr, "navigara: no signed-in email found; pass --email or --allow-anonymous")
 		return 2
 	}
@@ -113,8 +137,12 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 	}
 	var jobs []job
 	incomplete := false
+	// A missing default home has no history to read.
+	if _, err := os.Stat(claudeHome); wantClaude && opts.claudeHome == "" && errors.Is(err, fs.ErrNotExist) {
+		wantClaude = false
+	}
 	if wantClaude {
-		scan := session.Scan("claude", opts.claudeHome, opts.codexHome, func(path string) bool {
+		scan := session.Scan("claude", claudeHome, codexHome, func(path string) bool {
 			return stale(opts.since, append([]string{path}, telemetry.ClaudeSubagents(path)...)...)
 		})
 		incomplete = len(scan.Errors) > 0
@@ -366,17 +394,6 @@ func lastRecordTime(path string) time.Time {
 		}
 	}
 	return last
-}
-
-func toolHome(flag, dir string) string {
-	if flag != "" {
-		return flag
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return dir
-	}
-	return filepath.Join(home, dir)
 }
 
 func firstNonEmpty(values ...string) string {
