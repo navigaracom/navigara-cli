@@ -62,11 +62,7 @@ func (p *setupInput) cancelled() {
 }
 
 func (p *setupInput) completed(sent int) {
-	p.completedForMode(sent, p.interactive())
-}
-
-func (p *setupInput) completedForMode(sent int, interactive bool) {
-	if !interactive {
+	if !p.interactive() {
 		fmt.Fprintf(p.out, "\nConnected. Navigara accepted %d upload batches.\nNew activity syncing is configured, not yet verified.\nOpen a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.\n", sent)
 		return
 	}

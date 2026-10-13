@@ -88,14 +88,10 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	if err != nil {
 		return err
 	}
-	return setupAttemptWithBrowser(ctx, c, opts, home, preferences, p, stderr, open)
+	return setupAttempt(ctx, c, opts, home, preferences, p, stderr, open)
 }
 
-func setupAttempt(ctx context.Context, c accountConfig, opts options, home string, preferences wizardSettings, p *setupInput, stderr io.Writer) error {
-	return setupAttemptWithBrowser(ctx, c, opts, home, preferences, p, stderr, openBrowser)
-}
-
-func setupAttemptWithBrowser(ctx context.Context, c accountConfig, opts options, home string, preferences wizardSettings, p *setupInput, stderr io.Writer, open func(string) error) error {
+func setupAttempt(ctx context.Context, c accountConfig, opts options, home string, preferences wizardSettings, p *setupInput, stderr io.Writer, open func(string) error) error {
 	opts.source, opts.email = preferences.source, preferences.email
 	selected := selectedTools([]string{"claude", "codex"}, preferences.source)
 	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
@@ -232,7 +228,8 @@ func setupAttemptWithBrowser(ctx context.Context, c accountConfig, opts options,
 		progress.stop()
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
-	completeSetup(p, s.sent, c.Host, open)
+	p.completed(s.sent)
+	continueSetup(p, c.Host, p.interactive(), open)
 	return nil
 }
 
@@ -295,9 +292,9 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 		progress.stop()
 		return err
 	}
-	fmt.Fprintf(p.out, "Receiver accepted %d batches; session deduplication handles repeated data.\n", s.sent)
+	p.status("History imported", fmt.Sprintf("Navigara received %d upload batches. History already received is skipped.\n", s.sent))
 	if m.OrganizationID != "" {
-		completeSetup(p, s.sent, c.Host, open)
+		continueSetup(p, c.Host, p.interactive(), open)
 	}
 	return nil
 }
