@@ -56,7 +56,9 @@ func ReadIdentity(claudeHome, codexHome string) Identity {
 
 // claudeConfigPath is ~/.claude.json for the default home and <home>/.claude.json otherwise.
 func claudeConfigPath(claudeHome string) string {
-	if inside := filepath.Join(claudeHome, ".claude.json"); fileExists(inside) {
+	inside := filepath.Join(claudeHome, ".claude.json")
+	// Another home, such as $CLAUDE_CONFIG_DIR, keeps its own config: its parent's may be another account's.
+	if fileExists(inside) || filepath.Base(claudeHome) != ".claude" {
 		return inside
 	}
 	return filepath.Join(filepath.Dir(claudeHome), ".claude.json")

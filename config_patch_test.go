@@ -19,7 +19,7 @@ func TestCheckPatchHomesDiscoversExistingTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := options{source: "all", claudeHome: claude, codexHome: filepath.Join(root, "missing")}
-	if err := checkPatchHomes(&opts, false, false); err != nil {
+	if err := checkPatchHomes(&opts, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if opts.source != "claude" {
@@ -29,9 +29,19 @@ func TestCheckPatchHomesDiscoversExistingTools(t *testing.T) {
 
 func TestCheckPatchHomesRejectsExplicitMissingHome(t *testing.T) {
 	root := t.TempDir()
-	err := checkPatchHomes(&options{source: "codex", claudeHome: filepath.Join(root, "claude"), codexHome: filepath.Join(root, "codex")}, false, true)
+	codex := filepath.Join(root, "codex")
+	err := checkPatchHomes(&options{source: "codex", claudeHome: filepath.Join(root, "claude"), codexHome: codex}, "", codex)
 	if err == nil || !strings.Contains(err.Error(), "Codex home") {
 		t.Fatalf("error = %v, want explicit Codex home failure", err)
+	}
+}
+
+func TestCheckPatchHomesNamesMissingEnvironmentHome(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "codex")
+	t.Setenv("CODEX_HOME", missing)
+	err := checkPatchHomes(&options{source: "codex", codexHome: missing}, "", "")
+	if err == nil || !strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "$CODEX_HOME") {
+		t.Fatalf("error = %v, want the missing path and $CODEX_HOME", err)
 	}
 }
 

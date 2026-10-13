@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,7 +47,11 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			return 1
 		}
 	}
-	claudeHome, codexHome := toolHome(opts.claudeHome, ".claude"), toolHome(opts.codexHome, ".codex")
+	claudeHome, codexHome, err := toolHomes(opts.claudeHome, opts.codexHome)
+	if err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
 	wantClaude := opts.source == "all" || opts.source == "claude"
 	wantCodex := opts.source == "all" || opts.source == "codex"
 	for _, tool := range []struct {
@@ -113,8 +119,27 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 	}
 	var jobs []job
 	incomplete := false
+	// A home that no flag named may be missing. The default then has no history, but a missing
+	// $CLAUDE_CONFIG_DIR or $CODEX_HOME deserves a warning: history elsewhere is not read.
+	for _, tool := range []struct {
+		name, home, flag, env string
+		want                  *bool
+	}{
+		{"Claude Code", claudeHome, opts.claudeHome, "CLAUDE_CONFIG_DIR", &wantClaude},
+		{"Codex", codexHome, opts.codexHome, "CODEX_HOME", &wantCodex},
+	} {
+		if !*tool.want || tool.flag != "" {
+			continue
+		}
+		if _, err := os.Stat(tool.home); errors.Is(err, fs.ErrNotExist) {
+			*tool.want = false
+			if source := homeSource(tool.flag, tool.env); source != "" {
+				fmt.Fprintf(stderr, "navigara: skipping %s: home %q%s does not exist\n", tool.name, tool.home, source)
+			}
+		}
+	}
 	if wantClaude {
-		scan := session.Scan("claude", opts.claudeHome, opts.codexHome, func(path string) bool {
+		scan := session.Scan("claude", claudeHome, codexHome, func(path string) bool {
 			return stale(opts.since, append([]string{path}, telemetry.ClaudeSubagents(path)...)...)
 		})
 		incomplete = len(scan.Errors) > 0
@@ -366,17 +391,6 @@ func lastRecordTime(path string) time.Time {
 		}
 	}
 	return last
-}
-
-func toolHome(flag, dir string) string {
-	if flag != "" {
-		return flag
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return dir
-	}
-	return filepath.Join(home, dir)
 }
 
 func firstNonEmpty(values ...string) string {
