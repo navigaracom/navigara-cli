@@ -24,16 +24,18 @@ import (
 
 // exportSessions rebuilds each selected session's telemetry, writes the OTLP bodies and,
 // with --send, posts them to the Navigara OTLP endpoint.
-func exportSessions(opts options, stdout, stderr io.Writer) int {
-	return exportSessionsWithProgress(opts, stdout, stderr, nil)
+func exportSessions(ctx context.Context, opts options, stdout, stderr io.Writer) int {
+	ctx, stop := interruptible(ctx)
+	defer stop()
+	return exportSessionsWithProgress(ctx, opts, stdout, stderr, nil)
 }
 
 // exportSessionsWithProgress reports discovered and inspected sessions without
 // affecting export order or output.
-func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress func(done, total int)) int {
+func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stderr io.Writer, progress func(done, total int)) int {
 	var sender *sender
 	if opts.send {
-		if err := prepareUploadAccount(context.Background(), &opts); err != nil {
+		if err := prepareUploadAccount(ctx, &opts); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 1
 		}
@@ -42,7 +44,7 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 2
 		}
-		if err := sender.checkSetup(); err != nil {
+		if err := sender.checkSetup(ctx); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 1
 		}
@@ -235,13 +237,23 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			return fmt.Errorf("output %q: %w", path, err)
 		}
 		if sender != nil {
-			if err := sender.post(telemetry.Body{Path: b.Path, Data: data}); err != nil {
+			if err := sender.post(ctx, telemetry.Body{Path: b.Path, Data: data}); err != nil {
 				return fmt.Errorf("send: %w (re-run with a new --output to resume: the receiver drops records it already has)", err)
 			}
 		}
 		return nil
 	})
+	interrupted := func() int {
+		fmt.Fprintln(stderr, "navigara: interrupted; the output is incomplete")
+		if sender != nil {
+			fmt.Fprintln(stderr, "navigara: re-run with a new --output to resume: the receiver drops records it already has")
+		}
+		return exitInterrupted
+	}
 	for index := 0; index < len(jobs); index += 2 {
+		if ctx.Err() != nil {
+			return interrupted()
+		}
 		pairSize := 2
 		if remaining := len(jobs) - index; remaining < pairSize {
 			pairSize = remaining
@@ -274,6 +286,9 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 				continue
 			}
 			err = telemetry.Encode(s, batcher.Add)
+			if err != nil && ctx.Err() != nil {
+				return interrupted()
+			}
 			if err != nil {
 				fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
 				return 1
@@ -306,7 +321,13 @@ func exportSessionsWithProgress(opts options, stdout, stderr io.Writer, progress
 			lines = append(lines, fmt.Sprintf("%s %s events=%d points=%d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
 		}
 	}
+	if ctx.Err() != nil {
+		return interrupted()
+	}
 	if err := batcher.Flush(); err != nil {
+		if ctx.Err() != nil {
+			return interrupted()
+		}
 		fmt.Fprintf(stderr, "navigara: %v\n", err)
 		return 1
 	}

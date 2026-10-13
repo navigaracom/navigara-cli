@@ -2,14 +2,19 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -73,10 +78,10 @@ func TestSetupBatchesRetryExactBodiesAndNoRescan(t *testing.T) {
 		mu.Unlock()
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 	})
-	if err := sendSetupBatches(d, s, nil); err != nil {
+	if err := sendSetupBatches(context.Background(), d, s, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := sendSetupBatches(d, s, nil); err != nil {
+	if err := sendSetupBatches(context.Background(), d, s, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 4 {
@@ -115,7 +120,7 @@ func TestSetupBatchesRejectInvalidBeforeRequest(t *testing.T) {
 				requests.Add(1)
 				return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 			})
-			if err := sendSetupBatches(d, s, nil); err == nil {
+			if err := sendSetupBatches(context.Background(), d, s, nil); err == nil {
 				t.Fatal("accepted invalid batch")
 			}
 			if requests.Load() != 0 {
@@ -131,7 +136,7 @@ func TestSetupBatchesRejectInvalidBeforeRequest(t *testing.T) {
 			requests.Add(1)
 			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 		})
-		if err := sendSetupBatches(d, s, nil); err == nil {
+		if err := sendSetupBatches(context.Background(), d, s, nil); err == nil {
 			t.Fatal("accepted destination mismatch")
 		}
 		if requests.Load() != 0 {
@@ -171,7 +176,7 @@ func TestSetupBatchesReportOnlyAcceptedProgress(t *testing.T) {
 		return &http.Response{StatusCode: status, Body: http.NoBody, Header: make(http.Header)}, nil
 	})
 	var progress [][2]int
-	err := sendSetupBatches(d, s, func(done, total int) {
+	err := sendSetupBatches(context.Background(), d, s, func(done, total int) {
 		progress = append(progress, [2]int{done, total})
 	})
 	if err == nil {
@@ -203,4 +208,51 @@ func mustBody(r *http.Request) []byte {
 	}
 	b, _ := io.ReadAll(body)
 	return b
+}
+
+func TestSetupBatchesResumeAfterCancellation(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	hold := true
+	arrived := make(chan struct{}, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		held := hold
+		if !held {
+			got = append(got, r.URL.Path)
+		}
+		mu.Unlock()
+		if held { // Hold the upload until the client gives up.
+			arrived <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+	d := writeBatchFixture(t, srv.URL+"/api")
+	s := newSender(srv.URL+"/api", "secret")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-arrived
+		cancel()
+	}()
+	if err := sendSetupBatches(ctx, d, s, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context.Canceled", err)
+	}
+	mu.Lock()
+	hold = false
+	mu.Unlock()
+	if err := sendSetupBatches(context.Background(), d, s, nil); err != nil {
+		t.Fatalf("resume after cancellation: %v", err)
+	}
+	// A request from the cancelled run may still reach the server late; the receiver drops
+	// repeats, so the resume only has to deliver every batch.
+	mu.Lock()
+	defer mu.Unlock()
+	sort.Strings(got)
+	if want := []string{"/api/otlp/v1/logs", "/api/otlp/v1/metrics"}; !reflect.DeepEqual(slices.Compact(got), want) {
+		t.Fatalf("resumed requests = %v, want each of %v", got, want)
+	}
 }

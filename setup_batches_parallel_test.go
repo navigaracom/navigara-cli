@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,7 +72,7 @@ func TestSetupBatchesUsesFourWorkersAndReportsAcceptedProgress(t *testing.T) {
 	var progress [][2]int
 	done := make(chan error, 1)
 	go func() {
-		done <- sendSetupBatches(d, s, func(n, total int) { progress = append(progress, [2]int{n, total}) })
+		done <- sendSetupBatches(context.Background(), d, s, func(n, total int) { progress = append(progress, [2]int{n, total}) })
 	}()
 	for i := 0; i < 4; i++ {
 		select {
@@ -181,7 +182,7 @@ func TestSetupBatchesFatalAuthCancelsOtherRequests(t *testing.T) {
 			return nil, nil
 		}
 	})
-	err = sendSetupBatches(d, s, nil)
+	err = sendSetupBatches(context.Background(), d, s, nil)
 	if err == nil || !strings.Contains(err.Error(), "analytics ingestor role") {
 		t.Fatalf("error=%v; want original auth rejection", err)
 	}

@@ -135,7 +135,7 @@ func writeAccountSummary(out io.Writer, c accountConfig) {
 	fmt.Fprintf(out, "\nSigned in as %s\nOrganization: %q\nNavigara instance: %s\n", c.Email, c.OrganizationName, c.Host)
 }
 
-func runLogin(args []string, input io.Reader, stdout, stderr io.Writer) int {
+func runLogin(ctx context.Context, args []string, input io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	host := fs.String("host", "", "Navigara instance origin (default saved host or https://app.navigara.com)")
@@ -155,7 +155,7 @@ func runLogin(args []string, input io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	p := newSetupInput(input, stdout)
-	c, err := ensureAccount(context.Background(), *host, p, true, openBrowser)
+	c, err := ensureAccount(ctx, *host, p, true, openBrowser)
 	if err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1

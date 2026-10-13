@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,7 @@ func TestRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if got := run(tt.args, &stdout, &stderr); got != tt.code {
+			if got := run(context.Background(), tt.args, &stdout, &stderr); got != tt.code {
 				t.Fatalf("exit = %d, want %d; stdout=%q stderr=%q", got, tt.code, stdout.String(), stderr.String())
 			}
 			if (tt.out == "" && stdout.Len() != 0) || !strings.Contains(stdout.String(), tt.out) {
@@ -67,10 +68,10 @@ func TestRun(t *testing.T) {
 
 func TestWizardAndSetupHelpUseSameFlow(t *testing.T) {
 	var wizardOut, wizardErr, setupOut, setupErr bytes.Buffer
-	if code := run([]string{"wizard", "--help"}, &wizardOut, &wizardErr); code != 0 {
+	if code := run(context.Background(), []string{"wizard", "--help"}, &wizardOut, &wizardErr); code != 0 {
 		t.Fatalf("wizard help exit = %d; stderr=%q", code, wizardErr.String())
 	}
-	if code := run([]string{"setup", "--help"}, &setupOut, &setupErr); code != 0 {
+	if code := run(context.Background(), []string{"setup", "--help"}, &setupOut, &setupErr); code != 0 {
 		t.Fatalf("setup help exit = %d; stderr=%q", code, setupErr.String())
 	}
 	if wizardOut.String() != setupOut.String() || wizardErr.String() != setupErr.String() {
@@ -84,7 +85,7 @@ func TestWizardAndSetupHelpUseSameFlow(t *testing.T) {
 func TestInvalidUploadDoesNotCreateOutput(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "sessions.json")
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"sessions", "upload", "--source=other", "--output", output}, &stdout, &stderr); code != 2 {
+	if code := run(context.Background(), []string{"sessions", "upload", "--source=other", "--output", output}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit=%d", code)
 	}
 	if _, err := os.Stat(output); !os.IsNotExist(err) {

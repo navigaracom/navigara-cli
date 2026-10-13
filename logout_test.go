@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -65,14 +66,14 @@ func TestLogoutRevokesAndClearsSavedAccount(t *testing.T) {
 	}
 
 	var out, errs bytes.Buffer
-	if code := run([]string{"logout"}, &out, &errs); code != 0 {
+	if code := run(context.Background(), []string{"logout"}, &out, &errs); code != 0 {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, &out, &errs)
 	}
 	if !called {
 		t.Fatal("logout did not revoke the saved session")
 	}
 	requireLoggedOut(t)
-	if code := run([]string{"logout"}, &out, &errs); code != 0 {
+	if code := run(context.Background(), []string{"logout"}, &out, &errs); code != 0 {
 		t.Fatalf("repeat logout = %d: %s", code, &errs)
 	}
 }
@@ -85,7 +86,7 @@ func TestLogoutWithoutSessionClearsSavedIdentityOffline(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	if code := run([]string{"logout"}, &out, &errs); code != 0 {
+	if code := run(context.Background(), []string{"logout"}, &out, &errs); code != 0 {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, &out, &errs)
 	}
 	requireLoggedOut(t)
@@ -97,7 +98,7 @@ func TestLogoutHostDoesNotClearAnotherSavedHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	if code := run([]string{"logout", "--host", "https://other.example"}, &out, &errs); code != 0 {
+	if code := run(context.Background(), []string{"logout", "--host", "https://other.example"}, &out, &errs); code != 0 {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, &out, &errs)
 	}
 	got, err := loadAccount("")
@@ -123,7 +124,7 @@ func TestLogoutDoesNotOverwriteConcurrentLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	if code := run([]string{"logout"}, &out, &errs); code == 0 || !strings.Contains(errs.String(), "changed") {
+	if code := run(context.Background(), []string{"logout"}, &out, &errs); code == 0 || !strings.Contains(errs.String(), "changed") {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, &out, &errs)
 	}
 	got, err := loadAccount("")
@@ -141,7 +142,7 @@ func TestLogoutClearsLocalAccountWhenRevocationIsOffline(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	if code := run([]string{"logout"}, &out, &errs); code == 0 || !strings.Contains(errs.String(), "could not revoke") {
+	if code := run(context.Background(), []string{"logout"}, &out, &errs); code == 0 || !strings.Contains(errs.String(), "could not revoke") {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, &out, &errs)
 	}
 	requireLoggedOut(t)
@@ -166,7 +167,7 @@ func TestLogoutHandlesExpiredAndDeniedRemoteSessions(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out, errs bytes.Buffer
-			if code := run([]string{"logout"}, &out, &errs); code != tt.want {
+			if code := run(context.Background(), []string{"logout"}, &out, &errs); code != tt.want {
 				t.Fatalf("exit=%d, want %d; stdout=%s stderr=%s", code, tt.want, &out, &errs)
 			}
 			requireLoggedOut(t)

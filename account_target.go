@@ -60,7 +60,7 @@ func ensureIngestion(ctx context.Context, c *accountConfig) error {
 		return errors.New("a verified Navigara account is required; run navigara login")
 	}
 	if strings.TrimSpace(c.IngestToken) != "" && c.IngestExpiresAt.After(time.Now()) {
-		err := newSender(c.Host+"/api", c.IngestToken).checkSetup()
+		err := newSender(c.Host+"/api", c.IngestToken).checkSetup(ctx)
 		if err == nil {
 			return nil
 		}

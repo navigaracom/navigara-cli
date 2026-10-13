@@ -53,22 +53,14 @@ func (s *sender) validate() error {
 
 // An empty export verifies authorization and the deployed session policy, without
 // manufacturing a session or usage. A plain 200 from an older server is insufficient.
-func (s *sender) checkSetup() error {
-	return s.send(telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)}, true)
+func (s *sender) checkSetup(ctx context.Context) error {
+	return s.send(ctx, telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)}, true)
 }
 
 // post sends one gzip-compressed OTLP body.
-func (s *sender) post(b telemetry.Body) error { return s.send(b, false) }
+func (s *sender) post(ctx context.Context, b telemetry.Body) error { return s.send(ctx, b, false) }
 
-func (s *sender) send(b telemetry.Body, probe bool) error {
-	return s.sendContext(context.Background(), b, probe)
-}
-
-func (s *sender) postContext(ctx context.Context, b telemetry.Body) error {
-	return s.sendContext(ctx, b, false)
-}
-
-func (s *sender) sendContext(ctx context.Context, b telemetry.Body, probe bool) error {
+func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 	if err := s.validate(); err != nil {
 		return err
 	}
@@ -78,22 +70,16 @@ func (s *sender) sendContext(ctx context.Context, b telemetry.Body, probe bool) 
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
-			timer := time.NewTimer(time.Duration(1<<attempt) * time.Second)
+			backoff := time.NewTimer(time.Duration(1<<attempt) * time.Second)
 			select {
 			case <-ctx.Done():
-				timer.Stop()
-				if cause := context.Cause(ctx); cause != nil {
-					return cause
-				}
-				return ctx.Err()
-			case <-timer.C:
+				backoff.Stop()
+				return cancelled(ctx, lastErr)
+			case <-backoff.C:
 			}
 		}
-		if err := ctx.Err(); err != nil {
-			if cause := context.Cause(ctx); cause != nil {
-				return cause
-			}
-			return err
+		if ctx.Err() != nil {
+			return cancelled(ctx, lastErr)
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base+b.Path, bytes.NewReader(b.Data))
 		if err != nil {
@@ -106,17 +92,17 @@ func (s *sender) sendContext(ctx context.Context, b telemetry.Body, probe bool) 
 		req.Header.Set("Authorization", "Bearer "+s.token)
 		resp, err := s.client.Do(req)
 		if err != nil {
-			if cause := context.Cause(ctx); cause != nil {
-				return cause
-			}
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return cancelled(ctx, lastErr)
 			}
-			lastErr = errors.New("OTLP connection failed; check network and TLS settings")
+			lastErr = fmt.Errorf("OTLP connection failed; check network and TLS settings: %w", err)
 			continue
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 65537))
 		resp.Body.Close()
+		if readErr != nil && ctx.Err() != nil {
+			return cancelled(ctx, lastErr)
+		}
 		switch {
 		case resp.StatusCode == http.StatusOK:
 			if readErr != nil || len(data) > 65536 {
@@ -152,4 +138,14 @@ func (s *sender) sendContext(ctx context.Context, b telemetry.Body, probe bool) 
 		}
 	}
 	return lastErr
+}
+
+// cancelled reports why ctx ended, with the last failed attempt when there was one. The cause
+// set by a parallel upload, such as another batch's failure, is reported in place of Canceled.
+func cancelled(ctx context.Context, last error) error {
+	cause := context.Cause(ctx)
+	if last == nil {
+		return cause
+	}
+	return fmt.Errorf("%w; last attempt: %w", cause, last)
 }

@@ -13,7 +13,7 @@ const previewIngestToken = "preview-token-redacted"
 
 // runConfigPatch updates the native Claude/Codex settings using the saved
 // account. It intentionally has no history or OTLP export side effects.
-func runConfigPatch(args []string, stdout, stderr io.Writer) int {
+func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var opts options
 	var apply, help bool
 	fs := flag.NewFlagSet("sessions config patch", flag.ContinueOnError)
@@ -76,7 +76,7 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	c, err := verifiedAccount(context.Background(), opts.host)
+	c, err := verifiedAccount(ctx, opts.host)
 	if err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
@@ -103,7 +103,7 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "Preview only; no files changed and no ingestion request sent.")
 		return 0
 	}
-	if err := ensureIngestion(context.Background(), &c); err != nil {
+	if err := ensureIngestion(ctx, &c); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
@@ -114,7 +114,7 @@ func runConfigPatch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	s := newSender(opts.url, opts.token)
-	if err := applySetupFiles(files, s.checkSetup); err != nil {
+	if err := applySetupFiles(files, func() error { return s.checkSetup(ctx) }); err != nil {
 		fmt.Fprintln(stderr, "navigara: settings update failed:", err)
 		return 1
 	}

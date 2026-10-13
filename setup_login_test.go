@@ -153,7 +153,7 @@ func TestSetupResumeRejectsDifferentTenantBeforeSending(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out, errs bytes.Buffer
-			code := runSetup([]string{"--resume", dir}, strings.NewReader("y\n"), &out, &errs)
+			code := runSetup(context.Background(), []string{"--resume", dir}, strings.NewReader("y\n"), &out, &errs)
 			if code == 0 || posts != 0 || !strings.Contains(errs.String(), "different "+change) {
 				t.Fatalf("wrong resume result: %d %s", code, &errs)
 			}
@@ -183,7 +183,7 @@ func TestSetupDeclineDoesNotMintIngestionKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	code := runSetup(nil, strings.NewReader("y\nn\n\nskip\nn\n"), &out, &errs)
+	code := runSetup(context.Background(), nil, strings.NewReader("y\nn\n\nskip\nn\n"), &out, &errs)
 	if code != 0 || posts != 0 {
 		t.Fatalf("decline: %d %s", code, &errs)
 	}
@@ -238,13 +238,13 @@ func TestSetupReplacesRejectedCachedIngestionKey(t *testing.T) {
 			var out, errs bytes.Buffer
 			var code int
 			if flow == "fresh" {
-				code = runSetup(nil, strings.NewReader("y\nn\ndev@example.com\nskip\ny\ny\n"), &out, &errs)
+				code = runSetup(context.Background(), nil, strings.NewReader("y\nn\ndev@example.com\nskip\ny\ny\n"), &out, &errs)
 			} else {
 				dir := t.TempDir()
 				if err := saveSetupBatches(dir, srv.URL+"/api", "org-1"); err != nil {
 					t.Fatal(err)
 				}
-				code = runSetup([]string{"--resume", dir}, strings.NewReader("y\n"), &out, &errs)
+				code = runSetup(context.Background(), []string{"--resume", dir}, strings.NewReader("y\n"), &out, &errs)
 			}
 			if code != 0 || keyRequests != 1 || probes != 2 {
 				t.Fatalf("setup=%s code=%d keys=%d probes=%d stderr=%s", flow, code, keyRequests, probes, &errs)
@@ -279,7 +279,7 @@ func TestSetupResumeDeclineExpiredKeyDoesNotMintOrUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	if code := runSetup([]string{"--resume", dir}, strings.NewReader("n\n"), &out, &errs); code != 0 {
+	if code := runSetup(context.Background(), []string{"--resume", dir}, strings.NewReader("n\n"), &out, &errs); code != 0 {
 		t.Fatalf("declined resume = %d: %s", code, &errs)
 	}
 	if posts != 0 {
@@ -293,7 +293,7 @@ func TestSetupResumeLegacyTokenErrorDoesNotAskForConsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
-	if code := runSetup([]string{"--resume", dir}, strings.NewReader(""), &out, &errs); code != 1 {
+	if code := runSetup(context.Background(), []string{"--resume", dir}, strings.NewReader(""), &out, &errs); code != 1 {
 		t.Fatalf("code = %d, want 1", code)
 	}
 	if strings.Contains(out.String(), "Upload these saved batches again") {
@@ -336,7 +336,7 @@ func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
 		}
 	}}
 	var errs bytes.Buffer
-	code := runSetup(nil, strings.NewReader("y\nn\n\nskip\ny\ny\n"), out, &errs)
+	code := runSetup(context.Background(), nil, strings.NewReader("y\nn\n\nskip\ny\ny\n"), out, &errs)
 	if code != 1 || !strings.Contains(errs.String(), "changed during setup") {
 		t.Fatalf("concurrent edit = %d: %s", code, &errs)
 	}

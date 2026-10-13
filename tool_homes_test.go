@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,7 +39,7 @@ func TestUploadReadsClaudeConfigDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 	t.Setenv("CODEX_HOME", "")
 	var out, errs bytes.Buffer
-	code := run([]string{"sessions", "upload", "--source", "claude", "--email", "dev@example.com",
+	code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--email", "dev@example.com",
 		"--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
 	if code != 0 || !strings.HasPrefix(out.String(), "sessions=2 ") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q, want both sessions from $CLAUDE_CONFIG_DIR", code, out.String(), errs.String())
@@ -49,7 +50,7 @@ func TestUploadWarnsAboutMissingClaudeConfigDir(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing"))
 	var out, errs bytes.Buffer
-	code := run([]string{"sessions", "upload", "--source", "claude", "--email", "dev@example.com",
+	code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--email", "dev@example.com",
 		"--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
 	if code != 0 || !strings.HasPrefix(out.String(), "sessions=0 ") || !strings.Contains(errs.String(), "$CLAUDE_CONFIG_DIR") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q, want an empty export with a warning", code, out.String(), errs.String())
@@ -74,7 +75,7 @@ func TestUploadReportsMissingClaudeConfigDirBeforeEmail(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing"))
 	var out, errs bytes.Buffer
-	code := run([]string{"sessions", "upload", "--source", "claude", "--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
+	code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
 	if code != 0 || !strings.Contains(errs.String(), "$CLAUDE_CONFIG_DIR") || strings.Contains(errs.String(), "email") {
 		t.Fatalf("exit=%d stderr=%q, want the missing home without an email error", code, errs.String())
 	}
@@ -86,7 +87,7 @@ func TestUploadNeedsNoHomeDirectoryForOneExplicitHome(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CODEX_HOME", "")
 	var out, errs bytes.Buffer
-	code := run([]string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome, "--email", "dev@example.com",
+	code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome, "--email", "dev@example.com",
 		"--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
 	if code != 0 || !strings.HasPrefix(out.String(), "sessions=2 ") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q, want the Claude sessions without $HOME", code, out.String(), errs.String())

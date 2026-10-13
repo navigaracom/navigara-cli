@@ -8,7 +8,7 @@ import (
 	"io"
 )
 
-func runLogout(args []string, stdout, stderr io.Writer) int {
+func runLogout(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("logout", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	host := fs.String("host", "", "Navigara instance origin (default saved host)")
@@ -53,7 +53,7 @@ func runLogout(args []string, stdout, stderr io.Writer) int {
 
 	var revokeErr error
 	if saved.SessionToken != "" {
-		revokeErr = newAuthClient(saved.Host).request(context.Background(), "POST", "/v1/auth/sign-out", saved.SessionToken, struct{}{}, &struct{}{})
+		revokeErr = newAuthClient(saved.Host).request(ctx, "POST", "/v1/auth/sign-out", saved.SessionToken, struct{}{}, &struct{}{})
 	}
 	if errors.Is(revokeErr, authHTTPError(401)) {
 		revokeErr = nil

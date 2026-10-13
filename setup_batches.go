@@ -107,7 +107,7 @@ func validBatch(data []byte) bool {
 	return err == nil && len(plain) <= maxOTLPBody && json.Valid(plain)
 }
 
-func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) error {
+func sendSetupBatches(ctx context.Context, dir string, s *sender, uploaded func(done, total int)) error {
 	m, err := loadSetupBatches(dir)
 	if err != nil {
 		return err
@@ -127,7 +127,7 @@ func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) err
 
 	jobs := make(chan setupBatch, 4)
 	results := make(chan error, 4)
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	var workers sync.WaitGroup
 	worker := func() {
@@ -155,7 +155,7 @@ func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) err
 				}
 				if err == nil {
 					kind, _, _ := strings.Cut(batch.Name, "-")
-					err = s.postContext(ctx, telemetry.Body{Path: "/v1/" + kind, Data: data})
+					err = s.post(ctx, telemetry.Body{Path: "/v1/" + kind, Data: data})
 				}
 				if err != nil {
 					cancel(err)

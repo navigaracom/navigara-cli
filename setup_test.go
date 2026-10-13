@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -48,7 +49,7 @@ func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 			}
 			input := strings.Join([]string{"y", "y", "dev@example.com", "all", answer, ""}, "\n")
 			var out, errs bytes.Buffer
-			code := runSetup(nil, strings.NewReader(input), &out, &errs)
+			code := runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs)
 			if code != 0 {
 				t.Fatalf("exit %d: %s\n%s", code, errs.String(), out.String())
 			}
@@ -114,7 +115,7 @@ func TestSetupRollsBackFirstFileWhenLaterTargetChanges(t *testing.T) {
 	defer srv.Close()
 	input := strings.Join([]string{"y", "y", "dev@example.com", "skip", "y", "y", ""}, "\n")
 	var out, errs bytes.Buffer
-	if runSetup(nil, strings.NewReader(input), &out, &errs) == 0 {
+	if runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs) == 0 {
 		t.Fatal("later target change accepted")
 	}
 	if got, _ := os.ReadFile(claudeSettings); !bytes.Equal(got, []byte(`{"model":"keep"}`)) {
@@ -176,7 +177,7 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			defer srv.Close()
 			input := strings.Join([]string{"y", "n", "dev@example.com", "all", "y", "y", ""}, "\n")
 			var out, errs bytes.Buffer
-			if runSetup(nil, strings.NewReader(input), &out, &errs) == 0 {
+			if runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs) == 0 {
 				t.Fatal("expected setup failure")
 			}
 			_, err := os.Stat(filepath.Join(claudeHome, "settings.json"))
@@ -215,7 +216,7 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			payloadsMu.Lock()
 			fail = false
 			payloadsMu.Unlock()
-			if runSetup([]string{"--resume", dirs[0]}, strings.NewReader("y\n"), &out, &errs) != 0 {
+			if runSetup(context.Background(), []string{"--resume", dirs[0]}, strings.NewReader("y\n"), &out, &errs) != 0 {
 				t.Fatal(errs.String())
 			}
 			payloadsMu.Lock()
@@ -272,7 +273,7 @@ func TestSetupStopsOnIncompleteHistory(t *testing.T) {
 				selectClaude, selectCodex = "n", "y"
 			}
 			input := selectClaude + "\n" + selectCodex + "\n" + "dev@example.com\nall\ny\ny\n"
-			if runSetup(nil, strings.NewReader(input), &out, &errs) == 0 {
+			if runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs) == 0 {
 				t.Fatal("incomplete history accepted")
 			}
 			if requests != 0 {

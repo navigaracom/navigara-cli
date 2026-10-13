@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -83,7 +84,7 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 
 	output := filepath.Join(t.TempDir(), "out")
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
+	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
 		"--session", "aaaaaaaa-0000-0000-0000-000000000002", "--output", output,
 		"--send", "--url", server.URL, "--token", "secret"}, &stdout, &stderr)
 	if code != 0 {
@@ -124,7 +125,7 @@ func TestExportProgressCountsFilteredSessions(t *testing.T) {
 	var discovered []int
 	var processed [][2]int
 	var stdout, stderr bytes.Buffer
-	code := exportSessionsWithProgress(opts, &stdout, &stderr, func(done, total int) {
+	code := exportSessionsWithProgress(context.Background(), opts, &stdout, &stderr, func(done, total int) {
 		if done == 0 {
 			discovered = append(discovered, total)
 		}
@@ -171,7 +172,7 @@ func TestUploadPinnedCodexForkNeedsNoParentRollout(t *testing.T) {
 		parentHeader, body,
 	)
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+	code := run(context.Background(), []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
 		"--claude-home", claudeHome, "--codex-home", codexHome, "--session", "child", "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -188,7 +189,7 @@ func TestUploadStopsOnRejectedKey(t *testing.T) {
 	}))
 	defer server.Close()
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
+	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
 		"--output", filepath.Join(t.TempDir(), "out"), "--send", "--url", server.URL, "--token", "bad"}, &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "analytics ingestor") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -203,7 +204,7 @@ func TestUploadNeedsAnIdentity(t *testing.T) {
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sessions", "upload", "--claude-home", filepath.Join(root, ".claude"), "--codex-home", filepath.Join(root, ".codex"),
+	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", filepath.Join(root, ".claude"), "--codex-home", filepath.Join(root, ".codex"),
 		"--output", filepath.Join(root, "out")}, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "--email") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -218,7 +219,7 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 		root := t.TempDir()
 		output := filepath.Join(root, "out")
 		var stdout, stderr bytes.Buffer
-		code := run([]string{"sessions", "upload", "--source", "claude", "--email", "dev@example.com",
+		code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--email", "dev@example.com",
 			"--claude-home", filepath.Join(root, "missing"), "--codex-home", filepath.Join(root, "codex"), "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "missing") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -236,7 +237,7 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 		}
 		output := filepath.Join(t.TempDir(), "out")
 		var stdout, stderr bytes.Buffer
-		code := run([]string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome,
+		code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome,
 			"--codex-home", codexHome, "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "line 1") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -255,7 +256,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 		}
 		output := filepath.Join(t.TempDir(), "out")
 		var stdout, stderr bytes.Buffer
-		code := run([]string{"sessions", "upload", "--source", "all", "--claude-home", claudeHome,
+		code := run(context.Background(), []string{"sessions", "upload", "--source", "all", "--claude-home", claudeHome,
 			"--codex-home", codexHome, "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "Codex home") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -270,7 +271,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 		missing := filepath.Join(root, "missing")
 		output := filepath.Join(root, "out")
 		var stdout, stderr bytes.Buffer
-		code := run([]string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+		code := run(context.Background(), []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
 			"--claude-home", filepath.Join(root, "claude"), "--codex-home", missing, "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "missing") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -291,7 +292,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 		}
 		output := filepath.Join(t.TempDir(), "out")
 		var stdout, stderr bytes.Buffer
-		code := run([]string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+		code := run(context.Background(), []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
 			"--claude-home", claudeHome, "--codex-home", codexHome, "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "invalid Codex rollout header") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -307,7 +308,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 			t.Fatal(err)
 		}
 		var stdout, stderr bytes.Buffer
-		code := run([]string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+		code := run(context.Background(), []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
 			"--claude-home", claudeHome, "--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "not a directory") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -343,7 +344,7 @@ func TestUploadReportsBuildFailuresAfterSendingOtherSessions(t *testing.T) {
 				args = append(args, "--send", "--url", server.URL, "--token", "secret")
 			}
 			var stdout, stderr bytes.Buffer
-			code := run(args, &stdout, &stderr)
+			code := run(context.Background(), args, &stdout, &stderr)
 			if code != 1 || (send && requests.Load() == 0) || (!send && requests.Load() != 0) || !strings.Contains(stdout.String(), "failed=1") || !strings.Contains(stderr.String(), "bad") {
 				t.Fatalf("exit=%d requests=%d stdout=%q stderr=%q", code, requests.Load(), stdout.String(), stderr.String())
 			}
@@ -362,7 +363,7 @@ func TestUploadSkipsASourceWithoutItsOwnEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
+	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
 		"--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 	if code != 0 || !strings.Contains(stderr.String(), "skipping Codex") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -466,7 +467,7 @@ func TestCommitIndexKeepsADeletedBranchCommit(t *testing.T) {
 func TestUploadIgnoresUnselectedExplicitHome(t *testing.T) {
 	claudeHome, _ := fixtureHomes(t)
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome,
+	code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome,
 		"--codex-home", filepath.Join(t.TempDir(), "missing"), "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 	if code != 0 || !strings.Contains(stdout.String(), "claude_code") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -504,7 +505,7 @@ func TestUploadUntilExcludesFutureSessions(t *testing.T) {
 				t.Run(window.until, func(t *testing.T) {
 					out := filepath.Join(t.TempDir(), "out")
 					var stdout, stderr bytes.Buffer
-					code := run([]string{"sessions", "upload", "--source", source, "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome, "--until", window.until, "--output", out}, &stdout, &stderr)
+					code := run(context.Background(), []string{"sessions", "upload", "--source", source, "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome, "--until", window.until, "--output", out}, &stdout, &stderr)
 					if code != 0 || !strings.Contains(stdout.String(), fmt.Sprintf("sessions=%d failed=0", window.want)) || stderr.Len() != 0 {
 						t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 					}
@@ -556,7 +557,7 @@ func TestUploadSkipsHistoryThatEndsBeforeSince(t *testing.T) {
 	upload := func(since string) (int, string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := run([]string{"sessions", "upload", "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome,
+		code := run(context.Background(), []string{"sessions", "upload", "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome,
 			"--since", since, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 		return code, stdout.String() + stderr.String()
 	}
@@ -608,5 +609,22 @@ func TestStaleKeepsFilesWrittenJustBeforeSince(t *testing.T) {
 		if got := stale(since, path); got != tc.want {
 			t.Errorf("written %v before since: stale=%v, want %v", since.Sub(tc.written), got, tc.want)
 		}
+	}
+}
+
+func TestExportReportsInterruptAfterLastSession(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	opts := options{source: "all", claudeHome: claudeHome, codexHome: codexHome, email: "dev@example.com",
+		output: filepath.Join(t.TempDir(), "out")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	code := exportSessionsWithProgress(ctx, opts, &stdout, &stderr, func(done, total int) {
+		if total > 0 && done == total {
+			cancel() // Interrupt while the final batches are still pending.
+		}
+	})
+	if code != exitInterrupted || !strings.Contains(stderr.String(), "interrupted") {
+		t.Fatalf("exit=%d stderr=%q, want an interrupted export", code, stderr.String())
 	}
 }

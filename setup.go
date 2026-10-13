@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-func runSetup(args []string, input io.Reader, stdout, stderr io.Writer) int {
-	return runSetupWithBrowser(context.Background(), args, input, stdout, stderr, openBrowser)
+func runSetup(ctx context.Context, args []string, input io.Reader, stdout, stderr io.Writer) int {
+	return runSetupWithBrowser(ctx, args, input, stdout, stderr, openBrowser)
 }
 
 func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, stdout, stderr io.Writer, open func(string) error) int {
@@ -51,6 +51,9 @@ func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, st
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
+		if errors.Is(err, context.Canceled) {
+			return exitInterrupted
+		}
 		return 1
 	}
 	return 0
@@ -156,7 +159,15 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		opts.humanSummary = true
 		history = newSetupHistoryProgress(p)
 		history.discovering()
-		if exportSessionsWithProgress(opts, &historyOut, &historyErr, history.processed) != 0 {
+		historyCtx, stopHistory := interruptible(ctx)
+		code := exportSessionsWithProgress(historyCtx, opts, &historyOut, &historyErr, history.processed)
+		interrupted := historyCtx.Err() != nil
+		stopHistory()
+		if interrupted {
+			history.stop()
+			return fmt.Errorf("interrupted; no configuration changed: %w", context.Canceled)
+		}
+		if code != 0 {
 			history.stop()
 			fmt.Fprint(p.out, historyOut.String())
 			fmt.Fprint(stderr, historyErr.String())
@@ -199,7 +210,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 			return err
 		}
 		s = newSender(opts.url, opts.token)
-		if err := applySetupFiles(files, s.checkSetup); err != nil {
+		if err := applySetupFiles(files, func() error { return s.checkSetup(ctx) }); err != nil {
 			return fmt.Errorf("settings update failed: %w", err)
 		}
 		return nil
@@ -227,7 +238,10 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		}
 	}
 	progress := newSetupProgress(p)
-	if err = sendSetupBatches(opts.output, s, progress.upload); err != nil {
+	uploadCtx, stopUpload := interruptible(ctx)
+	err = sendSetupBatches(uploadCtx, opts.output, s, progress.upload)
+	stopUpload()
+	if err != nil {
 		progress.stop()
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
@@ -284,14 +298,17 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 	if err = s.validate(); err != nil {
 		return err
 	}
-	if err = s.checkSetup(); err != nil {
+	if err = s.checkSetup(ctx); err != nil {
 		return err
 	}
 	if p.interactive() {
 		fmt.Fprintln(p.out)
 	}
 	progress := newSetupProgress(p)
-	if err = sendSetupBatches(dir, s, progress.upload); err != nil {
+	uploadCtx, stopUpload := interruptible(ctx)
+	err = sendSetupBatches(uploadCtx, dir, s, progress.upload)
+	stopUpload()
+	if err != nil {
 		progress.stop()
 		return err
 	}
