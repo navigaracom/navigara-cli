@@ -246,6 +246,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
 	p.completed(s.sent)
+	p.status("Codex usage receipt", s.codexSummary())
 	continueSetup(p, c.Host, p.interactive(), open)
 	return nil
 }
@@ -312,7 +313,7 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 		progress.stop()
 		return err
 	}
-	p.status("History imported", fmt.Sprintf("Navigara received %d upload batches. History already received is skipped.\n", s.sent))
+	p.status("History upload received", fmt.Sprintf("Navigara received %d upload batches.\n", s.sent)+s.codexSummary())
 	if m.OrganizationID != "" {
 		continueSetup(p, c.Host, p.interactive(), open)
 	}

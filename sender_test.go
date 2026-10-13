@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,5 +177,77 @@ func TestSenderReportsCancellationWhileReadingResponse(t *testing.T) {
 	err := newSender(srv.URL, "secret").post(ctx, telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v, want context.Canceled while reading a 200 response", err)
+	}
+}
+
+func TestSenderBackfillReceipt(t *testing.T) {
+	for _, test := range []struct {
+		name, ack, count, reason, response string
+		fail                               bool
+		summary                            string
+	}{
+		{"legacy ignores stray count", "", "5", "", `{}`, false, "unavailable"},
+		{"zero", "v1", "0", "", `{}`, false, "0 datapoints"},
+		{"omitted", "v1", "3", "overlap-unverified-v1", `{}`, false, "3 token/cost datapoints"},
+		{"negative", "v1", "-1", "", `{}`, true, ""},
+		{"missing", "v1", "", "", `{}`, true, ""},
+		{"signed", "v1", "+1", "overlap-unverified-v1", `{}`, true, ""},
+		{"overflow", "v1", "99999999999999999999999", "", `{}`, true, ""},
+		{"unknown reason", "v1", "3", "other", `{}`, true, ""},
+		{"unknown version", "v2", "0", "", `{}`, true, ""},
+		{"partial success", "v1", "3", "overlap-unverified-v1", `{"partialSuccess":{"rejectedDataPoints":"3"}}`, true, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newSender("https://collector.example", "secret")
+			s.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Header.Get("X-Navigara-Backfill-Receipt") != "v1" {
+					t.Error("receipt not requested")
+				}
+				header := http.Header{}
+				header.Set("X-Navigara-Backfill-Receipt", test.ack)
+				header.Set("X-Navigara-Backfill-Skipped-Codex-Datapoints", test.count)
+				header.Set("X-Navigara-Backfill-Codex-Skip-Reason", test.reason)
+				return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(test.response))}, nil
+			})
+			err := s.post(context.Background(), telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)})
+			if (err != nil) != test.fail {
+				t.Fatalf("error=%v", err)
+			}
+			if test.fail && s.sent != 0 {
+				t.Fatal("invalid receipt counted as accepted")
+			}
+			if !test.fail && !strings.Contains(s.codexSummary(), test.summary) {
+				t.Fatal(s.codexSummary())
+			}
+		})
+	}
+}
+
+func TestSenderParallelReceiptsReplaceResentBatch(t *testing.T) {
+	s := newSender("https://collector.example", "secret")
+	s.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		header := http.Header{}
+		header.Set("X-Navigara-Backfill-Receipt", "v1")
+		header.Set("X-Navigara-Backfill-Skipped-Codex-Datapoints", "2")
+		header.Set("X-Navigara-Backfill-Codex-Skip-Reason", "overlap-unverified-v1")
+		return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})
+	var workers sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		workers.Add(1)
+		go func(i int) {
+			defer workers.Done()
+			if err := s.post(context.Background(), telemetry.Body{Path: "/v1/metrics", Data: []byte(fmt.Sprintf(`{"batch":%d}`, i%4))}); err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	workers.Wait()
+	if s.sent != 8 || !strings.Contains(s.codexSummary(), "8 token/cost datapoints") {
+		t.Fatalf("sent=%d, %s", s.sent, s.codexSummary())
+	}
+	s.codexReceipts[[32]byte{}] = -1
+	if !strings.Contains(s.codexSummary(), "unavailable") {
+		t.Fatal("missing receipt became zero")
 	}
 }
