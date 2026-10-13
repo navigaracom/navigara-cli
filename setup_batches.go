@@ -125,9 +125,8 @@ func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) err
 		return nil
 	}
 
-	type result struct{ err error }
 	jobs := make(chan setupBatch, 4)
-	results := make(chan result, 4)
+	results := make(chan error, 4)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	var workers sync.WaitGroup
@@ -141,7 +140,13 @@ func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) err
 				if !ok {
 					return
 				}
+				if err := ctx.Err(); err != nil {
+					return
+				}
 				data, err := readBatch(dir, batch.Name)
+				if ctx.Err() != nil {
+					return
+				}
 				if err == nil {
 					sum := sha256.Sum256(data)
 					if hex.EncodeToString(sum[:]) != batch.SHA256 {
@@ -155,7 +160,7 @@ func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) err
 				if err != nil {
 					cancel(err)
 				}
-				results <- result{err: err}
+				results <- err
 			}
 		}
 	}
@@ -183,19 +188,13 @@ func sendSetupBatches(dir string, s *sender, uploaded func(done, total int)) err
 	}()
 
 	accepted := 0
-	var firstErr error
-	for result := range results {
-		if result.err == nil {
+	for err := range results {
+		if err == nil {
 			accepted++
 			if uploaded != nil {
 				uploaded(accepted, len(m.Batches))
 			}
-		} else if firstErr == nil {
-			firstErr = result.err
 		}
-	}
-	if firstErr != nil {
-		return firstErr
 	}
 	if cause := context.Cause(ctx); cause != nil {
 		return cause

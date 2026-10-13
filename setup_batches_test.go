@@ -12,7 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -59,23 +62,32 @@ func TestSetupManifestIsSortedHashedAndTokenFree(t *testing.T) {
 
 func TestSetupBatchesRetryExactBodiesAndNoRescan(t *testing.T) {
 	var got []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = append(got, r.URL.Path+":"+string(mustBody(r)))
-		fmt.Fprint(w, `{}`)
-	}))
-	defer srv.Close()
-	d := writeBatchFixture(t, srv.URL+"/api")
+	var mu sync.Mutex
+	d := writeBatchFixture(t, "http://127.0.0.1/api")
 	if err := os.WriteFile(filepath.Join(d, "after-manifest.txt"), []byte("ignored"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s := newSender(srv.URL+"/api", "secret-token")
+	s := newSender("http://127.0.0.1/api", "secret-token")
+	s.client.Transport = parallelRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		got = append(got, string(body))
+		mu.Unlock()
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
+	})
 	if err := sendSetupBatches(d, s, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := sendSetupBatches(d, s, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 4 || got[0] != got[2] || got[1] != got[3] {
+	if len(got) != 4 {
+		t.Fatalf("retry changed files: %#v", got)
+	}
+	first, second := append([]string(nil), got[:2]...), append([]string(nil), got[2:]...)
+	sort.Strings(first)
+	sort.Strings(second)
+	if !reflect.DeepEqual(first, second) || first[0] == first[1] {
 		t.Fatalf("retry changed files: %#v", got)
 	}
 }
@@ -144,19 +156,18 @@ func mustGzip(t *testing.T, body string) []byte {
 }
 
 func TestSetupBatchesReportOnlyAcceptedProgress(t *testing.T) {
-	accepted := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if accepted == 1 {
-			w.WriteHeader(http.StatusBadRequest)
-			return
+	d := writeBatchFixture(t, "http://127.0.0.1/api")
+	var calls atomic.Int32
+	s := newSender("http://127.0.0.1/api", "secret")
+	s.client.Transport = parallelRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		status := http.StatusOK
+		if calls.Add(1) == 2 {
+			status = http.StatusBadRequest
 		}
-		accepted++
-		fmt.Fprint(w, `{}`)
-	}))
-	defer srv.Close()
-	d := writeBatchFixture(t, srv.URL+"/api")
+		return &http.Response{StatusCode: status, Body: http.NoBody, Header: make(http.Header)}, nil
+	})
 	var progress [][2]int
-	err := sendSetupBatches(d, newSender(srv.URL+"/api", "secret"), func(done, total int) {
+	err := sendSetupBatches(d, s, func(done, total int) {
 		progress = append(progress, [2]int{done, total})
 	})
 	if err == nil {
