@@ -39,7 +39,7 @@ func TestReadIdentityReadsParentConfigOnlyForDefaultHome(t *testing.T) {
 	}
 }
 
-func TestReadIdentityTreatsRelativeDefaultHomeAsDefault(t *testing.T) {
+func TestReadIdentityRecognizesDefaultHomeHoweverSpelled(t *testing.T) {
 	user := t.TempDir()
 	t.Setenv("HOME", user)
 	if err := os.Mkdir(filepath.Join(user, ".claude"), 0o700); err != nil {
@@ -49,8 +49,18 @@ func TestReadIdentityTreatsRelativeDefaultHomeAsDefault(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(user, ".claude.json"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(user) // --claude-home .claude from $HOME names the default home.
-	if got := ReadIdentity(".claude", "").Email; got != "personal@example.com" {
-		t.Fatalf("email %q, want the default home's ~/.claude.json", got)
+	link := filepath.Join(t.TempDir(), "claude-link")
+	if err := os.Symlink(filepath.Join(user, ".claude"), link); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(user)
+	for _, home := range []string{
+		".claude",                            // --claude-home .claude from $HOME.
+		filepath.Join(user, ".claude") + "/", // CLAUDE_CONFIG_DIR with a trailing slash.
+		link,                                 // A symlink to ~/.claude.
+	} {
+		if got := ReadIdentity(home, "").Email; got != "personal@example.com" {
+			t.Errorf("home %s: email %q, want the default home's ~/.claude.json", home, got)
+		}
 	}
 }

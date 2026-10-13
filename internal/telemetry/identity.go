@@ -59,25 +59,28 @@ func ReadIdentity(claudeHome, codexHome string) Identity {
 // .claude: the config next to it may be another account's.
 func claudeConfigPath(claudeHome string) string {
 	inside := filepath.Join(claudeHome, ".claude.json")
-	if fileExists(inside) || !isDefaultClaudeHome(claudeHome) {
+	if fileExists(inside) {
 		return inside
 	}
-	return filepath.Join(filepath.Dir(claudeHome), ".claude.json")
+	if home, ok := defaultClaudeHomeOwner(claudeHome); ok {
+		return filepath.Join(home, ".claude.json")
+	}
+	return inside
 }
 
-// isDefaultClaudeHome reports whether claudeHome is the directory ~/.claude, however it is
-// spelled: relative, through a symlink, or with a trailing slash.
-func isDefaultClaudeHome(claudeHome string) bool {
+// defaultClaudeHomeOwner returns the user's home directory when claudeHome is its .claude
+// directory, however it is spelled: relative, through a symlink, or with a trailing slash.
+func defaultClaudeHomeOwner(claudeHome string) (string, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return false
+		return "", false
 	}
 	given, err := os.Stat(claudeHome)
 	if err != nil {
-		return false
+		return "", false
 	}
 	def, err := os.Stat(filepath.Join(home, ".claude"))
-	return err == nil && os.SameFile(given, def)
+	return home, err == nil && os.SameFile(given, def)
 }
 
 func fileExists(path string) bool {
