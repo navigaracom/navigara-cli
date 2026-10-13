@@ -130,7 +130,7 @@ never sent.
 | `--session ID` | Only this session; repeat for more. Useful to compare one session with live data. |
 | `--output DIR` | New directory for the gzip-compressed request bodies (`logs-000001.json.gz`, `metrics-000001.json.gz`, …). Read one with `gunzip -c`. |
 | `--send`, `--url`, `--token` | Post the bodies, logs first. Retries throttling and server errors. |
-| `--claude-home`, `--codex-home` | Tool homes, default `~/.claude` and `~/.codex`. |
+| `--claude-home`, `--codex-home` | Tool homes, default `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME`, then `~/.claude` and `~/.codex`. Every command resolves them the same way. |
 
 Sending the same backfill twice changes nothing: Navigara drops identical records.
 

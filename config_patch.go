@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 )
 
 const previewIngestToken = "preview-token-redacted"
@@ -67,9 +66,12 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "navigara: --codex-home must not be empty")
 		return 2
 	}
-	opts.claudeHome = firstNonEmpty(opts.claudeHome, os.Getenv("CLAUDE_CONFIG_DIR"), filepath.Join(home, ".claude"))
-	opts.codexHome = firstNonEmpty(opts.codexHome, os.Getenv("CODEX_HOME"), filepath.Join(home, ".codex"))
-	if err := checkPatchHomes(&opts, claudeExplicit, codexExplicit); err != nil {
+	claudeFlag, codexFlag := opts.claudeHome, opts.codexHome
+	if opts.claudeHome, opts.codexHome, err = toolHomes(claudeFlag, codexFlag); err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
+	if err := checkPatchHomes(&opts, claudeFlag, codexFlag); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
@@ -125,7 +127,8 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	return 0
 }
 
-func checkPatchHomes(opts *options, claudeExplicit, codexExplicit bool) error {
+func checkPatchHomes(opts *options, claudeFlag, codexFlag string) error {
+	claudeExplicit, codexExplicit := claudeFlag != "", codexFlag != ""
 	check := func(name, path string, explicit bool) (bool, error) {
 		info, err := os.Stat(path)
 		if os.IsNotExist(err) {
@@ -156,14 +159,16 @@ func checkPatchHomes(opts *options, claudeExplicit, codexExplicit bool) error {
 			return err
 		}
 	}
+	claudeMissing := fmt.Sprintf("Claude home %s%s was not found", opts.claudeHome, homeSource(claudeFlag, "CLAUDE_CONFIG_DIR"))
+	codexMissing := fmt.Sprintf("Codex home %s%s was not found", opts.codexHome, homeSource(codexFlag, "CODEX_HOME"))
 	if opts.source == "claude" && !claude {
-		return errors.New("Claude home was not found; run Claude Code once or pass --claude-home")
+		return errors.New(claudeMissing + "; run Claude Code once or pass --claude-home")
 	}
 	if opts.source == "codex" && !codex {
-		return errors.New("Codex home was not found; run Codex once or pass --codex-home")
+		return errors.New(codexMissing + "; run Codex once or pass --codex-home")
 	}
 	if opts.source == "all" && !claude && !codex {
-		return errors.New("no tool homes found; run Claude Code or Codex once, then retry")
+		return errors.New(claudeMissing + " and " + codexMissing + "; run Claude Code or Codex once, then retry")
 	}
 	if opts.source == "all" {
 		switch {
