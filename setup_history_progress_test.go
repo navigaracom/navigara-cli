@@ -24,12 +24,12 @@ func TestSetupProgressETAWaitsForUsefulKnownTotalSample(t *testing.T) {
 		{"estimated", 2, 4, started.Add(10 * time.Second), "~10s left"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			progressStarted := started
-			if test.name == "missing start" {
-				progressStarted = time.Time{}
+			var eta setupProgressETACache
+			if test.name != "missing start" {
+				eta.update(started, 0, test.total)
 			}
-			if got := setupProgressETA(progressStarted, test.now, test.done, test.total); got != test.want {
-				t.Fatalf("setupProgressETA() = %q, want %q", got, test.want)
+			if got := eta.update(test.now, test.done, test.total); got != test.want {
+				t.Fatalf("ETA = %q, want %q", got, test.want)
 			}
 		})
 	}

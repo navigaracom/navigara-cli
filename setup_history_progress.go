@@ -18,7 +18,6 @@ type setupHistoryProgress struct {
 	total   int
 	frame   int
 	active  bool
-	started time.Time
 	last    time.Time
 	eta     setupProgressETACache
 	stopCh  chan struct{}
@@ -37,7 +36,7 @@ func (u *setupHistoryProgress) discovering() {
 	}
 	now := time.Now()
 	u.phase, u.done, u.total, u.frame, u.active = "discovering", 0, 0, 0, true
-	u.started, u.last = now, now
+	u.last = now
 	u.eta.reset()
 	if u.p.interactive() {
 		fmt.Fprintln(u.p.out)
@@ -57,7 +56,6 @@ func (u *setupHistoryProgress) processed(done, total int) {
 	}
 	now := time.Now()
 	if u.phase != "preparing" {
-		u.started = now
 		u.eta.reset()
 	}
 	u.phase, u.done, u.total = "preparing", done, total
@@ -71,7 +69,7 @@ func (u *setupHistoryProgress) finalizing() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.active {
-		u.phase, u.frame, u.started = "finalizing", 0, time.Time{}
+		u.phase, u.frame = "finalizing", 0
 		u.eta.reset()
 		u.renderLocked(true)
 	}
@@ -156,12 +154,6 @@ func (u *setupHistoryProgress) lineLocked() string {
 		return u.fit("Preparing history "+spinner+" "+count, "Preparing "+spinner+" "+fmt.Sprintf("%d/%d checked", u.done, u.total), spinner)
 	}
 	return fmt.Sprintf("Preparing history %s %s%s", spinner, setupProgressBar(u.done, u.total, width)+" sessions checked", etaPrefix(eta))
-}
-
-func setupProgressETA(started, now time.Time, done, total int) string {
-	var eta setupProgressETACache
-	eta.update(started, 0, total)
-	return eta.update(now, done, total)
 }
 
 // setupProgressETACache keeps a recent rate sample for a single progress phase.
