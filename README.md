@@ -12,12 +12,6 @@ navigara wizard
 | To… | Run… |
 | --- | --- |
 | Connect to your company’s Navigara instance | `navigara wizard --host https://navigara.example.com` |
-| Resume an interrupted setup | `navigara wizard --resume /path/to/saved/payload` |
-
-## 🔐 Login
-
-- Sign in: `navigara login`
-- Sign out: `navigara logout`
 
 ## 📡 Sessions
 
@@ -27,7 +21,6 @@ navigara wizard
 | Import the past week | `navigara sessions upload --send --last 7d` |
 | Import only Claude history | `navigara sessions upload --send --source claude` |
 | Import only Codex history | `navigara sessions upload --send --source codex` |
-| Save history locally | `navigara sessions upload --output ./history` |
 | Enable future sync | `navigara sessions config patch --apply` |
 | Sync Codex only | `navigara sessions config patch --source codex --apply` |
 
@@ -51,3 +44,8 @@ Run for each user with their email:
 ```
 
 If Claude is already managed by MDM, add `--source codex` to this command.
+
+## 🔐 Account
+
+- Sign in: `navigara login`
+- Sign out: `navigara logout`
