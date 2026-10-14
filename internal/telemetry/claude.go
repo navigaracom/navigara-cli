@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -728,10 +729,13 @@ func (s *Session) reconcileCost(rows []parsedRow) {
 		}
 	}
 	var from time.Time
+	var residuals []Point
 	for _, r := range runs {
-		s.settleRun(from, r.end, r.usage)
+		residuals = append(residuals, s.settleRun(from, r.end, r.usage)...)
 		from = r.end
 	}
+	// Defer residuals so their timestamp cannot place them in a following run's interval.
+	s.Points = append(s.Points, residuals...)
 	if s.End.After(from) {
 		s.Estimated = true
 		s.lastSettled = from
@@ -739,7 +743,8 @@ func (s *Session) reconcileCost(rows []parsedRow) {
 }
 
 // settleRun reconciles the points in (from, to] to one process's cost-state totals.
-func (s *Session) settleRun(from, to time.Time, totals map[string]claudeModelCost) {
+func (s *Session) settleRun(from, to time.Time, totals map[string]claudeModelCost) []Point {
+	var residuals []Point
 	in := func(p Point) bool { return p.Time.After(from) && !p.Time.After(to) }
 	type sums struct{ cost, input, output, cacheRead, cacheCreation float64 }
 	seen := map[string]*sums{}
@@ -788,7 +793,7 @@ func (s *Session) settleRun(from, to time.Time, totals map[string]claudeModelCos
 				}
 			}
 		} else if t.CostUSD > 0 {
-			s.Points = append(s.Points, Point{Metric: "cost.usage", Time: at, Model: model, Value: t.CostUSD})
+			residuals = append(residuals, Point{Metric: "cost.usage", Time: at, Model: model, Value: t.CostUSD})
 		}
 		for _, r := range []struct {
 			kind string
@@ -798,17 +803,23 @@ func (s *Session) settleRun(from, to time.Time, totals map[string]claudeModelCos
 			{"cacheRead", t.CacheReadInputTokens, x.cacheRead}, {"cacheCreation", t.CacheCreationInputTokens, x.cacheCreation}} {
 			switch {
 			case float64(r.want) > r.have:
-				s.Points = append(s.Points, Point{Metric: "token.usage", Time: at, Model: model, Type: r.kind, Value: float64(r.want) - r.have})
+				residuals = append(residuals, Point{Metric: "token.usage", Time: at, Model: model, Type: r.kind, Value: float64(r.want) - r.have})
 			case float64(r.want) < r.have && r.have > 0:
 				scale := float64(r.want) / r.have
+				var cumulative, previous float64
+				// Round cumulative totals so the integer points still sum to the recorded total.
 				for i := range s.Points {
 					if p := &s.Points[i]; p.Model == model && p.Metric == "token.usage" && p.Type == r.kind && in(*p) {
-						p.Value *= scale
+						cumulative += p.Value * scale
+						next := math.Round(cumulative)
+						p.Value = next - previous
+						previous = next
 					}
 				}
 			}
 		}
 	}
+	return residuals
 }
 
 // systemRow maps the system rows that stand for live events: Stop hooks and background API calls.
