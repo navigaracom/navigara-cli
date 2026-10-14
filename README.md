@@ -4,33 +4,28 @@ Connect Claude Code and Codex to Navigara. Import past sessions and keep new act
 
 ## 🚀 Install and connect
 
-Requires macOS or Linux, Git, Go 1.27+, and access to this repository.
-Run Claude Code or Codex once before connecting.
+On macOS or Linux, download the installer, review it, then run it from disk:
 
 ```sh
-git clone https://github.com/navigaracom/navigara-cli.git
-cd navigara-cli
-GOBIN="$HOME/.local/bin" go install .
-mv "$HOME/.local/bin/navigara-cli" "$HOME/.local/bin/navigara"
+curl -fsSL https://navigara.com/cli -o navigara-install.sh
+bash navigara-install.sh
 export PATH="$HOME/.local/bin:$PATH"
 navigara wizard
 ```
 
-Sign in and choose your organization. The wizard preselects detected tools,
+Sign in through your browser and choose your organization. The wizard preselects detected tools,
 your email, and all history. Keep the defaults or choose **Do not import history**.
-Creating an ingestion key requires organization admin access.
+The wizard creates an ingestion key, which requires organization admin access.
 
 Add `~/.local/bin` to your shell's PATH for future terminals. After setup, restart
 your tools in a new terminal; launch desktop and IDE tools from there too.
-Your previous settings are saved in private backups.
+Your previous settings are saved in private backups. Codex setup requires bash or zsh.
 
-For your company's Navigara instance:
+For your company's instance, use its address (the server's `FRONTEND_URL` must match):
 
 ```sh
 navigara wizard --host https://navigara.example.com
 ```
-
-On-prem administrators: set the server's `FRONTEND_URL` to the same address.
 
 ## 📡 Stream new activity only
 
@@ -43,38 +38,37 @@ navigara sessions config patch --apply   # apply settings
 Add `--source claude` or `--source codex` to either `config patch` command to configure one tool.
 For your own instance, add `--host https://navigara.example.com` to `login`.
 Restart your tools in a new terminal after applying settings.
-Codex setup requires bash or zsh.
 
 ## 🖥️ Deploy with MDM
 
-Package an approved `navigara` binary for each target OS and processor.
-From the package directory, install it machine-wide:
+An administrator creates one analytics ingestor key in the Navigara dashboard.
+The key determines the organization. Have MDM inject it as `NAVIGARA_TOKEN` into
+each user's setup environment; employees do not need to sign in.
+
+Distribute the reviewed installer through MDM and run it as root:
 
 ```sh
-sudo mkdir -p /opt/navigara/bin
-sudo install -m 0755 ./navigara /opt/navigara/bin/navigara
+bash navigara-install.sh --system
 ```
 
-Each user connects in their own account, without `sudo`; Codex setup requires bash or zsh:
+Run configuration in each user's account, without `sudo`. Replace the example
+email with that employee's email. Preview is offline; apply checks the connection
+before changing settings:
 
 ```sh
-/opt/navigara/bin/navigara login
+/opt/navigara/bin/navigara sessions config patch --email employee@example.com
+/opt/navigara/bin/navigara sessions config patch --email employee@example.com --apply
 ```
 
 For managed Claude settings, configure Claude telemetry through your MDM policy.
 The default patch stops at managed Claude. To configure Codex only:
 
 ```sh
-/opt/navigara/bin/navigara sessions config patch --source codex --apply
+/opt/navigara/bin/navigara sessions config patch --source codex --email employee@example.com --apply
 ```
 
-Otherwise, configure all detected tools:
-
-```sh
-/opt/navigara/bin/navigara sessions config patch --apply
-```
-
-Sign-in opens the user's browser. Creating an ingestion key requires organization admin access.
+For your own instance, add `--host https://navigara.example.com` to these commands.
+Restart the user's tools in a new terminal afterward.
 
 ## What gets sent
 
@@ -83,12 +77,24 @@ Sign-in opens the user's browser. Creating an ingestion key requires organizatio
 - **Live Claude sessions:** prompt text and tool names, arguments, and commands.
   Assistant responses, tool output, raw API bodies, and traces stay disabled.
 
-## Help
-
-`navigara --help` lists setup, login, and logout. `navigara sessions --help`
-lists upload and streaming commands. To retry an interrupted import, use the
-directory printed by the CLI:
+Run `navigara sessions --help` for upload and streaming commands. To retry an
+interrupted import, use the directory printed by the CLI:
 
 ```sh
 navigara wizard --resume '/path/to/saved/payload'
 ```
+
+<details>
+<summary>Optional: install from source</summary>
+
+Requires Git, Go 1.27+, and access to this repository.
+
+```sh
+git clone https://github.com/navigaracom/navigara-cli.git
+cd navigara-cli
+GOBIN="$HOME/.local/bin" go install .
+mv "$HOME/.local/bin/navigara-cli" "$HOME/.local/bin/navigara"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+</details>
