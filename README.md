@@ -2,7 +2,7 @@
 
 On macOS or Linux, connect Claude Code and Codex to Navigara. Import past sessions and keep new activity in sync.
 
-## Install and connect
+## 🚀 Install and connect
 
 ```sh
 curl -fsSL https://navigara.com/cli | bash
@@ -18,7 +18,7 @@ Restart your tools from a new terminal after setup. Private backups preserve ear
 | `--host ORIGIN` | Navigara instance; defaults to the saved host or `https://app.navigara.com`. Also accepted by `login`. |
 | `--resume DIR` | Retry the exact saved setup batches in `DIR`. |
 
-## Login and sessions
+## 📡 Login and sessions
 
 Sign in, send sessions, and apply streaming settings:
 
@@ -45,7 +45,7 @@ Run `navigara sessions upload` without `--send` to prepare files. `navigara logo
 | `config patch` | `--host ORIGIN` | Navigara instance; defaults to the saved host with login, or `https://app.navigara.com` with a token. |
 | `config patch` | `--apply` | Write the prepared settings; omit to preview. |
 
-## Deploy with MDM
+## 🖥️ Deploy with MDM
 
 An administrator creates an analytics ingestor key in Navigara. Have MDM inject the existing key as `NAVIGARA_TOKEN` into each user's setup environment; employees do not need to sign in.
 
