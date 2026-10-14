@@ -207,9 +207,18 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 	}
 	report(0)
 
-	if err := os.Mkdir(opts.output, 0700); err != nil {
+	automaticOutput := opts.output == ""
+	if automaticOutput {
+		opts.output, err = os.MkdirTemp("", "navigara-backfill-")
+	} else {
+		err = os.Mkdir(opts.output, 0700)
+	}
+	if err != nil {
 		fmt.Fprintf(stderr, "navigara: output %q: %v\n", opts.output, err)
 		return 1
+	}
+	if automaticOutput {
+		fmt.Fprintln(stdout, "Output:", opts.output)
 	}
 	// Prepare at most two sessions at a time, then encode, write and send their
 	// bodies serially in sorted session order.
@@ -238,7 +247,7 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 		}
 		if sender != nil {
 			if err := sender.post(ctx, telemetry.Body{Path: b.Path, Data: data}); err != nil {
-				return fmt.Errorf("send: %w (re-run with a new --output to resume: the receiver drops records it already has)", err)
+				return fmt.Errorf("send: %w (re-run without --output, or use a new --output directory: the receiver drops records it already has)", err)
 			}
 		}
 		return nil
@@ -246,7 +255,7 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 	interrupted := func() int {
 		fmt.Fprintln(stderr, "navigara: interrupted; the output is incomplete")
 		if sender != nil {
-			fmt.Fprintln(stderr, "navigara: re-run with a new --output to resume: the receiver drops records it already has")
+			fmt.Fprintln(stderr, "navigara: re-run without --output, or use a new --output directory: the receiver drops records it already has")
 		}
 		return exitInterrupted
 	}
