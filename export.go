@@ -145,6 +145,9 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 	}
 	if wantClaude {
 		scan := session.Scan("claude", claudeHome, codexHome, func(path string) bool {
+			if opts.since.IsZero() {
+				return false
+			}
 			subs, err := telemetry.ClaudeSubagents(path)
 			if err != nil {
 				return false
