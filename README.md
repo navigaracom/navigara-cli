@@ -58,12 +58,22 @@ Each user connects in their own account, without `sudo`:
 
 ```sh
 /opt/navigara/bin/navigara login
+```
+
+For managed Claude settings, configure Claude telemetry through your MDM policy.
+The default patch stops at managed Claude. To configure Codex only:
+
+```sh
+/opt/navigara/bin/navigara sessions config patch --source codex --apply
+```
+
+Otherwise, configure all detected tools:
+
+```sh
 /opt/navigara/bin/navigara sessions config patch --apply
 ```
 
 Sign-in opens the user's browser. Creating an ingestion key requires organization admin access.
-If Claude settings are managed by your company, configure telemetry in your MDM
-policy; the CLI does not change managed settings.
 
 ## What gets sent
 
