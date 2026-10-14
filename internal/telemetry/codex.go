@@ -125,6 +125,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 	model := ""
 	var last *codexTokens
 	legacyToolIDs := map[string]bool{}
+	foreignToolIDs := map[string]bool{}
 	nativeToolCalls := map[string]codexNativeToolCall{}
 	nativeToolOutputs := map[string]time.Time{}
 	nativeToolOutputIDs := []string{}
@@ -233,7 +234,8 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			switch head.Type {
 			case "item_completed":
 				var p struct {
-					Item struct {
+					ThreadID string `json:"thread_id"`
+					Item     struct {
 						ID       string          `json:"id"`
 						Type     string          `json:"type"`
 						Content  json.RawMessage `json:"content"`
@@ -253,6 +255,9 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 				it := p.Item
 				switch it.Type {
 				case "UserMessage":
+					if p.ThreadID != "" && p.ThreadID != s.SessionID {
+						continue
+					}
 					var parts []struct {
 						Text string `json:"text"`
 					}
@@ -263,6 +268,12 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 					}
 					s.event("codex.user_prompt", at, map[string]any{"model": model, "prompt_length": fmt.Sprint(length)})
 				case "McpToolCall", "CommandExecution", "FileChange", "Extension", "ImageView", "CollabAgentToolCall":
+					if p.ThreadID != "" && p.ThreadID != s.SessionID {
+						if it.ID != "" {
+							foreignToolIDs[it.ID] = true
+						}
+						continue
+					}
 					if it.ID != "" {
 						if legacyToolIDs[it.ID] {
 							continue
@@ -369,7 +380,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 		s.event("codex.sse_event", response.at, response.attributes(context))
 	}
 	for _, callID := range nativeToolOutputIDs {
-		if legacyToolIDs[callID] {
+		if legacyToolIDs[callID] || foreignToolIDs[callID] {
 			continue
 		}
 		at := nativeToolOutputs[callID]
