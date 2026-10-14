@@ -61,6 +61,7 @@ type received struct {
 
 func TestUploadSendsPinnedSessions(t *testing.T) {
 	claudeHome, codexHome := fixtureHomes(t)
+	t.Setenv("NAVIGARA_TOKEN", "environment-secret")
 	var got received
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret" {
@@ -109,6 +110,30 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(output, "*.json.gz"))
 	if len(files) != 2 {
 		t.Errorf("wrote %d files, want 2", len(files))
+	}
+}
+
+func TestUploadUsesEnvironmentToken(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	t.Setenv("NAVIGARA_TOKEN", "environment-secret")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer environment-secret" {
+			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if body := mustBody(r); string(body) == "{}" {
+			w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome, "--codex-home", codexHome,
+		"--session", "aaaaaaaa-0000-0000-0000-000000000002", "--output", filepath.Join(t.TempDir(), "out"),
+		"--send", "--url", server.URL}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 }
 

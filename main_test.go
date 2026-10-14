@@ -92,3 +92,32 @@ func TestInvalidUploadDoesNotCreateOutput(t *testing.T) {
 		t.Fatalf("invalid invocation created output: %v", err)
 	}
 }
+
+func TestUploadTokenDoesNotExposeEnvironmentInHelp(t *testing.T) {
+	t.Setenv("NAVIGARA_TOKEN", "dummy-help-token")
+	for _, args := range [][]string{
+		{"sessions", "upload", "--help"},
+		{"sessions", "upload", "-h"},
+		{"sessions", "upload", "--token=dummy-flag-token", "--help"},
+		{"sessions", "upload", "--token=dummy-flag-token", "-h"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(context.Background(), args, &stdout, &stderr); code != 0 {
+			t.Fatalf("args=%q code=%d stderr=%q", args, code, stderr.String())
+		}
+		if strings.Contains(stdout.String()+stderr.String(), "dummy-help-token") || strings.Contains(stdout.String()+stderr.String(), "dummy-flag-token") {
+			t.Fatalf("args=%q exposed a token: stdout=%q stderr=%q", args, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestUploadEmptyTokenFlagOverridesEnvironment(t *testing.T) {
+	t.Setenv("NAVIGARA_TOKEN", "dummy-environment-token")
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"sessions", "upload", "--send", "--token="}, &stdout, &stderr); code != 1 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "explicit upload requires both --url and --token") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}

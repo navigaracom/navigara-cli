@@ -9,7 +9,7 @@ func prepareUploadAccount(ctx context.Context, opts *options) error {
 	if !opts.send {
 		return nil
 	}
-	if opts.url != "" || opts.token != "" {
+	if opts.url != "" || opts.token != "" || opts.tokenExplicit {
 		if opts.url == "" || opts.token == "" {
 			return errors.New("explicit upload requires both --url and --token (or NAVIGARA_TOKEN); omit both to use navigara login")
 		}
