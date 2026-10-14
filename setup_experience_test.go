@@ -83,6 +83,9 @@ func TestWizardFormShowsDetectedToolsAndAccountDefaults(t *testing.T) {
 		if !strings.Contains(view, "Connect this computer to Navigara") || !strings.Contains(view, "dev@example.com") || !strings.Contains(view, "Acme") || !strings.Contains(view, "https://app.example") || strings.Contains(view, "secret") || !strings.Contains(view, "All available history") || !strings.Contains(view, "Import past sessions") || !strings.Contains(view, "Connect") {
 			t.Fatalf("default account or history is invisible: %s", view)
 		}
+		if strings.Contains(strings.Join(available, ","), "claude") != strings.Contains(view, "Claude sends prompt text and tool arguments.") {
+			t.Fatalf("Claude disclosure did not match available tools: %s", view)
+		}
 		if strings.Contains(view, "> ") || !strings.Contains(view, "● All available history") {
 			t.Fatalf("inactive fields look focused or lose their selection: %s", view)
 		}
@@ -197,6 +200,9 @@ func TestWizardEditKeepsPreviousAnswersOnBlankPlainInput(t *testing.T) {
 	}
 	if settings.source != "claude" || settings.email != "dev@example.com" || settings.history != "12h" {
 		t.Fatalf("blank edit lost saved values: %#v", settings)
+	}
+	if !strings.Contains(out.String(), "Connect Claude Code (sends prompt text and tool arguments)") {
+		t.Fatalf("plain Claude question lacks disclosure: %q", out.String())
 	}
 }
 

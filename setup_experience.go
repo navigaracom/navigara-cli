@@ -17,8 +17,12 @@ type wizardSettings struct {
 func newWizardForm(account accountConfig, available []string, settings *wizardSettings, selected *[]string, history *string) *huh.Form {
 	continueSetup := true
 	tools := make([]huh.Option[string], 0, len(available))
+	connectDescription := "Enter to connect; Shift+Tab to edit."
 	for _, source := range available {
 		tools = append(tools, huh.NewOption(setupToolName(source), source))
+		if source == "claude" {
+			connectDescription = "Claude sends prompt text and tool arguments.\n" + connectDescription
+		}
 	}
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().Title("Tools to connect").
@@ -40,7 +44,7 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			huh.NewOption("Custom duration", "custom"),
 		).Value(history).Height(7),
 		huh.NewConfirm().Key("continue").Title("Close running sessions first.").
-			Description("Enter to connect; Shift+Tab to edit.").
+			Description(connectDescription).
 			Affirmative("Connect").Negative("Cancel").Value(&continueSetup).
 			WithButtonAlignment(lipgloss.Left),
 	).Title("  Connect this computer to Navigara").Description(fmt.Sprintf("  Account       %s\n  Organization  %s\n  Instance      %s", wizardHeaderValue(account.Email), wizardHeaderValue(account.OrganizationName), wizardHeaderValue(account.Host))))
@@ -117,7 +121,11 @@ func editWizardPreferences(account accountConfig, available []string, settings w
 			if selectedBySource(tool, settings.source) {
 				fallback = "y"
 			}
-			answer, err := p.ask("Connect "+setupToolName(tool)+" (y/n)", fallback)
+			question := "Connect " + setupToolName(tool) + " (y/n)"
+			if tool == "claude" {
+				question = "Connect Claude Code (sends prompt text and tool arguments) (y/n)"
+			}
+			answer, err := p.ask(question, fallback)
 			if err != nil {
 				return settings, err
 			}

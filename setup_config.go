@@ -33,32 +33,37 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	if err := json.Unmarshal(data, &settings); err != nil || settings == nil {
 		return nil, errors.New("Claude settings must be a JSON object")
 	}
-	if raw, ok := settings["otelHeadersHelper"]; ok && activeJSONValue(raw) {
-		return nil, errors.New("existing unsupported Claude telemetry setting: otelHeadersHelper")
-	}
 	env := map[string]string{}
 	if raw, ok := settings["env"]; ok {
 		if err := json.Unmarshal(raw, &env); err != nil || env == nil {
 			return nil, errors.New("Claude settings env must be a JSON object of strings")
 		}
 	}
-	if err := validateClaudeEnv(env, endpoint, token); err != nil {
-		return nil, err
+	delete(settings, "otelHeadersHelper")
+	for _, key := range claudeFileTelemetryOverrides {
+		delete(env, key)
 	}
 	attrs, err := resourceAttributes(env["OTEL_RESOURCE_ATTRIBUTES"], email)
 	if err != nil {
 		return nil, err
 	}
 	for key, value := range map[string]string{
-		"CLAUDE_CODE_ENABLE_TELEMETRY":    "1",
-		"OTEL_METRICS_EXPORTER":           "otlp",
-		"OTEL_LOGS_EXPORTER":              "otlp",
-		"OTEL_METRICS_INCLUDE_REPOSITORY": "true",
-		"OTEL_LOG_TOOL_DETAILS":           "1",
-		"OTEL_EXPORTER_OTLP_PROTOCOL":     "http/protobuf",
-		"OTEL_EXPORTER_OTLP_ENDPOINT":     endpoint,
-		"OTEL_EXPORTER_OTLP_HEADERS":      "Authorization=Bearer " + token,
-		"OTEL_RESOURCE_ATTRIBUTES":        attrs,
+		"CLAUDE_CODE_ENABLE_TELEMETRY":        "1",
+		"OTEL_METRICS_EXPORTER":               "otlp",
+		"OTEL_LOGS_EXPORTER":                  "otlp",
+		"OTEL_METRICS_INCLUDE_REPOSITORY":     "true",
+		"OTEL_METRICS_INCLUDE_SESSION_ID":     "true",
+		"OTEL_LOG_TOOL_DETAILS":               "1",
+		"OTEL_EXPORTER_OTLP_PROTOCOL":         "http/protobuf",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":         endpoint,
+		"OTEL_EXPORTER_OTLP_HEADERS":          "Authorization=Bearer " + token,
+		"OTEL_RESOURCE_ATTRIBUTES":            attrs,
+		"OTEL_LOG_USER_PROMPTS":               "1",
+		"OTEL_LOG_ASSISTANT_RESPONSES":        "0",
+		"OTEL_LOG_TOOL_CONTENT":               "0",
+		"OTEL_LOG_RAW_API_BODIES":             "0",
+		"OTEL_TRACES_EXPORTER":                "none",
+		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "0",
 	} {
 		env[key] = value
 	}
@@ -245,13 +250,12 @@ func validEmail(email string) error {
 
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
 
-func activeJSONValue(raw json.RawMessage) bool {
-	var boolean bool
-	if json.Unmarshal(raw, &boolean) == nil {
-		return boolean
-	}
-	var text string
-	return json.Unmarshal(raw, &text) != nil || activeTelemetryValue(text)
+var claudeFileTelemetryOverrides = []string{
+	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+	"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+	"OTEL_HEADERS_HELPER", "CLAUDE_CODE_OTEL_HEADERS_HELPER",
+	"BETA_TRACING_ENDPOINT", "ENABLE_ENHANCED_TELEMETRY_BETA", "ENABLE_BETA_TRACING_DETAILED",
 }
 
 func validateClaudeEnv(env map[string]string, endpoint, token string) error {
@@ -272,7 +276,18 @@ func validateClaudeEnv(env map[string]string, endpoint, token string) error {
 			return fmt.Errorf("existing conflicting Claude telemetry setting: %s", key)
 		}
 	}
-	for _, key := range []string{"OTEL_HEADERS_HELPER", "CLAUDE_CODE_OTEL_HEADERS_HELPER", "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA", "OTEL_TRACES_EXPORTER", "OTEL_LOG_USER_PROMPTS", "OTEL_LOG_TOOL_CONTENT", "OTEL_LOG_RAW_API_BODIES"} {
+	if current := strings.ToLower(strings.TrimSpace(env["OTEL_LOG_USER_PROMPTS"])); activeTelemetryValue(current) && current != "1" && current != "true" {
+		return errors.New("existing unsupported Claude telemetry setting: OTEL_LOG_USER_PROMPTS")
+	}
+	if current := strings.ToLower(strings.TrimSpace(env["OTEL_TRACES_EXPORTER"])); activeTelemetryValue(current) && current != "none" {
+		return errors.New("existing unsupported Claude telemetry setting: OTEL_TRACES_EXPORTER")
+	}
+	for _, key := range []string{
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+		"OTEL_HEADERS_HELPER", "CLAUDE_CODE_OTEL_HEADERS_HELPER",
+		"BETA_TRACING_ENDPOINT", "ENABLE_ENHANCED_TELEMETRY_BETA", "ENABLE_BETA_TRACING_DETAILED",
+		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA", "OTEL_LOG_ASSISTANT_RESPONSES", "OTEL_LOG_TOOL_CONTENT", "OTEL_LOG_RAW_API_BODIES",
+	} {
 		if activeTelemetryValue(env[key]) {
 			return fmt.Errorf("existing unsupported Claude telemetry setting: %s", key)
 		}
