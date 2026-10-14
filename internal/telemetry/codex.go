@@ -128,6 +128,9 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 	nativeToolCalls := map[string]codexNativeToolCall{}
 	nativeToolOutputs := map[string]time.Time{}
 	nativeToolOutputIDs := []string{}
+	responses := map[string]codexResponse{}
+	responseIDs := []string{}
+	responseContexts := map[string]codexResponseContext{}
 	var historyStart int64
 	line := 0
 	for scanner.Scan() {
@@ -198,6 +201,27 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			if json.Unmarshal(codexPayload(data), &tc) == nil && tc.Model != "" {
 				model = tc.Model
 			}
+			if !future {
+				recordCodexContext(codexPayload(data), responseContexts)
+			}
+		case "token_usage_record":
+			response, err := readCodexResponse(codexPayload(data), s.SessionID, at)
+			if err != nil {
+				return nil, fmt.Errorf("line %d: %w", line, err)
+			}
+			if response == nil {
+				continue
+			}
+			if prior, exists := responses[response.responseID]; exists {
+				// Persistence retries may change the observation time, not the response fact.
+				response.at = prior.at
+				if prior != *response {
+					return nil, fmt.Errorf("line %d: conflicting response identity", line)
+				}
+				continue
+			}
+			responses[response.responseID] = *response
+			responseIDs = append(responseIDs, response.responseID)
 		case "event_msg":
 			payload := codexPayload(data)
 			var head struct {
@@ -335,6 +359,14 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 	}
 	if s.SessionID == "" {
 		return nil, fmt.Errorf("no session_meta")
+	}
+	for _, responseID := range responseIDs {
+		response := responses[responseID]
+		context := responseContexts[response.turnID]
+		if context.Model == "" || context.ambiguous {
+			s.miss("codex.response_missing_turn_context")
+		}
+		s.event("codex.sse_event", response.at, response.attributes(context))
 	}
 	for _, callID := range nativeToolOutputIDs {
 		if legacyToolIDs[callID] {
