@@ -42,4 +42,12 @@ func TestBuildCodexRecordedResponses(t *testing.T) {
 	if got := len(events(bounded, "codex.sse_event")); got != 1 {
 		t.Fatalf("responses through first completion = %d, want 1", got)
 	}
+	late, err := BuildCodex("testdata/codex-recorded-response-late-context.jsonl", Identity{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := events(late, "codex.sse_event")
+	if len(completed) != 1 || completed[0].Attrs["model"] != "gpt-5.6-terra" || completed[0].Attrs["model_reasoning_effort"] != "medium" {
+		t.Fatal("response must use its recorded turn context even when that row follows it")
+	}
 }
