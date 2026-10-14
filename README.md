@@ -43,6 +43,7 @@ navigara sessions config patch --apply   # apply settings
 Add `--source claude` or `--source codex` to either `config patch` command to configure one tool.
 For your own instance, add `--host https://navigara.example.com` to `login`.
 Restart your tools in a new terminal after applying settings.
+Codex setup requires bash or zsh.
 
 ## 🖥️ Deploy with MDM
 
@@ -54,7 +55,7 @@ sudo mkdir -p /opt/navigara/bin
 sudo install -m 0755 ./navigara /opt/navigara/bin/navigara
 ```
 
-Each user connects in their own account, without `sudo`:
+Each user connects in their own account, without `sudo`; Codex setup requires bash or zsh:
 
 ```sh
 /opt/navigara/bin/navigara login
@@ -84,7 +85,8 @@ Sign-in opens the user's browser. Creating an ingestion key requires organizatio
 
 ## Help
 
-`navigara --help` lists commands. To retry an interrupted import, use the
+`navigara --help` lists setup, login, and logout. `navigara sessions --help`
+lists upload and streaming commands. To retry an interrupted import, use the
 directory printed by the CLI:
 
 ```sh
