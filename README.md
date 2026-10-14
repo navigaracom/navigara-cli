@@ -82,8 +82,8 @@ navigara sessions config patch --apply   # apply for the saved host and organiza
 This command checks your login and organization without reading session history.
 Preview creates no key and sends no telemetry. Apply verifies the receiver using
 an empty request, then updates the selected tools (`--source all|claude|codex`).
-For Claude streaming, tool detail telemetry includes tool names, arguments, and commands;
-prompt and response content remain disabled.
+For Claude streaming, prompt text and tool detail telemetry including tool names, arguments,
+and commands are sent. Assistant responses, tool output, raw API bodies, and traces remain disabled.
 
 ## Backfill sessions
 
@@ -98,7 +98,7 @@ Explicit transport requires both an API base URL and an analytics ingestor key;
 `NAVIGARA_TOKEN` supplies the token when set. Omit both to use the saved account.
 Dry runs remain offline and use the local tool identity unless `--email` is supplied.
 
-## What it sends
+## What historical uploads send
 
 Per session, the same records the tools send live:
 
@@ -107,9 +107,9 @@ Per session, the same records the tools send live:
 | `user_prompt`, `api_request`, `tool_decision`, `tool_result`, `skill_activated`, `subagent_completed`, Stop hooks | `codex.conversation_starts`, `codex.user_prompt`, `codex.tool_result` (with `mcp_server`) |
 | `claude_code.cost.usage`, `claude_code.token.usage` | `codex.turn.token_usage` |
 
-Every record carries the session id, the signed-in email and the repository URL. Requests
-carry the resource attribute `navigara.backfill=true`. Prompt text, tool input and output are
-never sent.
+Every historical-upload record carries the session id, the signed-in email and the repository
+URL. Requests carry the resource attribute `navigara.backfill=true`. Prompt text, tool input,
+and output are never sent.
 
 * **Identity**: the email, `user.id` and account ids from `~/.claude.json`, and the email of the
   Codex sign-in. `--email` overrides both. Without an email the CLI refuses to export, unless

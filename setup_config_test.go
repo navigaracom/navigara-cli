@@ -21,7 +21,7 @@ func TestClaudeSettingsCanonicalizesExistingTelemetry(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_HEADERS":          "Authorization=Bearer old",
 		"OTEL_EXPORTER_OTLP_PROTOCOL":         "grpc",
 		"OTEL_TRACES_EXPORTER":                "otlp",
-		"OTEL_LOG_USER_PROMPTS":               "true",
+		"OTEL_LOG_USER_PROMPTS":               "0",
 		"OTEL_LOG_ASSISTANT_RESPONSES":        "true",
 		"OTEL_LOG_TOOL_CONTENT":               "true",
 		"OTEL_LOG_RAW_API_BODIES":             "true",
@@ -69,7 +69,7 @@ func TestClaudeSettingsCanonicalizesExistingTelemetry(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_ENDPOINT":         testEndpoint,
 		"OTEL_EXPORTER_OTLP_HEADERS":          "Authorization=Bearer abc",
 		"OTEL_EXPORTER_OTLP_PROTOCOL":         "http/protobuf",
-		"OTEL_LOG_USER_PROMPTS":               "0",
+		"OTEL_LOG_USER_PROMPTS":               "1",
 		"OTEL_LOG_ASSISTANT_RESPONSES":        "0",
 		"OTEL_LOG_TOOL_CONTENT":               "0",
 		"OTEL_LOG_RAW_API_BODIES":             "0",
@@ -108,20 +108,26 @@ func TestClaudeSettingsRejectsInvalidJSONAndEnv(t *testing.T) {
 	}
 }
 
-func TestClaudeSettingsRejectsConflictingProcessTelemetry(t *testing.T) {
-	for _, env := range []string{
-		`"OTEL_EXPORTER_OTLP_ENDPOINT":"https://other.example/otlp"`,
-		`"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"https://other.example/v1/logs"`,
-		`"OTEL_LOG_USER_PROMPTS":"true"`,
-		`"OTEL_TRACES_EXPORTER":"otlp"`,
-		`"BETA_TRACING_ENDPOINT":"https://other.example/traces"`,
+func TestValidateClaudeEnvRejectsConflictingProcessTelemetry(t *testing.T) {
+	for _, env := range []map[string]string{
+		{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://other.example/otlp"},
+		{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "https://other.example/v1/logs"},
+		{"OTEL_LOG_ASSISTANT_RESPONSES": "true"},
+		{"OTEL_TRACES_EXPORTER": "otlp"},
+		{"BETA_TRACING_ENDPOINT": "https://other.example/traces"},
+		{"OTEL_LOG_USER_PROMPTS": "yes"},
 	} {
-		var values map[string]string
-		if err := json.Unmarshal([]byte(`{`+env+`}`), &values); err != nil {
-			t.Fatal(err)
+		if err := validateClaudeEnv(env, testEndpoint, "token"); err == nil {
+			t.Errorf("validateClaudeEnv accepted %#v", env)
 		}
-		if err := validateClaudeEnv(values, testEndpoint, "token"); err == nil {
-			t.Errorf("validateClaudeEnv accepted %s", env)
+	}
+	for _, env := range []map[string]string{
+		{"OTEL_LOG_USER_PROMPTS": "1"},
+		{"OTEL_LOG_USER_PROMPTS": "true"},
+		{"OTEL_TRACES_EXPORTER": "none"},
+	} {
+		if err := validateClaudeEnv(env, testEndpoint, "token"); err != nil {
+			t.Errorf("supported process telemetry %#v rejected: %v", env, err)
 		}
 	}
 	if err := validateClaudeEnv(map[string]string{
