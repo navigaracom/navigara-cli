@@ -26,11 +26,27 @@ type ClaudeInput struct {
 }
 
 // ClaudeSubagents lists the subagent transcripts Claude Code keeps next to a root transcript.
-func ClaudeSubagents(rootPath string) []string {
+func ClaudeSubagents(rootPath string) ([]string, error) {
 	dir := strings.TrimSuffix(rootPath, ".jsonl")
-	paths, _ := filepath.Glob(filepath.Join(dir, "subagents", "agent-*.jsonl"))
+	root := filepath.Join(dir, "subagents")
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil && path == root && os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), "agent-") && strings.HasSuffix(entry.Name(), ".jsonl") {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
 	sort.Strings(paths)
-	return paths
+	return paths, nil
 }
 
 // builtInAgents are the subagent types Claude Code ships; anything else is custom.

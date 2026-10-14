@@ -133,7 +133,11 @@ func buildFixture(t *testing.T, costState bool) *Session {
 	}
 
 	ident := Identity{Email: "dev@example.com", UserID: "hash"}
-	s, err := BuildClaude(ClaudeInput{Path: root, Subagents: ClaudeSubagents(root)}, ident, func(cwd string) string {
+	subs, err := ClaudeSubagents(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := BuildClaude(ClaudeInput{Path: root, Subagents: subs}, ident, func(cwd string) string {
 		if cwd == "/repo" {
 			return "https://github.com/acme/repo"
 		}
