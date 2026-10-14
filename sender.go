@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,10 +20,11 @@ import (
 )
 
 type sender struct {
-	client      *http.Client
-	base, token string
-	sent        int
-	sentMu      sync.Mutex
+	client        *http.Client
+	base, token   string
+	sent          int
+	sentMu        sync.Mutex
+	codexReceipts map[[32]byte]int
 }
 
 // maxOTLPBody is the receiver's limit for a decoded request body.
@@ -86,6 +89,7 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 			return errors.New("invalid OTLP request")
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Navigara-Backfill-Receipt", "v1")
 		if !probe {
 			req.Header.Set("Content-Encoding", "gzip")
 		}
@@ -119,6 +123,21 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 			if len(result.Partial) != 0 && string(result.Partial) != "{}" && string(result.Partial) != "null" {
 				return errors.New("receiver reported partial success; inspect server diagnostics before retrying")
 			}
+			skipped := -1 // No acknowledgment means the omission count is unavailable.
+			if b.Path == "/v1/metrics" && resp.Header.Get("X-Navigara-Backfill-Receipt") != "" {
+				if resp.Header.Get("X-Navigara-Backfill-Receipt") != "v1" {
+					return errors.New("unsupported backfill receipt version")
+				}
+				count := resp.Header.Get("X-Navigara-Backfill-Skipped-Codex-Datapoints")
+				var err error
+				skipped, err = strconv.Atoi(count)
+				if err != nil || skipped < 0 || strings.Trim(count, "0123456789") != "" {
+					return errors.New("invalid Codex omission count in backfill receipt")
+				}
+				if skipped > 0 && resp.Header.Get("X-Navigara-Backfill-Codex-Skip-Reason") != "overlap-unverified-v1" {
+					return errors.New("unsupported Codex omission reason in backfill receipt")
+				}
+			}
 			if probe {
 				if resp.Header.Get("X-Navigara-Backfill-Policy") != "session-live-wins-v1" {
 					return errors.New("server must support session backfill deduplication before setup can continue")
@@ -126,6 +145,12 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 			} else {
 				s.sentMu.Lock()
 				s.sent++
+				if b.Path == "/v1/metrics" {
+					if s.codexReceipts == nil {
+						s.codexReceipts = make(map[[32]byte]int)
+					}
+					s.codexReceipts[sha256.Sum256(b.Data)] = skipped
+				}
 				s.sentMu.Unlock()
 			}
 			return nil
@@ -148,4 +173,21 @@ func cancelled(ctx context.Context, last error) error {
 		return cause
 	}
 	return fmt.Errorf("%w; last attempt: %w", cause, last)
+}
+
+// Repeated frozen batches replace their receipt; resume never adds a prior run's totals.
+func (s *sender) codexSummary() string {
+	s.sentMu.Lock()
+	defer s.sentMu.Unlock()
+	total := 0
+	for _, count := range s.codexReceipts {
+		if count < 0 || count > int(^uint(0)>>1)-total {
+			return "Codex usage omissions this run: count unavailable from server.\n"
+		}
+		total += count
+	}
+	if total == 0 {
+		return "Codex usage omissions this run: 0 datapoints.\n"
+	}
+	return fmt.Sprintf("Codex usage omitted this run: %d token/cost datapoints (overlap with live telemetry is unverified).\n", total)
 }
