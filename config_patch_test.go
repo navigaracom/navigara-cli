@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -386,8 +387,13 @@ func TestConfigPatchTokenApplyPreflightsBeforeWriting(t *testing.T) {
 			afterCodex, _ := os.ReadFile(codexPath)
 			afterZshrc, _ := os.ReadFile(zshrc)
 			if test.wantOK {
-				if !bytes.Contains(afterClaude, []byte(test.token)) || !bytes.Contains(afterCodex, []byte(test.token)) || !bytes.Contains(afterClaude, []byte("Bash(git status)")) || !bytes.Contains(afterCodex, []byte("gpt-5.4")) || !bytes.Contains(afterZshrc, []byte("enduser.id=dev@example.com")) {
+				if !bytes.Contains(afterClaude, []byte(test.token)) || !bytes.Contains(afterCodex, []byte(test.token)) || !bytes.Contains(afterClaude, []byte("Bash(git status)")) || !bytes.Contains(afterCodex, []byte("gpt-5.4")) {
 					t.Fatalf("direct-token patch lost existing settings or did not apply: %s", out.String())
+				}
+				command := exec.Command("sh", "-c", string(afterZshrc)+"\nprintf '%s\\n%s' \"$PATH\" \"$OTEL_RESOURCE_ATTRIBUTES\"")
+				command.Env = append(os.Environ(), "PATH=/bin", "OTEL_RESOURCE_ATTRIBUTES=service.name=work,enduser.id=old@example.com")
+				if got, err := command.Output(); err != nil || string(got) != root+"/bin:/bin\nservice.name=work,enduser.id=dev@example.com" {
+					t.Fatalf("patched shell identity = %q, %v", got, err)
 				}
 				return
 			}
