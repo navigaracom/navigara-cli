@@ -82,6 +82,8 @@ navigara sessions config patch --apply   # apply for the saved host and organiza
 This command checks your login and organization without reading session history.
 Preview creates no key and sends no telemetry. Apply verifies the receiver using
 an empty request, then updates the selected tools (`--source all|claude|codex`).
+For Claude streaming, tool detail telemetry includes tool names, arguments, and commands;
+prompt and response content remain disabled.
 
 ## Backfill sessions
 

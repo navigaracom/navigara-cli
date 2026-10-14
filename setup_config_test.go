@@ -12,8 +12,40 @@ import (
 
 const testEndpoint = "https://app.navigara.com/api/otlp"
 
-func TestClaudeSettingsMergesEnvAndPreservesMetadataOnly(t *testing.T) {
-	got, err := claudeSettings([]byte(`{"theme":"dark","env":{"KEEP":"yes","OTEL_RESOURCE_ATTRIBUTES":"service.name=claude,enduser.id=old"}}`), testEndpoint, "abc", "dev@example.com")
+func TestClaudeSettingsCanonicalizesExistingTelemetry(t *testing.T) {
+	env := map[string]string{
+		"KEEP":                                "yes",
+		"OTEL_RESOURCE_ATTRIBUTES":            "service.name=claude,enduser.id=old",
+		"OTEL_METRICS_INCLUDE_SESSION_ID":     "false",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":         "https://old.example/otlp",
+		"OTEL_EXPORTER_OTLP_HEADERS":          "Authorization=Bearer old",
+		"OTEL_EXPORTER_OTLP_PROTOCOL":         "grpc",
+		"OTEL_TRACES_EXPORTER":                "otlp",
+		"OTEL_LOG_USER_PROMPTS":               "true",
+		"OTEL_LOG_ASSISTANT_RESPONSES":        "true",
+		"OTEL_LOG_TOOL_CONTENT":               "true",
+		"OTEL_LOG_RAW_API_BODIES":             "true",
+		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "https://old.example/metrics",
+		"OTEL_EXPORTER_OTLP_METRICS_HEADERS":  "Authorization=Bearer old",
+		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL": "grpc",
+		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":    "https://old.example/logs",
+		"OTEL_EXPORTER_OTLP_LOGS_HEADERS":     "Authorization=Bearer old",
+		"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL":    "grpc",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":  "https://old.example/traces",
+		"OTEL_EXPORTER_OTLP_TRACES_HEADERS":   "Authorization=Bearer old",
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL":  "grpc",
+		"OTEL_HEADERS_HELPER":                 "legacy",
+		"CLAUDE_CODE_OTEL_HEADERS_HELPER":     "legacy",
+		"BETA_TRACING_ENDPOINT":               "https://old.example/beta",
+		"ENABLE_ENHANCED_TELEMETRY_BETA":      "1",
+		"ENABLE_BETA_TRACING_DETAILED":        "1",
+	}
+	input, err := json.Marshal(map[string]any{"theme": "dark", "otelHeadersHelper": true, "env": env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := claudeSettings(input, testEndpoint, "abc", "dev@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,23 +60,43 @@ func TestClaudeSettingsMergesEnvAndPreservesMetadataOnly(t *testing.T) {
 		t.Fatalf("unexpected settings: %#v", settings)
 	}
 	for key, want := range map[string]string{
-		"CLAUDE_CODE_ENABLE_TELEMETRY":    "1",
-		"OTEL_METRICS_EXPORTER":           "otlp",
-		"OTEL_LOGS_EXPORTER":              "otlp",
-		"OTEL_METRICS_INCLUDE_REPOSITORY": "true",
-		"OTEL_LOG_TOOL_DETAILS":           "1",
-		"OTEL_EXPORTER_OTLP_ENDPOINT":     testEndpoint,
-		"OTEL_EXPORTER_OTLP_HEADERS":      "Authorization=Bearer abc",
-		"OTEL_EXPORTER_OTLP_PROTOCOL":     "http/protobuf",
+		"CLAUDE_CODE_ENABLE_TELEMETRY":        "1",
+		"OTEL_METRICS_EXPORTER":               "otlp",
+		"OTEL_LOGS_EXPORTER":                  "otlp",
+		"OTEL_METRICS_INCLUDE_REPOSITORY":     "true",
+		"OTEL_METRICS_INCLUDE_SESSION_ID":     "true",
+		"OTEL_LOG_TOOL_DETAILS":               "1",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":         testEndpoint,
+		"OTEL_EXPORTER_OTLP_HEADERS":          "Authorization=Bearer abc",
+		"OTEL_EXPORTER_OTLP_PROTOCOL":         "http/protobuf",
+		"OTEL_LOG_USER_PROMPTS":               "0",
+		"OTEL_LOG_ASSISTANT_RESPONSES":        "0",
+		"OTEL_LOG_TOOL_CONTENT":               "0",
+		"OTEL_LOG_RAW_API_BODIES":             "0",
+		"OTEL_TRACES_EXPORTER":                "none",
+		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "0",
 	} {
 		if settings.Env[key] != want {
 			t.Errorf("%s = %q, want %q", key, settings.Env[key], want)
 		}
 	}
-	for _, forbidden := range []string{"OTEL_LOG_USER_PROMPTS", "OTEL_LOG_TOOL_CONTENT", "OTEL_LOG_RAW_API_BODIES", "OTEL_TRACES_EXPORTER"} {
+	for _, forbidden := range []string{
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+		"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+		"OTEL_HEADERS_HELPER", "CLAUDE_CODE_OTEL_HEADERS_HELPER",
+		"BETA_TRACING_ENDPOINT", "ENABLE_ENHANCED_TELEMETRY_BETA", "ENABLE_BETA_TRACING_DETAILED",
+	} {
 		if _, ok := settings.Env[forbidden]; ok {
-			t.Errorf("must not enable %s", forbidden)
+			t.Errorf("must remove %s", forbidden)
 		}
+	}
+	if bytes.Contains(got, []byte(`"otelHeadersHelper"`)) {
+		t.Fatal("top-level helper remained")
+	}
+	again, err := claudeSettings(got, testEndpoint, "abc", "dev@example.com")
+	if err != nil || !bytes.Equal(again, got) {
+		t.Fatalf("canonical transform was not idempotent: %v\n%s", err, again)
 	}
 }
 
@@ -56,22 +108,27 @@ func TestClaudeSettingsRejectsInvalidJSONAndEnv(t *testing.T) {
 	}
 }
 
-func TestClaudeSettingsRejectsConflictingOrContentTelemetry(t *testing.T) {
+func TestClaudeSettingsRejectsConflictingProcessTelemetry(t *testing.T) {
 	for _, env := range []string{
 		`"OTEL_EXPORTER_OTLP_ENDPOINT":"https://other.example/otlp"`,
 		`"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"https://other.example/v1/logs"`,
 		`"OTEL_LOG_USER_PROMPTS":"true"`,
 		`"OTEL_TRACES_EXPORTER":"otlp"`,
+		`"BETA_TRACING_ENDPOINT":"https://other.example/traces"`,
 	} {
-		if _, err := claudeSettings([]byte(`{"env":{`+env+`}}`), testEndpoint, "token", "dev@example.com"); err == nil {
-			t.Errorf("claudeSettings accepted %s", env)
+		var values map[string]string
+		if err := json.Unmarshal([]byte(`{`+env+`}`), &values); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateClaudeEnv(values, testEndpoint, "token"); err == nil {
+			t.Errorf("validateClaudeEnv accepted %s", env)
 		}
 	}
-	if _, err := claudeSettings([]byte(`{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"`+testEndpoint+`"}}`), testEndpoint, "token", "dev@example.com"); err != nil {
+	if err := validateClaudeEnv(map[string]string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT":         testEndpoint,
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": testEndpoint + "/v1/metrics",
+	}, testEndpoint, "token"); err != nil {
 		t.Fatalf("same endpoint must be reusable: %v", err)
-	}
-	if _, err := claudeSettings([]byte(`{"otelHeadersHelper":true}`), testEndpoint, "token", "dev@example.com"); err == nil {
-		t.Fatal("top-level otelHeadersHelper succeeded")
 	}
 }
 
