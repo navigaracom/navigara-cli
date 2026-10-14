@@ -1,145 +1,51 @@
 # Navigara CLI
 
-Backfill local Claude Code and Codex sessions into Navigara. The CLI rebuilds the
-OpenTelemetry the tools would have sent live, so a backfilled session looks the same in
-Navigara as a live one.
+Connect Claude Code and Codex to Navigara on macOS and Linux.
 
-## Install
-
-Download `install.sh` from the [release](https://github.com/navigaracom/navigara-cli/releases/tag/v1.0.0),
-read it, then run it from disk:
+## 🚀 Install and connect
 
 ```sh
-bash install.sh                 # current user, ~/.local/bin
-sudo bash install.sh --system   # machine-wide, /opt/navigara/bin (MDM)
-```
-
-The script downloads one pinned release and installs it only when the SHA-256 digest
-matches the value embedded in the script. It refuses to run from a pipe. Enterprises
-can host the reviewed copy themselves; only the release block at the top changes
-between releases.
-
-## Set up this computer
-
-```sh
+curl -fsSL https://navigara.com/cli | bash
 navigara wizard
 ```
 
-On macOS and Linux, the wizard checks your saved login and opens the browser when
-sign-in is needed. Choose your organization, then complete the prefilled form:
-all detected tools, your account email, and all available history. Press Enter
-once to keep the defaults, or use Shift+Tab to edit and Space to toggle tools.
-Continue prepares history, verifies the receiver can safely deduplicate it,
-updates the selected tools, and uploads the frozen batches. Close running tool
-sessions before continuing.
+| To… | Run… |
+| --- | --- |
+| Connect to your company’s Navigara instance | `navigara wizard --host https://navigara.example.com` |
 
-Interactive terminals show keyboard-driven forms. Redirected input/output,
-`TERM=dumb`, or `NO_COLOR` use plain prompts instead.
+## 📡 Sessions
 
-The default host is `https://app.navigara.com`. For an on-prem instance:
+| To… | Run… |
+| --- | --- |
+| Import all history | `navigara sessions upload --send` |
+| Import the past week | `navigara sessions upload --send --last 7d` |
+| Import only Claude history | `navigara sessions upload --send --source claude` |
+| Import only Codex history | `navigara sessions upload --send --source codex` |
+| Enable future sync | `navigara sessions config patch --apply` |
+| Sync Codex only (requires bash or zsh) | `navigara sessions config patch --source codex --apply` |
 
-```sh
-navigara wizard --host https://navigara.example.com
-```
+Run `navigara sessions --help` for more commands.
 
-The selected host and organization are saved privately. To sign in or select a
-different organization without running the wizard, use `navigara login [--host ORIGIN]`.
-Sign-in uses OAuth 2.0 authorization code flow with PKCE and opens a browser. The CLI
-does not use refresh tokens; when its access token expires, it opens the browser again.
-To sign out of the saved account, use `navigara logout [--host ORIGIN]`. It clears the
-saved account, organization, and local ingestion credential without changing Claude or
-Codex settings. When a saved session is available, it also asks Navigara to revoke it.
-An organization administrator must authorize creation of an analytics ingestor key.
-For on-premises installations, the server’s `FRONTEND_URL` must match `--host`.
-For local development, use `http://127.0.0.1:3000` for both; HTTP requires a loopback IP.
+## 🖥️ MDM
 
-Setup preserves unrelated settings and saves private backups beside changed files.
-Claude uses user settings; Codex uses its configuration plus a bash/zsh identity
-block. If a tool cannot be updated safely, the wizard offers to skip its history
-and streaming for this run. You can resolve its settings and reconnect it later.
-Restart your tools in a new terminal afterward; launch desktop/IDE tools from that
-terminal to inherit identity. Setup reports configuration, not observed live traffic.
+Create an **Analytics Ingestor** key in Navigara. Set `NAVIGARA_TOKEN` only for the per-user setup command below.
 
-The receiver must advertise session backfill deduplication. Live data wins over
-backfill for the same session; partial live sessions are not filled in automatically.
-Uploads reuse the exact frozen files. If interrupted, retry the printed directory:
+Download the installer through MDM and run it as root:
 
 ```sh
-navigara wizard --resume '/path/to/saved/payload'
+curl -fsSL https://navigara.com/cli -o navigara-install.sh
+bash navigara-install.sh --system
 ```
 
-Resume verifies saved file hashes and requires the original host and organization.
-Older manifests without an organization still ask for a token. Credentials are
-stored privately in the account and tool settings, never in the upload manifest.
-
-## Configure streaming only
+Run in each employee’s account, without `sudo`, using their email:
 
 ```sh
-navigara sessions config patch           # preview tool settings
-navigara sessions config patch --apply   # apply for the saved host and organization
+/opt/navigara/bin/navigara sessions config patch --email employee@example.com --apply
 ```
 
-This command checks your login and organization without reading session history.
-Preview creates no key and sends no telemetry. Apply verifies the receiver using
-an empty request, then updates the selected tools (`--source all|claude|codex`).
-For Claude streaming, prompt text and tool detail telemetry including tool names, arguments,
-and commands are sent. Assistant responses, tool output, raw API bodies, and traces remain disabled.
+If Claude is already managed by MDM, add `--source codex` to this command.
 
-## Backfill sessions
+## 🔐 Account
 
-```sh
-navigara sessions upload --last 30d                 # write gzip-compressed OTLP request bodies, send nothing
-navigara sessions upload --last 30d --send          # use saved login and organization
-navigara sessions upload --last 30d --send \
-  --url https://app.navigara.com/api --token "$NAVIGARA_TOKEN"
-```
-
-Explicit transport requires both an API base URL and an analytics ingestor key;
-`NAVIGARA_TOKEN` supplies the token when set. Omit both to use the saved account.
-Dry runs remain offline and use the local tool identity unless `--email` is supplied.
-
-## What historical uploads send
-
-Per session, the same records the tools send live:
-
-| Claude Code | Codex |
-| -- | -- |
-| `user_prompt`, `api_request`, `tool_decision`, `tool_result`, `skill_activated`, `subagent_completed`, Stop hooks | `codex.conversation_starts`, `codex.user_prompt`, `codex.tool_result` (with `mcp_server`) |
-| `claude_code.cost.usage`, `claude_code.token.usage` | `codex.turn.token_usage` |
-
-Every historical-upload record carries the session id, the signed-in email and the repository
-URL. Requests carry the resource attribute `navigara.backfill=true`. Prompt text, tool input,
-and output are never sent.
-
-* **Identity**: the email, `user.id` and account ids from `~/.claude.json`, and the email of the
-  Codex sign-in. `--email` overrides both. Without an email the CLI refuses to export, unless
-  `--allow-anonymous` is set.
-* **Cost**: Claude Code writes its own per-model totals (`cost-state`) when a session ends; the
-  CLI matches them exactly, background calls included. A session without them (still running,
-  or cut by `--until`) is priced from a table and flagged `cost=estimated`. Codex is priced by
-  Navigara from the tokens.
-* **Subagents and teammates**: their transcripts (`<session>/subagents/`) count in the parent
-  session, like live. Codex child threads are sessions of their own, like live.
-* **Repository**: Claude Code transcripts record only the working directory; the CLI reads that
-  directory's `origin` remote. Credentials are stripped.
-
-## Flags
-
-| Flag | Meaning |
-| -- | -- |
-| `--source all\|claude\|codex` | Which tool to read. |
-| `--last 30d`, `--since`, `--until` | Time window, by duration or RFC 3339 time. |
-| `--session ID` | Only this session; repeat for more. Useful to compare one session with live data. |
-| `--output DIR` | New directory for the gzip-compressed request bodies (`logs-000001.json.gz`, `metrics-000001.json.gz`, …). Read one with `gunzip -c`. |
-| `--send`, `--url`, `--token` | Post the bodies, logs first. Retries throttling and server errors. |
-| `--claude-home`, `--codex-home` | Tool homes, default `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME`, then `~/.claude` and `~/.codex`. Every command resolves them the same way. |
-
-Sending the same backfill twice changes nothing: Navigara drops identical records.
-
-## Limits
-
-* Claude Code deletes transcripts after its cleanup period (30 days by default).
-* A slash command typed last, such as `/exit`, never reaches the transcript.
-* Claude Code background calls without a transcript row (`prompt_suggestion`, `agent_summary`)
-  count in cost and tokens at the session end, not when they happened.
-* One-shot `codex exec` runs that keep no rollout file cannot be backfilled.
+- Sign in: `navigara login`
+- Sign out: `navigara logout`
