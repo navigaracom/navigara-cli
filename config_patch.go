@@ -11,8 +11,8 @@ import (
 
 const previewIngestToken = "preview-token-redacted"
 
-// runConfigPatch updates the native Claude/Codex settings using the saved
-// account. It intentionally has no history or OTLP export side effects.
+// runConfigPatch updates native Claude/Codex settings using the saved account
+// or a supplied ingestion token. It has no history export side effects.
 func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var opts options
 	var apply, help bool
@@ -20,10 +20,11 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: navigara sessions config patch [options]") }
 	fs.StringVar(&opts.host, "host", "", "Navigara origin")
+	fs.StringVar(&opts.token, "token", "", "analytics ingestor token (or $NAVIGARA_TOKEN)")
 	fs.StringVar(&opts.source, "source", "all", "tool source: all, claude, codex")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home (default $CODEX_HOME or ~/.codex)")
-	fs.StringVar(&opts.email, "email", "", "contributor email (default signed-in account)")
+	fs.StringVar(&opts.email, "email", "", "contributor email (required with a token; default signed-in account)")
 	fs.BoolVar(&apply, "apply", false, "apply the prepared settings")
 	fs.BoolVar(&help, "help", false, "show patch help")
 	fs.BoolVar(&help, "h", false, "show patch help")
@@ -40,9 +41,41 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "navigara: unexpected argument: "+fs.Arg(0))
 		return 2
 	}
+	tokenFlag := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "token" {
+			tokenFlag = true
+		}
+	})
+	envToken, envTokenSet := os.LookupEnv("NAVIGARA_TOKEN")
+	directToken := tokenFlag || envTokenSet
+	if directToken {
+		if !tokenFlag {
+			opts.token = envToken
+		}
+		host := firstNonEmpty(opts.host, defaultHost)
+		var err error
+		if opts.host, err = canonicalHost(host); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
+		if err := validEmail(opts.email); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
+	}
 	if opts.source != "all" && opts.source != "claude" && opts.source != "codex" {
 		fmt.Fprintln(stderr, "navigara: --source must be all, claude, or codex")
 		return 2
+	}
+	var s *sender
+	if directToken {
+		opts.url = opts.host + "/api"
+		s = newSender(opts.url, opts.token)
+		if err := s.validate(); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -76,26 +109,35 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 1
 	}
 
-	c, err := verifiedAccount(ctx, opts.host)
-	if err != nil {
-		fmt.Fprintln(stderr, "navigara:", err)
-		return 1
+	var c accountConfig
+	if !directToken {
+		c, err = verifiedAccount(ctx, opts.host)
+		if err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
+		if opts.email == "" {
+			opts.email = c.Email
+		}
+		if err := validEmail(opts.email); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
+		opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
 	}
-	if opts.email == "" {
-		opts.email = c.Email
-	}
-	if err := validEmail(opts.email); err != nil {
-		fmt.Fprintln(stderr, "navigara:", err)
-		return 1
-	}
-	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
 	files, err := setupPlans(opts, home)
 	if err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s config patch for %q (%s, email %s)\n", map[bool]string{true: "Applying", false: "Previewing"}[apply], c.OrganizationName, c.OrganizationID, opts.email)
-	fmt.Fprintf(stdout, "Host: %s\nClaude home: %s\nCodex home: %s\n", c.Host, opts.claudeHome, opts.codexHome)
+	if directToken {
+		fmt.Fprintf(stdout, "%s config patch (email %s)\n", map[bool]string{true: "Applying", false: "Previewing"}[apply], opts.email)
+		fmt.Fprintf(stdout, "Host: %s\n", opts.host)
+	} else {
+		fmt.Fprintf(stdout, "%s config patch for %q (%s, email %s)\n", map[bool]string{true: "Applying", false: "Previewing"}[apply], c.OrganizationName, c.OrganizationID, opts.email)
+		fmt.Fprintf(stdout, "Host: %s\n", c.Host)
+	}
+	fmt.Fprintf(stdout, "Claude home: %s\nCodex home: %s\n", opts.claudeHome, opts.codexHome)
 	for _, f := range files {
 		fmt.Fprintln(stdout, "Update:", f.path)
 	}
@@ -103,17 +145,18 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stdout, "Preview only; no files changed and no ingestion request sent.")
 		return 0
 	}
-	if err := ensureIngestion(ctx, &c); err != nil {
-		fmt.Fprintln(stderr, "navigara:", err)
-		return 1
+	if !directToken {
+		if err := ensureIngestion(ctx, &c); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
+		opts.token = c.IngestToken
+		if err := refreshSetupPlans(files, opts, home); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
+		s = newSender(opts.url, opts.token)
 	}
-	opts.token = c.IngestToken
-	if err := refreshSetupPlans(files, opts, home); err != nil {
-		fmt.Fprintln(stderr, "navigara:", err)
-		return 1
-	}
-
-	s := newSender(opts.url, opts.token)
 	if err := applySetupFiles(files, func() error { return s.checkSetup(ctx) }); err != nil {
 		fmt.Fprintln(stderr, "navigara: settings update failed:", err)
 		return 1

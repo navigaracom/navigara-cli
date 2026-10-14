@@ -256,3 +256,150 @@ func TestConfigPatchInvalidSettingsDoesNotMintIngestionKey(t *testing.T) {
 		t.Fatalf("minted ingestion key despite invalid settings: %d", keyPosts)
 	}
 }
+
+func TestConfigPatchTokenPreviewUsesDefaultHostWithoutSavedAccount(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	claude := filepath.Join(root, "claude")
+	if err := os.MkdirAll(claude, 0700); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(claude, "settings.json")
+	if err := os.WriteFile(claudePath, []byte(`{"permissions":{"allow":["Bash(git status)"]},"env":{"KEEP":"yes"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A saved target must not become the direct-token target or be read for identity.
+	if err := saveAccount(accountConfig{Version: 1, Host: "https://saved.example", SessionToken: "expired", OrganizationID: "saved-org"}); err != nil {
+		t.Fatal(err)
+	}
+	beforeSettings, _ := os.ReadFile(claudePath)
+	_, accountPath, err := accountPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeAccount, err := os.ReadFile(accountPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	secret := "mdm-preview-secret"
+	if code := runConfigPatch(context.Background(), []string{"--token", secret, "--email", "dev@example.com", "--source", "claude", "--claude-home", claude}, &out, &errOut); code != 0 {
+		t.Fatalf("code=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), defaultHost) || strings.Contains(out.String()+errOut.String(), secret) {
+		t.Fatalf("unsafe or wrong direct-token preview: %s%s", out.String(), errOut.String())
+	}
+	afterSettings, _ := os.ReadFile(claudePath)
+	afterAccount, err := os.ReadFile(accountPath)
+	backups, globErr := filepath.Glob(filepath.Join(claude, ".navigara-backup-*"))
+	if !bytes.Equal(beforeSettings, afterSettings) || err != nil || !bytes.Equal(beforeAccount, afterAccount) || globErr != nil || len(backups) != 0 {
+		t.Fatal("direct-token preview changed settings, account, or backups")
+	}
+}
+
+func TestConfigPatchTokenRejectsInvalidDirectCredentialsWithoutOAuthFallback(t *testing.T) {
+	for _, test := range []struct {
+		name, env, want string
+		args            []string
+	}{
+		{name: "empty flag overrides environment", env: "env-secret", args: []string{"--token", "", "--email", "dev@example.com"}, want: "nonempty analytics ingestor token"},
+		{name: "empty environment", env: "", args: []string{"--email", "dev@example.com"}, want: "nonempty analytics ingestor token"},
+		{name: "missing email", args: []string{"--token", "flag-secret"}, want: "email must not be empty"},
+		{name: "invalid host", args: []string{"--token", "flag-secret", "--email", "dev@example.com", "--host", "https://bad host"}, want: "host must be an origin"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("NAVIGARA_TOKEN", test.env)
+			var out, errOut bytes.Buffer
+			if code := runConfigPatch(context.Background(), test.args, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), test.want) || strings.Contains(out.String()+errOut.String(), "secret") {
+				t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
+			}
+		})
+	}
+	var out, errOut bytes.Buffer
+	t.Setenv("NAVIGARA_TOKEN", "help-secret")
+	if code := runConfigPatch(context.Background(), []string{"--help"}, &out, &errOut); code != 0 || strings.Contains(out.String()+errOut.String(), "help-secret") {
+		t.Fatalf("code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+}
+
+func TestConfigPatchTokenApplyPreflightsBeforeWriting(t *testing.T) {
+	for _, test := range []struct {
+		name, token, env string
+		flag             bool
+		status           int
+		wantOK           bool
+	}{
+		{name: "accepted flag", token: "mdm-apply-secret", env: "different-env-secret", flag: true, status: http.StatusOK, wantOK: true},
+		{name: "accepted environment", token: "mdm-env-secret", env: "mdm-env-secret", status: http.StatusOK, wantOK: true},
+		{name: "rejected", token: "mdm-apply-secret", flag: true, status: http.StatusUnauthorized},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("NAVIGARA_TOKEN", test.env)
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if r.URL.Path != "/api/otlp/v1/metrics" || r.Header.Get("Authorization") != "Bearer "+test.token {
+					t.Errorf("unexpected direct-token request %s %q", r.URL.Path, r.Header.Get("Authorization"))
+				}
+				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+
+			root := t.TempDir()
+			t.Setenv("HOME", root)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+			t.Setenv("SHELL", "/bin/zsh")
+			t.Setenv("ZDOTDIR", root)
+			claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
+			if err := os.MkdirAll(claude, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(codex, 0700); err != nil {
+				t.Fatal(err)
+			}
+			claudePath, codexPath, zshrc := filepath.Join(claude, "settings.json"), filepath.Join(codex, "config.toml"), filepath.Join(root, ".zshrc")
+			if err := os.WriteFile(claudePath, []byte(`{"permissions":{"allow":["Bash(git status)"]},"env":{"KEEP":"yes"}}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(codexPath, []byte("model = \"gpt-5.4\"\n[projects.\"/work\"]\ntrust_level = \"trusted\"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(zshrc, []byte("export PATH=\"$HOME/bin:$PATH\"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			beforeClaude, _ := os.ReadFile(claudePath)
+			beforeCodex, _ := os.ReadFile(codexPath)
+			beforeZshrc, _ := os.ReadFile(zshrc)
+			var out, errOut bytes.Buffer
+			args := []string{"--apply", "--host", srv.URL, "--email", "dev@example.com", "--source", "all", "--claude-home", claude, "--codex-home", codex}
+			if test.flag {
+				args = append(args, "--token", test.token)
+			}
+			code := runConfigPatch(context.Background(), args, &out, &errOut)
+			if (code == 0) != test.wantOK || requests != 1 {
+				t.Fatalf("code=%d requests=%d err=%s", code, requests, errOut.String())
+			}
+			afterClaude, _ := os.ReadFile(claudePath)
+			afterCodex, _ := os.ReadFile(codexPath)
+			afterZshrc, _ := os.ReadFile(zshrc)
+			if test.wantOK {
+				if !bytes.Contains(afterClaude, []byte(test.token)) || !bytes.Contains(afterCodex, []byte(test.token)) || !bytes.Contains(afterClaude, []byte("Bash(git status)")) || !bytes.Contains(afterCodex, []byte("gpt-5.4")) || !bytes.Contains(afterZshrc, []byte("enduser.id=dev@example.com")) {
+					t.Fatalf("direct-token patch lost existing settings or did not apply: %s", out.String())
+				}
+				return
+			}
+			if !bytes.Equal(beforeClaude, afterClaude) || !bytes.Equal(beforeCodex, afterCodex) || !bytes.Equal(beforeZshrc, afterZshrc) {
+				t.Fatal("rejected token changed settings")
+			}
+			for _, dir := range []string{claude, codex, root} {
+				backups, err := filepath.Glob(filepath.Join(dir, ".navigara-backup-*"))
+				if err != nil || len(backups) != 0 {
+					t.Fatalf("rejected token created backups in %s: %v, %v", dir, backups, err)
+				}
+			}
+		})
+	}
+}
