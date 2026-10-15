@@ -29,6 +29,7 @@ type options struct {
 	replaceCodexTelemetry bool
 	send                  bool
 	host, url, token      string
+	tokenExplicit         bool
 }
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
@@ -118,7 +119,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&opts.send, "send", false, "post the request bodies using saved login or --url and --token")
 	fs.StringVar(&opts.host, "host", "", "Navigara origin for --send with saved login (default saved host)")
 	fs.StringVar(&opts.url, "url", "", "Navigara base URL, for example https://app.navigara.com")
-	fs.StringVar(&opts.token, "token", os.Getenv("NAVIGARA_TOKEN"), "API key with the analytics ingestor role (default $NAVIGARA_TOKEN)")
+	fs.StringVar(&opts.token, "token", "", "API key with the analytics ingestor role (default $NAVIGARA_TOKEN)")
 	var last time.Duration
 	fs.Func("last", "only export points from the last duration (for example 24h or 7d)", func(value string) error {
 		parsed, err := parseLast(value)
@@ -154,6 +155,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fs.SetOutput(stdout)
 		fs.PrintDefaults()
 		return 0
+	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "token" {
+			opts.tokenExplicit = true
+		}
+	})
+	if !opts.tokenExplicit {
+		opts.token = os.Getenv("NAVIGARA_TOKEN")
 	}
 	if last > 0 {
 		if opts.until.IsZero() {
