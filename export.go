@@ -145,7 +145,11 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 	}
 	if wantClaude {
 		scan := session.Scan("claude", claudeHome, codexHome, func(path string) bool {
-			return stale(opts.since, append([]string{path}, telemetry.ClaudeSubagents(path)...)...)
+			subs, err := telemetry.ClaudeSubagents(path)
+			if err != nil {
+				return false
+			}
+			return stale(opts.since, append([]string{path}, subs...)...)
 		})
 		incomplete = len(scan.Errors) > 0
 		for _, err := range scan.Errors {
@@ -159,7 +163,11 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 			}
 			seen[id] = true
 			jobs = append(jobs, job{"claude_code", id, func() (*telemetry.Session, error) {
-				return telemetry.BuildClaude(telemetry.ClaudeInput{Path: path, Subagents: telemetry.ClaudeSubagents(path),
+				subs, err := telemetry.ClaudeSubagents(path)
+				if err != nil {
+					return nil, err
+				}
+				return telemetry.BuildClaude(telemetry.ClaudeInput{Path: path, Subagents: subs,
 					Until: opts.until, Commits: lookupCommits}, ident, lookupRepo)
 			}})
 		}
