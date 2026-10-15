@@ -149,6 +149,11 @@ headers = { Authorization = ` + q("Bearer "+token) + ` }
 endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/logs") + `
 protocol = "binary"
 headers = { Authorization = ` + q("Bearer "+token) + ` }
+
+[otel.trace_exporter.otlp-http]
+endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/traces") + `
+protocol = "binary"
+headers = { Authorization = ` + q("Bearer "+token) + ` }
 ` + telemetryEnd + "\n"
 }
 
