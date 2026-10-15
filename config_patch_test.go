@@ -191,6 +191,9 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 	if !bytes.Contains(firstClaude, []byte("ingest-secret")) || !bytes.Contains(firstCodex, []byte("ingest-secret")) {
 		t.Fatal("native configs lack ingestion key")
 	}
+	if !bytes.Contains(firstCodex, []byte(`endpoint = "`+srv.URL+`/api/otlp/v1/traces"`)) {
+		t.Fatal("native Codex config lacks the OTLP traces endpoint")
+	}
 	if bytes.Contains(firstClaude, []byte("session-secret")) || bytes.Contains(firstCodex, []byte("session-secret")) {
 		t.Fatal("session token leaked into native config")
 	}

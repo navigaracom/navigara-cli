@@ -162,7 +162,7 @@ func tomlLastNonBlankLineEnd(data []byte, start, end int) int {
 	return start
 }
 
-// codexTelemetryRange returns the byte range occupied by Codex's two legacy
+// codexTelemetryRange returns the byte range occupied by Codex's legacy
 // OpenTelemetry tables. It recognizes only the small, safe shape that setup
 // can replace without reformatting unrelated user configuration.
 func codexTelemetryRange(data []byte) (start, end int, ok bool) {
@@ -171,7 +171,7 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 		return 0, 0, false
 	}
 
-	seen := make(map[string]bool, 2)
+	seen := make(map[string]bool, 3)
 	active := ""
 	seenTable := false
 	first, last := -1, -1
@@ -188,6 +188,9 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 				}
 				active = ""
 				continue
+			}
+			if first >= 0 && active == "" {
+				return 0, 0, false
 			}
 			name := expression.key[1]
 			if seen[name] {
@@ -212,7 +215,7 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 			last = expression.end
 		}
 	}
-	if len(seen) != 2 {
+	if !seen["metrics_exporter"] || !seen["exporter"] {
 		return 0, 0, false
 	}
 	return first, last, true
@@ -220,7 +223,7 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 
 func isCodexTelemetryTable(key []string) bool {
 	return len(key) == 3 && key[0] == "otel" && key[2] == "otlp-http" &&
-		(key[1] == "metrics_exporter" || key[1] == "exporter")
+		(key[1] == "metrics_exporter" || key[1] == "exporter" || key[1] == "trace_exporter")
 }
 
 func isCodexTelemetryKey(key string) bool {

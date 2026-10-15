@@ -144,14 +144,14 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(first, []byte("model = \"o3\"\n\n# comment\n")) || !bytes.Contains(first, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/metrics"`)) || !bytes.Contains(first, []byte(`Authorization = "Bearer a\"b"`)) {
+	if !bytes.Contains(first, []byte("model = \"o3\"\n\n# comment\n")) || !bytes.Contains(first, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/metrics"`)) || !bytes.Contains(first, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/traces"`)) || !bytes.Contains(first, []byte(`Authorization = "Bearer a\"b"`)) {
 		t.Fatalf("missing expected content:\n%s", first)
 	}
 	second, err := codexSettings(first, testEndpoint, "new", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Count(second, []byte("# >>> navigara telemetry >>>")) != 1 || bytes.Contains(second, []byte(`Bearer a\"b`)) || !bytes.Contains(second, []byte(`Bearer new`)) {
+	if bytes.Count(second, []byte("# >>> navigara telemetry >>>")) != 1 || bytes.Contains(second, []byte(`Bearer a\"b`)) || !bytes.Contains(second, []byte(`Bearer new`)) || !bytes.Contains(second, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/traces"`)) {
 		t.Fatalf("managed block was not replaced:\n%s", second)
 	}
 	suffix := []byte("\n# keep this separation\n[projects.keep]\ntrust_level = \"trusted\"\n")
@@ -303,20 +303,39 @@ func TestCodexSettingsRequiresConsentToReplaceExistingExporters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	trace := []byte(`[otel.trace_exporter.otlp-http]
+endpoint = "https://old.example/v1/traces"
+protocol = "binary"
+headers = { Authorization = "Bearer fixture-old" }
+`)
 	prefix, suffix := []byte("model = \"fixture\"\n"), []byte("[mcp_servers.example]\ncommand = \"example\"\n")
-	input := append(append(append([]byte(nil), prefix...), fixture...), suffix...)
-	if _, err := codexSettings(input, testEndpoint, "new", false); !errors.Is(err, errCodexTelemetry) {
-		t.Fatalf("expected a replaceable conflict, got %v", err)
+	for _, test := range []struct {
+		name      string
+		telemetry []byte
+	}{
+		{name: "metrics and logs", telemetry: fixture},
+		{name: "metrics logs and traces", telemetry: append(append([]byte(nil), fixture...), trace...)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := append(append(append([]byte(nil), prefix...), test.telemetry...), suffix...)
+			if _, err := codexSettings(input, testEndpoint, "new", false); !errors.Is(err, errCodexTelemetry) {
+				t.Fatalf("expected a replaceable conflict, got %v", err)
+			}
+			got, err := codexSettings(input, testEndpoint, "new", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.HasPrefix(got, prefix) || !bytes.HasSuffix(got, suffix) || bytes.Contains(got, []byte("fixture-old")) || bytes.Count(got, []byte(telemetryBegin)) != 1 {
+				t.Fatal("replacement changed unrelated settings or retained the old exporters")
+			}
+			if _, err := codexSettings(append(got, test.telemetry...), testEndpoint, "next", true); err == nil {
+				t.Fatal("mixed managed and unmanaged telemetry was accepted")
+			}
+		})
 	}
-	got, err := codexSettings(input, testEndpoint, "new", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.HasPrefix(got, prefix) || !bytes.HasSuffix(got, suffix) || bytes.Contains(got, []byte("fixture-old")) || bytes.Count(got, []byte(telemetryBegin)) != 1 {
-		t.Fatal("replacement changed unrelated settings or retained the old exporters")
-	}
-	if _, err := codexSettings(append(got, fixture...), testEndpoint, "next", true); err == nil {
-		t.Fatal("mixed managed and unmanaged telemetry was accepted")
+	noncontiguous := append(append(append(append([]byte(nil), prefix...), fixture...), suffix...), trace...)
+	if got, err := codexSettings(noncontiguous, testEndpoint, "new", true); err == nil || got != nil {
+		t.Fatalf("noncontiguous telemetry was accepted: %q, %v", got, err)
 	}
 	foreignRoot := append([]byte("otel.environment = \"dev\"\n"), fixture...)
 	if got, err := codexSettings(foreignRoot, testEndpoint, "new", true); err == nil || got != nil {
