@@ -88,7 +88,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&help, "help", false, "show upload help")
 	fs.BoolVar(&shortHelp, "h", false, "show upload help")
 	fs.StringVar(&opts.source, "source", "all", "session source: all, claude, codex")
-	fs.StringVar(&opts.output, "output", "./navigara-backfill", "new directory for gzip-compressed OTLP request bodies")
+	fs.StringVar(&opts.output, "output", "", "new directory for gzip-compressed OTLP request bodies (default: a private temporary directory)")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home containing projects/ (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home containing sessions/ (default $CODEX_HOME or ~/.codex)")
 	fs.Func("session", "only export this session id (repeatable)", func(value string) error {
@@ -138,17 +138,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if opts.source != "all" && opts.source != "claude" && opts.source != "codex" {
 		return invalid("--source must be all, claude, or codex")
 	}
-	if opts.output == "" {
-		return invalid("--output must not be empty")
-	}
-	var emptyHome string
+	var emptyPath string
 	fs.Visit(func(f *flag.Flag) {
-		if (f.Name == "claude-home" || f.Name == "codex-home") && f.Value.String() == "" {
-			emptyHome = f.Name
+		if (f.Name == "output" || f.Name == "claude-home" || f.Name == "codex-home") && f.Value.String() == "" {
+			emptyPath = f.Name
 		}
 	})
-	if emptyHome != "" {
-		return invalid("--" + emptyHome + " must not be empty")
+	if emptyPath != "" {
+		return invalid("--" + emptyPath + " must not be empty")
 	}
 	if help || shortHelp {
 		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]")
