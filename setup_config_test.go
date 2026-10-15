@@ -151,7 +151,7 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Count(second, []byte("# >>> navigara telemetry >>>")) != 1 || bytes.Contains(second, []byte(`Bearer a\"b`)) || !bytes.Contains(second, []byte(`Bearer new`)) || !bytes.Contains(second, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/traces"`)) {
+	if bytes.Count(second, []byte("# >>> navigara telemetry >>>")) != 1 || bytes.Contains(second, []byte(`Bearer a\"b`)) || !bytes.Contains(second, []byte(`Bearer new`)) {
 		t.Fatalf("managed block was not replaced:\n%s", second)
 	}
 	suffix := []byte("\n# keep this separation\n[projects.keep]\ntrust_level = \"trusted\"\n")

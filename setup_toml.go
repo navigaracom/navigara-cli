@@ -162,7 +162,7 @@ func tomlLastNonBlankLineEnd(data []byte, start, end int) int {
 	return start
 }
 
-// codexTelemetryRange returns the byte range occupied by Codex's legacy
+// codexTelemetryRange returns the byte range occupied by Codex's existing
 // OpenTelemetry tables. It recognizes only the small, safe shape that setup
 // can replace without reformatting unrelated user configuration.
 func codexTelemetryRange(data []byte) (start, end int, ok bool) {
@@ -181,9 +181,6 @@ func codexTelemetryRange(data []byte) (start, end int, ok bool) {
 			seenTable = true
 			if expression.kind != unstable.Table || !isCodexTelemetryTable(expression.key) {
 				if len(expression.key) > 0 && expression.key[0] == "otel" {
-					return 0, 0, false
-				}
-				if active != "" && len(seen) < 2 {
 					return 0, 0, false
 				}
 				active = ""
