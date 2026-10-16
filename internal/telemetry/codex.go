@@ -76,10 +76,26 @@ func CodexSessionID(path string) (string, error) {
 	return row.Payload.ID, nil
 }
 
-type codexRow struct {
+const codexInlinePayloadBytes = 64 << 10 // Bounds the additional payload copy; larger rows use the compatible lazy path.
+
+type codexHeader struct {
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`
 	Ordinal   *int64 `json:"ordinal"`
+}
+
+type codexRow struct {
+	codexHeader
+	Payload       json.RawMessage `json:"payload"`
+	payloadLoaded bool
+}
+
+func (r *codexRow) payload(data []byte) json.RawMessage {
+	if !r.payloadLoaded {
+		r.Payload = codexPayload(data)
+		r.payloadLoaded = true
+	}
+	return r.Payload
 }
 
 // codexPayload is called only for row kinds with a typed handler. Unhandled
@@ -138,7 +154,12 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 		line++
 		data := scanner.Bytes()
 		var r codexRow
-		if json.Unmarshal(data, &r) != nil {
+		if len(data) <= codexInlinePayloadBytes {
+			if json.Unmarshal(data, &r) != nil {
+				return nil, fmt.Errorf("line %d: invalid JSON", line)
+			}
+			r.payloadLoaded = true
+		} else if json.Unmarshal(data, &r.codexHeader) != nil {
 			return nil, fmt.Errorf("line %d: invalid JSON", line)
 		}
 		inheritedRecord := r.Type != "session_meta" && historyStart > 0 && r.Ordinal != nil && *r.Ordinal < historyStart
@@ -175,7 +196,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 					RepositoryURL string `json:"repository_url"`
 				} `json:"git"`
 			}
-			if json.Unmarshal(codexPayload(data), &meta) != nil || meta.ID == "" {
+			if json.Unmarshal(r.payload(data), &meta) != nil || meta.ID == "" {
 				return nil, fmt.Errorf("invalid session_meta")
 			}
 			historyStart = meta.HistoryStart
@@ -199,14 +220,14 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			var tc struct {
 				Model string `json:"model"`
 			}
-			if json.Unmarshal(codexPayload(data), &tc) == nil && tc.Model != "" {
+			if json.Unmarshal(r.payload(data), &tc) == nil && tc.Model != "" {
 				model = tc.Model
 			}
 			if !future {
-				recordCodexContext(codexPayload(data), responseContexts)
+				recordCodexContext(r.payload(data), responseContexts)
 			}
 		case "token_usage_record":
-			response, err := readCodexResponse(codexPayload(data), s.SessionID, at)
+			response, err := readCodexResponse(r.payload(data), s.SessionID, at)
 			if err != nil {
 				return nil, fmt.Errorf("line %d: %w", line, err)
 			}
@@ -224,7 +245,7 @@ func BuildCodex(path string, ident Identity, until time.Time) (*Session, error) 
 			responses[response.responseID] = *response
 			responseIDs = append(responseIDs, response.responseID)
 		case "event_msg":
-			payload := codexPayload(data)
+			payload := r.payload(data)
 			var head struct {
 				Type string `json:"type"`
 			}

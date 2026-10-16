@@ -159,6 +159,35 @@ func TestBuildCodexUsesInheritedNativeCallForOwnedOutput(t *testing.T) {
 	}
 }
 
+func TestBuildCodexNativeToolFixtureEnvelopeCompatibility(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/codex-native-tool-items.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := strings.Split(strings.TrimSpace(string(fixture)), "\n")
+	for _, test := range []struct {
+		name, call string
+	}{
+		{"payload first", `{"timestamp":"2026-01-01T00:00:02Z","ordinal":2,"payload":{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"call-native-fixture"},"type":"response_item"}`},
+		{"duplicate payload objects", `{"timestamp":"2026-01-01T00:00:02Z","ordinal":2,"type":"response_item","payload":{"type":"function_call","call_id":"call-native-fixture"},"payload":{"name":"exec_command","arguments":"{}"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rollout.jsonl")
+			if err := os.WriteFile(path, []byte(strings.Join([]string{rows[0], rows[1], test.call, rows[3]}, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s, err := BuildCodex(path, Identity{}, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := events(s, "codex.tool_result")
+			if s.SessionID != "thread-native-fixture" || len(results) != 1 || results[0].Attrs["call_id"] != "call-native-fixture" || results[0].Attrs["tool_name"] != "exec_command" {
+				t.Fatalf("session=%q results=%+v", s.SessionID, results)
+			}
+		})
+	}
+}
+
 func TestBuildCodexClientToolSearch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	writeLines(t, path,
