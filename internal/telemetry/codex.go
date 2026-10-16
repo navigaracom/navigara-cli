@@ -98,8 +98,8 @@ func (r *codexRow) payload(data []byte) json.RawMessage {
 	return r.Payload
 }
 
-// codexPayload is called only for row kinds with a typed handler. Unhandled
-// rows therefore avoid retaining or copying their potentially large payload.
+// codexPayload serves typed handlers for larger rows. Unhandled large payloads
+// avoid an additional copy.
 func codexPayload(data []byte) json.RawMessage {
 	var row struct {
 		Payload json.RawMessage `json:"payload"`
