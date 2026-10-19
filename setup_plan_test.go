@@ -28,9 +28,47 @@ func TestSetupPlansBothShellStartupModes(t *testing.T) {
 	if !strings.Contains(string(got), "# keep login setup") || strings.Contains(string(got), "secret") {
 		t.Fatal("login config lost or credential leaked")
 	}
-	t.Setenv("SHELL", "/bin/fish")
-	if _, err = setupPlans(options{source: "codex", codexHome: codex, url: "https://app.example/api", token: "secret", email: "dev@example.com"}, home); err == nil {
-		t.Fatal("unsupported shell must not be configured silently")
+}
+
+func TestSetupPlansShellSelection(t *testing.T) {
+	for _, test := range []struct {
+		name, shell, flag, profile string
+	}{
+		{name: "fish", shell: "/usr/local/bin/fish", profile: ".config/fish/config.fish"},
+		{name: "flag overrides SHELL", shell: "/bin/zsh", flag: "fish", profile: ".config/fish/config.fish"},
+		{name: "flag without SHELL", flag: "bash", profile: ".bashrc"},
+		{name: "unset SHELL"},
+		{name: "unknown SHELL", shell: "/bin/tcsh"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			codex := filepath.Join(home, ".codex")
+			if err := os.MkdirAll(filepath.Join(home, ".config", "fish"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(codex, 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("ZDOTDIR", home)
+			t.Setenv("SHELL", test.shell)
+			files, err := setupPlans(options{source: "codex", codexHome: codex, shell: test.flag, url: "https://app.example/api", token: "secret", email: "dev@example.com"}, home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.profile == "" {
+				if len(files) != 1 || !strings.Contains(files[0].warning, "export OTEL_RESOURCE_ATTRIBUTES=enduser.id='dev@example.com'") {
+					t.Fatalf("want config.toml only and a manual line, got %d files, warning %q", len(files), files[0].warning)
+				}
+				return
+			}
+			if len(files) < 2 || files[1].path != filepath.Join(home, test.profile) || files[0].warning != "" {
+				t.Fatalf("plans: %+v", files)
+			}
+			if test.profile == ".config/fish/config.fish" && !strings.Contains(string(files[1].after), "set -gx OTEL_RESOURCE_ATTRIBUTES (string join , -- $navigara_attrs 'enduser.id=dev@example.com')") {
+				t.Fatalf("fish block = %s", files[1].after)
+			}
+		})
 	}
 }
 

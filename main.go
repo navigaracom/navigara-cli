@@ -28,7 +28,7 @@ type options struct {
 	email                 string
 	allowAnonymous        bool
 	humanSummary          bool
-	replaceCodexTelemetry bool
+	shell                 string
 	send                  bool
 	resume                string
 	host, url, token      string
@@ -80,14 +80,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if len(args) > 1 {
 			return invalid("unexpected argument: " + args[1])
 		}
-		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]\n       navigara sessions config patch [options]")
+		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]\n       navigara sessions config patch [options]\n       navigara sessions config remove [options]")
 		return 0
 	}
 	if args[0] == "config" {
-		if len(args) < 2 || args[1] != "patch" {
-			return invalid("unknown command: sessions config")
+		switch {
+		case len(args) >= 2 && args[1] == "patch":
+			return runConfigPatch(ctx, args[2:], stdout, stderr)
+		case len(args) >= 2 && args[1] == "remove":
+			return runConfigRemove(args[2:], stdout, stderr)
 		}
-		return runConfigPatch(ctx, args[2:], stdout, stderr)
+		return invalid("unknown command: sessions config")
 	}
 	if args[0] != "upload" {
 		return invalid("unknown command: sessions " + args[0])

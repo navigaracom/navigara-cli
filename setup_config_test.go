@@ -140,14 +140,14 @@ func TestValidateClaudeEnvRejectsConflictingProcessTelemetry(t *testing.T) {
 
 func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	input := []byte("model = \"o3\"\n\n# comment\n")
-	first, err := codexSettings(input, testEndpoint, "a\"b", false)
+	first, err := codexSettings(input, testEndpoint, "a\"b")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(first, []byte("model = \"o3\"\n\n# comment\n")) || !bytes.Contains(first, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/metrics"`)) || !bytes.Contains(first, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/traces"`)) || !bytes.Contains(first, []byte(`Authorization = "Bearer a\"b"`)) {
 		t.Fatalf("missing expected content:\n%s", first)
 	}
-	second, err := codexSettings(first, testEndpoint, "new", false)
+	second, err := codexSettings(first, testEndpoint, "new")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	}
 	suffix := []byte("\n# keep this separation\n[projects.keep]\ntrust_level = \"trusted\"\n")
 	withSuffix := append(append([]byte(nil), second...), suffix...)
-	updated, err := codexSettings(withSuffix, testEndpoint, "next", false)
+	updated, err := codexSettings(withSuffix, testEndpoint, "next")
 	if err != nil || !bytes.HasSuffix(updated, suffix) {
 		t.Fatalf("managed update changed its suffix: %q, %v", updated, err)
 	}
@@ -164,12 +164,12 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	crlfSuffix := []byte("\r\n# keep this CRLF separation\r\n[projects.keep]\r\ntrust_level = \"trusted\"\r\n")
 	crlfManaged := bytes.ReplaceAll(first, []byte("\n"), []byte("\r\n"))
 	crlfInput := append(append([]byte(nil), crlfManaged...), crlfSuffix...)
-	crlfUpdated, err := codexSettings(crlfInput, testEndpoint, "crlf-token", false)
+	crlfUpdated, err := codexSettings(crlfInput, testEndpoint, "crlf-token")
 	if err != nil || !bytes.HasPrefix(crlfUpdated, crlfPrefix) || !bytes.HasSuffix(crlfUpdated, crlfSuffix) || bytes.Count(crlfUpdated, []byte(telemetryBegin)) != 1 || !bytes.Contains(crlfUpdated, []byte("Bearer crlf-token")) {
 		t.Fatalf("CRLF managed update changed surrounding content: %q, %v", crlfUpdated, err)
 	}
 	withRootSuffix := append(append([]byte(nil), first...), []byte("model = \"other\"\n")...)
-	if _, err := codexSettings(withRootSuffix, testEndpoint, "new", false); err == nil {
+	if _, err := codexSettings(withRootSuffix, testEndpoint, "new"); err == nil {
 		t.Fatal("managed block followed by root keys succeeded")
 	}
 }
@@ -191,7 +191,7 @@ prevent_idle_sleep = true # keep
 rmcp_client = true
 `)
 
-	first, err := codexSettings(input, testEndpoint, "token", false)
+	first, err := codexSettings(input, testEndpoint, "token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ rmcp_client = true
 		}
 	}
 
-	second, err := codexSettings(first, testEndpoint, "token", false)
+	second, err := codexSettings(first, testEndpoint, "token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ features.prevent_idle_sleep = true
 features.future_flag = true
 `),
 	} {
-		got, err := codexSettings(input, testEndpoint, "token", false)
+		got, err := codexSettings(input, testEndpoint, "token")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -265,7 +265,7 @@ func TestCodexSettingsRejectsUnsupportedObsoleteFeatureShapes(t *testing.T) {
 		[]byte("features = { rmcp_client = false, goals = true }\n"),
 		[]byte("[features]\nrmcp_client = \"false\"\n"),
 	} {
-		got, err := codexSettings(input, testEndpoint, "token", false)
+		got, err := codexSettings(input, testEndpoint, "token")
 		if !errors.Is(err, errUnsupportedCodexFeatureLayout) || got != nil {
 			t.Fatalf("unsupported feature layout returned %q, %v", got, err)
 		}
@@ -284,7 +284,7 @@ func TestCodexSettingsRejectsOtherOTELAndMalformedMarkers(t *testing.T) {
 		[]byte("# >>> navigara telemetry >>>\n"),
 		[]byte("# <<< navigara telemetry <<<\n"),
 	} {
-		if _, err := codexSettings(input, testEndpoint, "token", false); err == nil {
+		if _, err := codexSettings(input, testEndpoint, "token"); err == nil {
 			t.Errorf("codexSettings(%q) succeeded", input)
 		}
 	}
@@ -292,7 +292,7 @@ func TestCodexSettingsRejectsOtherOTELAndMalformedMarkers(t *testing.T) {
 
 func TestCodexSettingsPreservesMarkerTextInValues(t *testing.T) {
 	input := []byte("note = \"# >>> navigara telemetry >>>\"\n")
-	got, err := codexSettings(input, testEndpoint, "token", false)
+	got, err := codexSettings(input, testEndpoint, "token")
 	if err != nil || !bytes.HasPrefix(got, input) {
 		t.Fatalf("marker text in a value was not preserved: %q, %v", got, err)
 	}
@@ -318,27 +318,28 @@ headers = { Authorization = "Bearer fixture-old" }
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := append(append(append([]byte(nil), prefix...), test.telemetry...), suffix...)
-			if _, err := codexSettings(input, testEndpoint, "new", false); !errors.Is(err, errCodexTelemetry) {
-				t.Fatalf("expected a replaceable conflict, got %v", err)
+			changes, conflict := codexTelemetryChanges(input)
+			if conflict == nil || !strings.Contains(conflict.Error(), "Codex already sends telemetry to https://old.example/v1/") || !strings.Contains(conflict.Error(), "--replace") || len(changes) != 1 {
+				t.Fatalf("expected a replaceable conflict, got %v, %q", conflict, changes)
 			}
-			got, err := codexSettings(input, testEndpoint, "new", true)
+			got, err := codexSettings(input, testEndpoint, "new")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !bytes.HasPrefix(got, prefix) || !bytes.HasSuffix(got, suffix) || bytes.Contains(got, []byte("fixture-old")) || bytes.Count(got, []byte(telemetryBegin)) != 1 {
 				t.Fatal("replacement changed unrelated settings or retained the old exporters")
 			}
-			if _, err := codexSettings(append(got, test.telemetry...), testEndpoint, "next", true); err == nil {
+			if _, err := codexSettings(append(got, test.telemetry...), testEndpoint, "next"); err == nil {
 				t.Fatal("mixed managed and unmanaged telemetry was accepted")
 			}
 		})
 	}
 	noncontiguous := append(append(append(append([]byte(nil), prefix...), fixture...), suffix...), trace...)
-	if got, err := codexSettings(noncontiguous, testEndpoint, "new", true); err == nil || got != nil {
+	if got, err := codexSettings(noncontiguous, testEndpoint, "new"); err == nil || got != nil {
 		t.Fatalf("noncontiguous telemetry was accepted: %q, %v", got, err)
 	}
 	foreignRoot := append([]byte("otel.environment = \"dev\"\n"), fixture...)
-	if got, err := codexSettings(foreignRoot, testEndpoint, "new", true); err == nil || got != nil {
+	if got, err := codexSettings(foreignRoot, testEndpoint, "new"); err == nil || got != nil {
 		t.Fatalf("legacy exporters with root OTEL settings were accepted: %q, %v", got, err)
 	}
 }

@@ -74,17 +74,19 @@ func validateTOML(data []byte) error {
 }
 
 // removeObsoleteCodexFeatures removes only the three retired boolean flags
-// from the root features table. It rejects representations of those flags
-// that cannot be removed safely without rewriting user configuration.
-func removeObsoleteCodexFeatures(data []byte) ([]byte, error) {
+// from the root features table and returns their names. It rejects
+// representations of those flags that cannot be removed safely without
+// rewriting user configuration.
+func removeObsoleteCodexFeatures(data []byte) ([]byte, []string, error) {
 	var decoded map[string]any
 	if err := toml.Unmarshal(data, &decoded); err != nil {
-		return nil, errInvalidTOML
+		return nil, nil, errInvalidTOML
 	}
 	features, ok := decoded["features"].(map[string]any)
 	if !ok {
-		return data, nil
+		return data, nil, nil
 	}
+	var removed []string
 	remove := make(map[string]struct{}, 3)
 	for _, key := range [...]string{"rmcp_client", "terminal_resize_reflow", "js_repl"} {
 		value, ok := features[key]
@@ -92,17 +94,18 @@ func removeObsoleteCodexFeatures(data []byte) ([]byte, error) {
 			continue
 		}
 		if _, ok := value.(bool); !ok {
-			return nil, errUnsupportedCodexFeatureLayout
+			return nil, nil, errUnsupportedCodexFeatureLayout
 		}
 		remove[key] = struct{}{}
+		removed = append(removed, key)
 	}
 	if len(remove) == 0 {
-		return data, nil
+		return data, nil, nil
 	}
 
 	expressions, err := parseTOML(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var table []string
 	var out bytes.Buffer
@@ -127,10 +130,10 @@ func removeObsoleteCodexFeatures(data []byte) ([]byte, error) {
 		}
 	}
 	if len(remove) > 0 {
-		return nil, errUnsupportedCodexFeatureLayout
+		return nil, nil, errUnsupportedCodexFeatureLayout
 	}
 	out.Write(data[last:])
-	return out.Bytes(), nil
+	return out.Bytes(), removed, nil
 }
 
 func tomlNodeKey(node *unstable.Node) []string {

@@ -38,15 +38,20 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		if err := add(filepath.Join(opts.claudeHome, "settings.json"), func(b []byte) ([]byte, error) { return claudeSettings(b, endpoint, opts.token, opts.email) }); err != nil {
 			return nil, err
 		}
+		f := files[len(files)-1]
+		f.notes, f.conflict = claudeTelemetryChanges(f.before, endpoint, opts.token)
 	}
 	if opts.source == "all" || opts.source == "codex" {
 		if err := add(filepath.Join(opts.codexHome, "config.toml"), func(b []byte) ([]byte, error) {
-			return codexSettings(b, endpoint, opts.token, opts.replaceCodexTelemetry)
+			return codexSettings(b, endpoint, opts.token)
 		}); err != nil {
 			return nil, err
 		}
+		codex := files[len(files)-1]
+		codex.notes, codex.conflict = codexTelemetryChanges(codex.before)
 		var profiles []string
-		switch filepath.Base(os.Getenv("SHELL")) {
+		profile := shellSettings
+		switch firstNonEmpty(opts.shell, filepath.Base(os.Getenv("SHELL"))) {
 		case "zsh":
 			profiles = []string{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc")}
 		case "bash":
@@ -59,17 +64,72 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 				}
 			}
 			profiles = append(profiles, login)
+		case "fish":
+			profiles = []string{fishConfig(home)}
+			profile = fishSettings
 		default:
-			return nil, fmt.Errorf("Codex identity setup supports bash and zsh; unsupported SHELL")
+			codex.warning = "Could not find a bash, zsh, or fish shell. Codex sessions do not show your email until you add this line to your shell profile:\n  export OTEL_RESOURCE_ATTRIBUTES=enduser.id=" + shellQuote(opts.email) + "\nOr re-run with --shell bash, --shell zsh, or --shell fish."
 		}
 		for _, path := range profiles {
-			if err := add(path, func(b []byte) ([]byte, error) { return shellSettings(b, opts.email) }); err != nil {
+			if err := add(path, func(b []byte) ([]byte, error) { return profile(b, opts.email) }); err != nil {
 				return nil, err
 			}
 		}
 	}
 	for _, f := range files {
 		if err := f.check(); err != nil {
+			return nil, err
+		}
+	}
+	return files, nil
+}
+
+func planConflict(files []*setupFile) error {
+	for _, f := range files {
+		if f.conflict != nil {
+			return f.conflict
+		}
+	}
+	return nil
+}
+
+func fishConfig(home string) string {
+	return filepath.Join(firstNonEmpty(os.Getenv("XDG_CONFIG_HOME"), filepath.Join(home, ".config")), "fish", "config.fish")
+}
+
+// removePlans plans the removal of every Navigara block and key. It plans only
+// files that exist.
+func removePlans(opts options, home string) ([]*setupFile, error) {
+	var files []*setupFile
+	add := func(path string, transform func([]byte) ([]byte, error)) error {
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			return nil
+		}
+		f, err := planFile(path, transform)
+		if err == nil {
+			files = append(files, f)
+		}
+		return err
+	}
+	shell := func(b []byte) ([]byte, error) { return removeManagedBlock(b, managedRange) }
+	targets := []struct {
+		path      string
+		transform func([]byte) ([]byte, error)
+	}{
+		{filepath.Join(opts.claudeHome, "settings.json"), removeClaudeSettings},
+		{filepath.Join(opts.codexHome, "config.toml"), func(b []byte) ([]byte, error) { return removeManagedBlock(b, tomlManagedRange) }},
+		{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc"), shell},
+		{filepath.Join(home, ".bashrc"), shell},
+		{filepath.Join(home, ".bash_profile"), shell},
+		{filepath.Join(home, ".bash_login"), shell},
+		{filepath.Join(home, ".profile"), shell},
+		{fishConfig(home), shell},
+	}
+	for i, target := range targets {
+		if (i == 0 && opts.source == "codex") || (i > 0 && opts.source == "claude") {
+			continue
+		}
+		if err := add(target.path, target.transform); err != nil {
 			return nil, err
 		}
 	}

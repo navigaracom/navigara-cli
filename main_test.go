@@ -9,6 +9,19 @@ import (
 	"testing"
 )
 
+// TestMain keeps setup backups of tests that do not set XDG_CONFIG_HOME out of
+// the real home.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "navigara-test-config-*")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 func TestRun(t *testing.T) {
 	tests := []struct {
 		name string

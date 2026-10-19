@@ -24,7 +24,12 @@ navigara wizard
 | See what would be sent, without sending | `navigara sessions upload --dry-run` |
 | Send the rest of a stopped upload | `navigara sessions upload --resume DIR` |
 | Enable future sync | `navigara sessions config patch --apply` |
-| Sync Codex only (requires bash or zsh) | `navigara sessions config patch --source codex --apply` |
+| Sync Codex only | `navigara sessions config patch --source codex --apply` |
+| Replace telemetry that Claude or Codex already sends elsewhere | `navigara sessions config patch --apply --replace` |
+| Pick the shell profile for the Codex identity | `navigara sessions config patch --apply --shell fish` |
+| Stop future sync | `navigara sessions config remove --apply` |
+
+Each run saves the previous files in one folder: `~/.config/navigara/backups/<timestamp>/`.
 
 Run `navigara sessions --help` for more commands.
 

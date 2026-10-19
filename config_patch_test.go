@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -408,5 +409,172 @@ func TestConfigPatchTokenApplyPreflightsBeforeWriting(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// patchFixture returns empty Claude and Codex homes, a zsh profile, and a
+// receiver that accepts direct-token probes.
+func patchFixture(t *testing.T) (root, claude, codex, host string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	root = t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", root)
+	t.Setenv("NAVIGARA_TOKEN", "")
+	claude, codex = filepath.Join(root, "claude"), filepath.Join(root, "codex")
+	for _, dir := range []string{claude, codex} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root, claude, codex, srv.URL
+}
+
+func runPatch(source, claude, codex, host string, extra ...string) (int, string, string) {
+	var out, errOut bytes.Buffer
+	args := append([]string{"--token", "mdm-secret", "--email", "dev@example.com", "--host", host, "--source", source, "--claude-home", claude, "--codex-home", codex}, extra...)
+	code := runConfigPatch(context.Background(), args, &out, &errOut)
+	return code, out.String(), errOut.String()
+}
+
+func TestConfigPatchExistingClaudeTelemetryNeedsReplace(t *testing.T) {
+	_, claude, codex, host := patchFixture(t)
+	path := filepath.Join(claude, "settings.json")
+	write := func(data string) {
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(`{"env":{"KEEP":"yes"}}`)
+	if code, out, errOut := runPatch("claude", claude, codex, host, "--apply"); code != 0 || strings.Contains(out, "->") {
+		t.Fatalf("no existing telemetry: code=%d out=%s err=%s", code, out, errOut)
+	}
+	if code, out, errOut := runPatch("claude", claude, codex, host, "--apply"); code != 0 || !strings.Contains(out, "Unchanged: "+path) || !strings.Contains(out, "No changes needed.") || strings.Contains(out, "applied") {
+		t.Fatalf("same values: code=%d out=%s err=%s", code, out, errOut)
+	}
+
+	corp := `{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://otel.corp.example","OTEL_EXPORTER_OTLP_HEADERS":"x-api-key=corp-secret","OTEL_METRICS_EXPORTER":"otlp"}}`
+	write(corp)
+	code, out, errOut := runPatch("claude", claude, codex, host)
+	if code != 0 || !strings.Contains(out, "OTEL_EXPORTER_OTLP_ENDPOINT: https://otel.corp.example -> "+host+"/api/otlp") ||
+		!strings.Contains(out, "OTEL_EXPORTER_OTLP_HEADERS: x-api-key=*** -> Authorization=***") || strings.Contains(out, "OTEL_METRICS_EXPORTER") ||
+		strings.Contains(out+errOut, "secret") || !strings.Contains(out, "--replace") {
+		t.Fatalf("preview: code=%d out=%s err=%s", code, out, errOut)
+	}
+	code, out, errOut = runPatch("claude", claude, codex, host, "--apply")
+	if got, _ := os.ReadFile(path); code != 1 || errOut != "navigara: Claude Code already sends telemetry to https://otel.corp.example. Re-run with --replace, or use --source codex.\n" || string(got) != corp {
+		t.Fatalf("apply without --replace: code=%d out=%s err=%s", code, out, errOut)
+	}
+	code, out, errOut = runPatch("claude", claude, codex, host, "--apply", "--replace")
+	if got, _ := os.ReadFile(path); code != 0 || !strings.Contains(string(got), host+"/api/otlp") || strings.Contains(string(got), "corp") {
+		t.Fatalf("apply with --replace: code=%d out=%s err=%s", code, out, errOut)
+	}
+
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://shell.example")
+	if code, _, errOut := runPatch("claude", claude, codex, host); code != 1 || !strings.Contains(errOut, "OTEL_EXPORTER_OTLP_ENDPOINT is set in your shell environment (https://shell.example); unset it and retry.") {
+		t.Fatalf("shell conflict: code=%d err=%s", code, errOut)
+	}
+}
+
+func TestConfigPatchExistingCodexTelemetryNeedsReplace(t *testing.T) {
+	_, claude, codex, host := patchFixture(t)
+	fixture, err := os.ReadFile("testdata/codex-existing-telemetry.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(codex, "config.toml")
+	original := append([]byte("[features]\nrmcp_client = true\n\n"), fixture...)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runPatch("codex", claude, codex, host)
+	if code != 0 || !strings.Contains(out, "[features] rmcp_client: (removed)") || !strings.Contains(out, "[otel] exporters: https://old.example/v1/logs -> Navigara") {
+		t.Fatalf("preview: code=%d out=%s err=%s", code, out, errOut)
+	}
+	code, _, errOut = runPatch("codex", claude, codex, host, "--apply")
+	if got, _ := os.ReadFile(path); code != 1 || errOut != "navigara: Codex already sends telemetry to https://old.example/v1/logs. Re-run with --replace, or use --source claude.\n" || !bytes.Equal(got, original) {
+		t.Fatalf("apply without --replace: code=%d err=%s", code, errOut)
+	}
+	code, _, errOut = runPatch("codex", claude, codex, host, "--apply", "--replace")
+	if got, _ := os.ReadFile(path); code != 0 || bytes.Contains(got, []byte("old.example")) || bytes.Contains(got, []byte("rmcp_client")) {
+		t.Fatalf("apply with --replace: code=%d err=%s got=%s", code, errOut, got)
+	}
+}
+
+func TestConfigPatchWithoutKnownShellStillPatches(t *testing.T) {
+	root, claude, codex, host := patchFixture(t)
+	t.Setenv("SHELL", "")
+	code, out, errOut := runPatch("all", claude, codex, host, "--apply")
+	if code != 0 || !strings.Contains(out, "Warning:") || !strings.Contains(out, "export OTEL_RESOURCE_ATTRIBUTES=enduser.id='dev@example.com'") {
+		t.Fatalf("code=%d out=%s err=%s", code, out, errOut)
+	}
+	for _, path := range []string{filepath.Join(claude, "settings.json"), filepath.Join(codex, "config.toml")} {
+		if got, err := os.ReadFile(path); err != nil || !bytes.Contains(got, []byte("mdm-secret")) {
+			t.Fatalf("%s was not patched: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".zshrc")); !os.IsNotExist(err) {
+		t.Fatal("wrote a shell profile without a known shell")
+	}
+}
+
+func TestConfigRemoveRestoresOriginalSettings(t *testing.T) {
+	root, claude, codex, host := patchFixture(t)
+	claudePath, codexPath, zshrc := filepath.Join(claude, "settings.json"), filepath.Join(codex, "config.toml"), filepath.Join(root, ".zshrc")
+	originals := map[string]string{
+		claudePath: `{"theme":"dark","env":{"KEEP":"yes","OTEL_RESOURCE_ATTRIBUTES":"team=a"}}`,
+		codexPath:  "model = \"o3\"\n\n[projects.\"/work\"]\ntrust_level = \"trusted\"\n",
+		zshrc:      "export PATH=/bin\n",
+	}
+	for path, data := range originals {
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, out, errOut := runPatch("all", claude, codex, host, "--apply"); code != 0 {
+		t.Fatalf("patch: code=%d out=%s err=%s", code, out, errOut)
+	}
+	backups, _ := filepath.Glob(filepath.Join(root, "state", "navigara", "backups", "*", "*"))
+	if len(backups) != 3 {
+		t.Fatalf("want 3 backups in one run folder, got %v", backups)
+	}
+
+	remove := func(args ...string) (int, string, string) {
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), append([]string{"sessions", "config", "remove", "--claude-home", claude, "--codex-home", codex}, args...), &out, &errOut)
+		return code, out.String(), errOut.String()
+	}
+	patched, _ := os.ReadFile(codexPath)
+	if code, out, _ := remove(); code != 0 || strings.Count(out, "Update:") != 3 || !strings.Contains(out, "Preview only") {
+		t.Fatalf("remove preview: code=%d out=%s", code, out)
+	}
+	if got, _ := os.ReadFile(codexPath); !bytes.Equal(got, patched) {
+		t.Fatal("remove preview changed a file")
+	}
+	if code, out, errOut := remove("--apply"); code != 0 || !strings.Contains(out, "removed") {
+		t.Fatalf("remove: code=%d out=%s err=%s", code, out, errOut)
+	}
+	for path, want := range originals {
+		got, _ := os.ReadFile(path)
+		if path == claudePath {
+			var a, b any
+			if json.Unmarshal(got, &a) != nil || json.Unmarshal([]byte(want), &b) != nil || !reflect.DeepEqual(a, b) {
+				t.Fatalf("settings.json = %s, want %s", got, want)
+			}
+			continue
+		}
+		if string(got) != want {
+			t.Fatalf("%s = %q, want %q", path, got, want)
+		}
+	}
+	if code, out, _ := remove("--apply"); code != 0 || strings.Count(out, "Unchanged:") != 3 || !strings.HasSuffix(out, "No changes needed.\n") {
+		t.Fatalf("second remove: code=%d out=%s", code, out)
 	}
 }

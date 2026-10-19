@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -15,7 +16,7 @@ const previewIngestToken = "preview-token-redacted"
 // or a supplied ingestion token. It has no history export side effects.
 func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var opts options
-	var apply, help bool
+	var apply, replace, help bool
 	fs := flag.NewFlagSet("sessions config patch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: navigara sessions config patch [options]") }
@@ -25,7 +26,9 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home (default $CODEX_HOME or ~/.codex)")
 	fs.StringVar(&opts.email, "email", "", "contributor email (required with a token; default signed-in account)")
+	fs.StringVar(&opts.shell, "shell", "", "shell profile for the Codex identity: bash, zsh, fish (default $SHELL)")
 	fs.BoolVar(&apply, "apply", false, "apply the prepared settings")
+	fs.BoolVar(&replace, "replace", false, "replace existing Claude Code or Codex telemetry settings")
 	fs.BoolVar(&help, "help", false, "show patch help")
 	fs.BoolVar(&help, "h", false, "show patch help")
 	if err := fs.Parse(args); err != nil {
@@ -79,6 +82,10 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	if opts.source != "all" && opts.source != "claude" && opts.source != "codex" {
 		fmt.Fprintln(stderr, "navigara: --source must be all, claude, or codex")
+		return 2
+	}
+	if opts.shell != "" && opts.shell != "bash" && opts.shell != "zsh" && opts.shell != "fish" {
+		fmt.Fprintln(stderr, "navigara: --shell must be bash, zsh, or fish")
 		return 2
 	}
 	var s *sender
@@ -152,12 +159,18 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintf(stdout, "Host: %s\n", c.Host)
 	}
 	fmt.Fprintf(stdout, "Claude home: %s\nCodex home: %s\n", opts.claudeHome, opts.codexHome)
-	for _, f := range files {
-		fmt.Fprintln(stdout, "Update:", f.path)
-	}
+	conflict := planConflict(files)
 	if !apply {
+		printPlan(stdout, files)
+		if conflict != nil && !replace {
+			fmt.Fprintln(stdout, conflict)
+		}
 		fmt.Fprintln(stdout, "Preview only; no tool settings changed and no ingestion request sent.")
 		return 0
+	}
+	if conflict != nil && !replace {
+		fmt.Fprintln(stderr, "navigara:", conflict)
+		return 1
 	}
 	if !directToken {
 		if err := ensureIngestion(ctx, &c); err != nil {
@@ -171,6 +184,9 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		s = newSender(opts.url, opts.token)
 	}
+	if !printPlan(stdout, files) {
+		return 0
+	}
 	if err := applySetupFiles(files, func() error { return s.checkSetup(ctx) }); err != nil {
 		fmt.Fprintln(stderr, "navigara: settings update failed:", err)
 		return 1
@@ -181,6 +197,103 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 	}
 	fmt.Fprintln(stdout, "Settings applied successfully.")
+	return 0
+}
+
+// printPlan prints one line per file and reports whether any file changes.
+func printPlan(w io.Writer, files []*setupFile) bool {
+	changed := false
+	for _, f := range files {
+		if f.unchanged() {
+			fmt.Fprintln(w, "Unchanged:", f.path)
+			continue
+		}
+		changed = true
+		fmt.Fprintln(w, "Update:", f.path)
+		for _, note := range f.notes {
+			fmt.Fprintln(w, "  "+note)
+		}
+	}
+	for _, f := range files {
+		if f.warning != "" {
+			fmt.Fprintln(w, "Warning:", f.warning)
+		}
+	}
+	if !changed {
+		fmt.Fprintln(w, "No changes needed.")
+	}
+	return changed
+}
+
+// runConfigRemove removes the settings that config patch and the wizard wrote.
+func runConfigRemove(args []string, stdout, stderr io.Writer) int {
+	var opts options
+	var apply, help bool
+	fs := flag.NewFlagSet("sessions config remove", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: navigara sessions config remove [options]") }
+	fs.StringVar(&opts.source, "source", "all", "tool source: all, claude, codex")
+	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home (default $CLAUDE_CONFIG_DIR or ~/.claude)")
+	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home (default $CODEX_HOME or ~/.codex)")
+	fs.BoolVar(&apply, "apply", false, "remove the settings")
+	fs.BoolVar(&help, "help", false, "show remove help")
+	fs.BoolVar(&help, "h", false, "show remove help")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if help {
+		fs.SetOutput(stdout)
+		fs.Usage()
+		fs.PrintDefaults()
+		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "navigara: unexpected argument: "+fs.Arg(0))
+		return 2
+	}
+	if opts.source != "all" && opts.source != "claude" && opts.source != "codex" {
+		fmt.Fprintln(stderr, "navigara: --source must be all, claude, or codex")
+		return 2
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		opts.claudeHome, opts.codexHome, err = toolHomes(opts.claudeHome, opts.codexHome)
+	}
+	var files []*setupFile
+	if err == nil {
+		files, err = removePlans(opts, home)
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
+	var changed []*setupFile
+	for _, f := range files {
+		if bytes.Equal(f.before, f.after) {
+			fmt.Fprintln(stdout, "Unchanged:", f.path)
+			continue
+		}
+		fmt.Fprintln(stdout, "Update:", f.path)
+		changed = append(changed, f)
+	}
+	if len(changed) == 0 {
+		fmt.Fprintln(stdout, "No changes needed.")
+		return 0
+	}
+	if !apply {
+		fmt.Fprintln(stdout, "Preview only; no files changed. Run again with --apply to remove the settings.")
+		return 0
+	}
+	if err := applySetupFiles(changed, func() error { return nil }); err != nil {
+		fmt.Fprintln(stderr, "navigara: settings update failed:", err)
+		return 1
+	}
+	for _, f := range changed {
+		if f.backup != "" {
+			fmt.Fprintln(stdout, "Backup:", f.backup)
+		}
+	}
+	fmt.Fprintln(stdout, "Navigara settings removed. Restart Claude Code, Codex, and your shell.")
 	return 0
 }
 

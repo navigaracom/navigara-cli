@@ -63,7 +63,7 @@ func runLogout(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintln(stderr, "navigara: could not clear saved account:", err)
 		return 1
 	}
-	fmt.Fprintln(stdout, "Signed out of Navigara on this computer.\nClaude Code and Codex streaming settings remain active.")
+	fmt.Fprintln(stdout, "Signed out of Navigara on this computer.\nClaude Code and Codex streaming settings remain active.\nTo remove them, run: navigara sessions config remove --apply")
 	if revokeErr != nil {
 		fmt.Fprintln(stderr, "navigara: local credentials cleared, but could not revoke the server session:", revokeErr)
 		return 1
