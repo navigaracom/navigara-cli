@@ -42,6 +42,12 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintln(stderr, "navigara: unexpected argument:", fs.Arg(0))
 		return 2
 	}
+	shellSet := false
+	fs.Visit(func(f *flag.Flag) { shellSet = shellSet || f.Name == "shell" })
+	if shellSet && shell != "bash" && shell != "zsh" && shell != "fish" {
+		fmt.Fprintln(stderr, "navigara: --shell must be bash, zsh, or fish")
+		return 2
+	}
 	c, err := loadAccount("")
 	if err != nil {
 		fmt.Fprintln(stdout, "Login: cannot read:", err)
@@ -97,7 +103,9 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			host = u.Host
 		}
 		fmt.Fprintf(stdout, "%s: connected to %s as %s\n", tool.name, host, firstNonEmpty(link.email, "unknown email"))
-		if err := newSender(base, link.token).checkSetup(ctx); err != nil {
+		s := newSender(base, link.token)
+		s.retried = func(line string) { fmt.Fprintln(stderr, line) }
+		if err := s.checkSetup(ctx); err != nil {
 			fmt.Fprintf(stdout, "  Navigara does not accept the Analytics Ingestor key: %v\n", err)
 			ok = false
 		} else {

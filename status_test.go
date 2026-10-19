@@ -24,6 +24,10 @@ func TestSessionsStatus(t *testing.T) {
 		codexProtocol    string
 		codexOutside     bool
 		codexEndpoint    string
+		claudeEndpoint   string
+		busyOnce         bool
+		args             []string
+		wantErr          string
 		code             int
 		want, avoid      []string
 	}{
@@ -57,8 +61,16 @@ func TestSessionsStatus(t *testing.T) {
 			want: []string{"Codex: not connected: no Navigara email block in", ".bash_profile"}},
 		{name: "codex telemetry outside block", codex: true, codexOutside: true, code: 1,
 			want: []string{"Codex: not connected: config.toml has telemetry settings outside the Navigara block"}},
-		{name: "claude endpoint without otlp", claude: "api endpoint", code: 1,
+		{name: "claude endpoint without otlp", claude: "connected", claudeEndpoint: "/api", code: 1,
 			want: []string{"Claude Code: not connected: endpoint http://127.0.0.1:", "/api does not end in /otlp"}},
+		{name: "claude endpoint with trailing slash", claude: "connected", claudeEndpoint: "/api/otlp/", code: 1,
+			want: []string{"/api/otlp/ does not end in /otlp"}},
+		{name: "claude endpoint with otlp prefix", claude: "connected", claudeEndpoint: "/api/otlpx", code: 1,
+			want: []string{"/api/otlpx does not end in /otlp"}},
+		{name: "retry goes to stderr", claude: "connected", busyOnce: true, code: 0,
+			want: []string{"Navigara accepts the Analytics Ingestor key"}, wantErr: "Upload failed (HTTP 503), retrying in 2 s"},
+		{name: "invalid shell flag", args: []string{"--shell", "tcsh"}, code: 2, wantErr: "navigara: --shell must be bash, zsh, or fish"},
+		{name: "empty shell flag", args: []string{"--shell="}, code: 2, wantErr: "navigara: --shell must be bash, zsh, or fish"},
 		{name: "codex endpoint without otlp", codex: true, codexEndpoint: "/api", code: 1,
 			want: []string{"Codex: not connected: endpoint http://127.0.0.1:", "/api does not end in /otlp"}},
 		{name: "claude home unreadable", claude: "bad home", code: 1,
@@ -78,7 +90,13 @@ func TestSessionsStatus(t *testing.T) {
 				t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", tc.metricsOverride)
 			}
 			t.Setenv("ZDOTDIR", home)
+			busy := tc.busyOnce
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if busy {
+					busy = false
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
 				if tc.reject || r.URL.Path != "/api/otlp/v1/metrics" || r.Header.Get("Authorization") != "Bearer test-secret" {
 					w.WriteHeader(http.StatusUnauthorized)
 					return
@@ -105,7 +123,11 @@ func TestSessionsStatus(t *testing.T) {
 			}
 			switch tc.claude {
 			case "connected":
-				data, err := claudeSettings(nil, endpoint, "test-secret", "dev@example.com")
+				claudeEndpoint := endpoint
+				if tc.claudeEndpoint != "" {
+					claudeEndpoint = srv.URL + tc.claudeEndpoint
+				}
+				data, err := claudeSettings(nil, claudeEndpoint, "test-secret", "dev@example.com")
 				write(filepath.Join(claudeHome, "settings.json"), data, err)
 			case "exporters off":
 				data, err := claudeSettings(nil, endpoint, "test-secret", "dev@example.com")
@@ -118,9 +140,6 @@ func TestSessionsStatus(t *testing.T) {
 			case "no email":
 				data, err := claudeSettings(nil, endpoint, "test-secret", "dev@example.com")
 				data = bytes.ReplaceAll(data, []byte(`"enduser.id=dev@example.com"`), []byte(`""`))
-				write(filepath.Join(claudeHome, "settings.json"), data, err)
-			case "api endpoint":
-				data, err := claudeSettings(nil, srv.URL+"/api", "test-secret", "dev@example.com")
 				write(filepath.Join(claudeHome, "settings.json"), data, err)
 			case "bad home":
 				write(filepath.Join(home, "file"), nil, nil)
@@ -164,9 +183,12 @@ func TestSessionsStatus(t *testing.T) {
 				}
 			}
 			var out, errs bytes.Buffer
-			code := run(context.Background(), []string{"sessions", "status"}, &out, &errs)
+			code := run(context.Background(), append([]string{"sessions", "status"}, tc.args...), &out, &errs)
 			if code != tc.code {
 				t.Fatalf("exit %d, want %d: %s%s", code, tc.code, out.String(), errs.String())
+			}
+			if !strings.Contains(errs.String(), tc.wantErr) {
+				t.Errorf("missing %q in stderr:\n%s", tc.wantErr, errs.String())
 			}
 			for _, want := range tc.want {
 				if !strings.Contains(out.String(), want) {
