@@ -28,6 +28,7 @@ navigara wizard
 | Replace telemetry that Claude or Codex already sends elsewhere | `navigara sessions config patch --apply --replace` |
 | Pick the shell profile for the Codex identity | `navigara sessions config patch --apply --shell fish` |
 | Stop future sync | `navigara sessions config remove --apply` |
+| Check that sync works (exit code 1 if not) | `navigara sessions status` |
 
 Each run saves the previous files in one folder: `~/.config/navigara/backups/<timestamp>/`.
 
