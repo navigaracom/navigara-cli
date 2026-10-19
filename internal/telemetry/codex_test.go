@@ -361,9 +361,15 @@ func TestCodexDiscoveryErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Chmod(locked, 0700)
+	archived := filepath.Join(home, "archived_sessions")
+	if err := os.WriteFile(archived, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	paths, err := CodexRollouts(home)
-	if err == nil || !strings.Contains(err.Error(), "2026") || len(paths) != 1 || filepath.Base(paths[0]) != "rollout-bad.jsonl" {
-		t.Fatalf("unreadable directory: paths=%v err=%v, want the other rollouts and the directory in the error", paths, err)
+	joined, _ := err.(interface{ Unwrap() []error })
+	if joined == nil || len(joined.Unwrap()) != 2 || !strings.Contains(err.Error(), locked) || !strings.Contains(err.Error(), archived) ||
+		len(paths) != 1 || filepath.Base(paths[0]) != "rollout-bad.jsonl" {
+		t.Fatalf("unreadable directory and root: paths=%v err=%v, want the other rollouts and one error per path", paths, err)
 	}
 }
 

@@ -17,28 +17,31 @@ import (
 )
 
 // CodexRollouts lists the rollout files under a Codex home, child threads included:
-// Codex reports each thread as its own session. Missing roots are optional. An unreadable
-// directory below a root is reported in the error, and the rollouts found elsewhere are still returned.
+// Codex reports each thread as its own session. Missing roots are optional. An unreadable root
+// or directory is reported in the joined error, one error per path, and the rollouts found
+// elsewhere are still returned.
 func CodexRollouts(codexHome string) ([]string, error) {
 	var paths []string
 	var walkErrs []error
 	for _, dir := range []string{"sessions", "archived_sessions"} {
-		root, err := filepath.EvalSymlinks(filepath.Join(codexHome, dir))
+		name := filepath.Join(codexHome, dir)
+		root, err := filepath.EvalSymlinks(name)
 		if os.IsNotExist(err) {
 			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect Codex %s: %w", dir, err)
+		var info os.FileInfo
+		if err == nil {
+			info, err = os.Stat(root)
 		}
-		info, err := os.Stat(root)
 		if os.IsNotExist(err) {
 			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect Codex %s: %w", dir, err)
+		if err == nil && !info.IsDir() {
+			err = errors.New("not a directory")
 		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("inspect Codex %s: not a directory", dir)
+		if err != nil {
+			walkErrs = append(walkErrs, fmt.Errorf("inspect Codex %s %q: %w", dir, name, err))
+			continue
 		}
 		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {

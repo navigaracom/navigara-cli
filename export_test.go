@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,7 +137,7 @@ func TestUploadDryRunSendsNothing(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome, "--codex-home", codexHome,
 		"--output", output, "--url", "https://127.0.0.1:1/api", "--token", "secret"}, &stdout, &stderr)
-	if code != 0 || stderr.Len() != 0 {
+	if code != 0 || stderr.String() != "Prepared 2/2 sessions\n" {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 	if want := "Dry run: nothing was sent. Request bodies are in " + output + ".\n"; !strings.HasSuffix(stdout.String(), want) {
@@ -261,8 +262,61 @@ func TestUploadProgressLinesWithoutTerminal(t *testing.T) {
 	u.prepared(2, 4) // Within a few seconds of the last line.
 	u.last = time.Time{}
 	u.sent(3, 9)
-	if out.String() != "Prepared 1/4 sessions\nSent 3/9 batches\n" {
+	u.prepared(4, 4) // The final count prints within the few seconds too.
+	u.sent(0, 0)
+	u.retry("Upload failed (HTTP 503), retrying")
+	if out.String() != "Prepared 1/4 sessions\nSent 3/9 batches\nPrepared 4/4 sessions\nUpload failed (HTTP 503), retrying\n" {
 		t.Fatalf("progress = %q", out.String())
+	}
+}
+
+// A resume checks the frozen destination and organization before any request carries a key.
+func TestUploadResumeKeepsTheKeyAwayFromAnotherDestination(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
+	defer server.Close()
+	for _, tc := range []struct{ name, frozenURL, org, want string }{
+		{"other destination", "https://frozen.example/api", "", "belong to https://frozen.example/api"},
+		{"login organization with a key", server.URL, "org-1", "prepared with navigara login"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			body, err := gzipBody([]byte(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeRequest(filepath.Join(dir, "logs-000001.json.gz"), body); err != nil {
+				t.Fatal(err)
+			}
+			if err := saveSetupBatches(dir, tc.frozenURL, tc.org); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"sessions", "upload", "--resume", dir, "--url", server.URL, "--token", "secret"}, &stdout, &stderr)
+			if code != 1 || !strings.Contains(stderr.String(), tc.want) || requests.Load() != 0 {
+				t.Fatalf("exit=%d requests=%d stderr=%q", code, requests.Load(), stderr.String())
+			}
+		})
+	}
+}
+
+// Sessions outside the window do not count: when every session in it fails, the run fails and
+// removes the empty output directory it made.
+func TestUploadFailsWhenEverySessionInTheWindowFails(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	bad := filepath.Join(claudeHome, "projects", "-repo", "bbbbbbbb-0000-0000-0000-000000000001.jsonl")
+	if err := os.WriteFile(bad, []byte("{malformed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "out")
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome,
+		"--codex-home", codexHome, "--since", "2026-10-02T00:00:00Z", "--output", output}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "Skipped 1 session files") || !strings.Contains(stdout.String(), "Sessions: 0.") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("failed run left its empty output directory: %v", err)
 	}
 }
 
@@ -328,7 +382,7 @@ func TestUploadPinnedCodexForkNeedsNoParentRollout(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "codex", "--email", "dev@example.com",
 		"--claude-home", claudeHome, "--codex-home", codexHome, "--session", "child", "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
-	if code != 0 || stderr.Len() != 0 {
+	if code != 0 || noProgress(stderr.String()) != "" {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "Sessions: 1. Upload batches: 1. Activity events: 1. Usage measurements: 0.") || strings.Contains(stdout.String(), "parent") {
@@ -426,7 +480,7 @@ func TestUploadSkipsUnreadableTranscripts(t *testing.T) {
 	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome,
 		"--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 	report := fmt.Sprintf("Skipped 2 session files that could not be read:\n  %q: \"line 1: invalid JSON record\"\n  %q: \"permission denied\"\n", malformed, unreadable)
-	if code != 0 || stderr.String() != report || !strings.Contains(stdout.String(), "Sessions: 1.") {
+	if code != 0 || noProgress(stderr.String()) != report || !strings.Contains(stdout.String(), "Sessions: 1.") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q, want report %q", code, stdout.String(), stderr.String(), report)
 	}
 }
@@ -692,7 +746,7 @@ func TestUploadUntilExcludesFutureSessions(t *testing.T) {
 					out := filepath.Join(t.TempDir(), "out")
 					var stdout, stderr bytes.Buffer
 					code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", source, "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome, "--until", window.until, "--output", out}, &stdout, &stderr)
-					if code != 0 || !strings.Contains(stdout.String(), fmt.Sprintf("Sessions: %d.", window.want)) || stderr.Len() != 0 {
+					if code != 0 || !strings.Contains(stdout.String(), fmt.Sprintf("Sessions: %d.", window.want)) || noProgress(stderr.String()) != "" {
 						t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 					}
 					files, err := filepath.Glob(filepath.Join(out, "*.json.gz"))
@@ -845,3 +899,8 @@ func TestUploadDryRunNeedsNoUsableLogin(t *testing.T) {
 		})
 	}
 }
+
+var progressLine = regexp.MustCompile(`(?m)^(Prepared \d+/\d+ sessions|Sent \d+/\d+ batches)\n`)
+
+// noProgress drops the progress lines that an upload without a terminal prints.
+func noProgress(s string) string { return progressLine.ReplaceAllString(s, "") }

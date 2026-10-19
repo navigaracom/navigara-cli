@@ -32,18 +32,18 @@ func exportSessions(ctx context.Context, opts options, stdout, stderr io.Writer)
 	defer progress.stop()
 	stdout, stderr = progressWriter{stdout, progress.stop}, progressWriter{stderr, progress.stop}
 	if opts.resume != "" {
-		return resumeUpload(ctx, opts, stdout, stderr, progress.sent)
+		return resumeUpload(ctx, opts, stdout, stderr, progress.sent, progress.retry)
 	}
-	return uploadSessions(ctx, opts, stdout, stderr, progress.prepared, progress.sent)
+	return uploadSessions(ctx, opts, stdout, stderr, progress.prepared, progress.sent, progress.retry)
 }
 
 // exportSessionsWithProgress reports discovered and inspected sessions without
 // affecting export order or output.
 func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stderr io.Writer, progress func(done, total int)) int {
-	return uploadSessions(ctx, opts, stdout, stderr, progress, nil)
+	return uploadSessions(ctx, opts, stdout, stderr, progress, nil, nil)
 }
 
-func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer, progress, uploaded func(done, total int)) int {
+func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer, progress, uploaded func(done, total int), retried func(string)) (code int) {
 	requested := opts
 	if err := prepareUploadAccount(ctx, &opts, stderr); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
@@ -52,7 +52,9 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	var sender *sender
 	if opts.send {
 		sender = newSender(opts.url, opts.token)
-		sender.retried = func(line string) { fmt.Fprintln(stderr, line) }
+		if retried != nil {
+			sender.retried = retried
+		}
 		sender.explicitKey = requested.url != "" || requested.token != "" || requested.tokenExplicit
 		if err := sender.validate(); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
@@ -168,7 +170,8 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 		build            func() (*telemetry.Session, error)
 	}
 	var jobs []job
-	// Unreadable history is skipped and reported at the end; the run fails only when no session is readable.
+	// Unreadable history is skipped and reported at the end. The run fails only when no session in
+	// the filters was exported: an unreadable file may hold the sessions the filters ask for.
 	var skipped []string
 	// A missing default home has no history to read.
 	if _, err := os.Stat(claudeHome); wantClaude && opts.claudeHome == "" && errors.Is(err, fs.ErrNotExist) {
@@ -208,8 +211,10 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	if wantCodex {
 		seen := map[string]bool{}
 		paths, err := telemetry.CodexRollouts(codexHome)
-		if err != nil {
-			skipped = append(skipped, strings.Split(err.Error(), "\n")...)
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			for _, err := range joined.Unwrap() {
+				skipped = append(skipped, err.Error())
+			}
 		}
 		for _, path := range paths {
 			if stale(opts.since, path) {
@@ -271,7 +276,12 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	// Prepare at most two sessions at a time, then encode and write their bodies
 	// serially in sorted session order.
 	counts := map[string]int{}
-	exported, readable, events, points, bodies := 0, 0, 0, 0, 0
+	exported, events, points, bodies := 0, 0, 0, 0
+	defer func() {
+		if code != 0 && bodies == 0 {
+			os.Remove(opts.output) // Nothing to resume: drop the empty directory this run made.
+		}
+	}()
 	compressor := gzip.NewWriter(io.Discard)
 	defer compressor.Close()
 	estimated, partial := 0, 0
@@ -328,7 +338,6 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 				report(index + pairIndex + 1)
 				continue
 			}
-			readable++
 			s.Within(opts.since, opts.until)
 			if len(s.Events) == 0 && len(s.Points) == 0 {
 				report(index + pairIndex + 1)
@@ -392,7 +401,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 		fmt.Fprintf(stdout, "Sessions: %d. Upload batches: %d. Activity events: %d. Usage measurements: %d.\n", exported, bodies, events, points)
 	}
 	reportSkipped()
-	if readable == 0 && len(skipped) > 0 {
+	if exported == 0 && len(skipped) > 0 {
 		return 1
 	}
 	if sender == nil {
@@ -409,24 +418,39 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 }
 
 // resumeUpload sends the batches of an earlier upload that the receiver has not accepted.
-func resumeUpload(ctx context.Context, opts options, stdout, stderr io.Writer, uploaded func(done, total int)) int {
+func resumeUpload(ctx context.Context, opts options, stdout, stderr io.Writer, uploaded func(done, total int), retried func(string)) int {
 	requested := opts
 	opts.send = true
-	if err := prepareUploadAccount(ctx, &opts, stderr); err != nil {
-		fmt.Fprintln(stderr, "navigara:", err)
-		return 1
-	}
 	m, err := loadSetupBatches(opts.resume)
 	if err != nil {
 		fmt.Fprintf(stderr, "navigara: %q: %v\n", opts.resume, err)
 		return 1
 	}
-	if m.OrganizationID != "" && opts.organizationID != "" && m.OrganizationID != opts.organizationID {
+	// Check the frozen destination before any request carries a key.
+	wrongDestination := func() int {
+		fmt.Fprintf(stderr, "navigara: these upload batches belong to %s; resume them with --url %s or with navigara login for that host\n", m.URL, shellQuote(m.URL))
+		return 1
+	}
+	if opts.url != "" && otlpBase(opts.url) != otlpBase(m.URL) {
+		return wrongDestination()
+	}
+	if m.OrganizationID != "" && (opts.url != "" || opts.token != "" || opts.tokenExplicit) {
+		fmt.Fprintln(stderr, "navigara: these upload batches were prepared with navigara login; resume them without --url and --token so the organization can be checked")
+		return 1
+	}
+	if err := prepareUploadAccount(ctx, &opts, stderr); err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
+	if otlpBase(opts.url) != otlpBase(m.URL) {
+		return wrongDestination()
+	}
+	if m.OrganizationID != "" && m.OrganizationID != opts.organizationID {
 		fmt.Fprintln(stderr, "navigara: these upload batches belong to a different organization; run navigara login and select it")
 		return 1
 	}
 	s := newSender(opts.url, opts.token)
-	s.retried = func(line string) { fmt.Fprintln(stderr, line) }
+	s.retried = retried
 	s.explicitKey = requested.url != "" || requested.token != "" || requested.tokenExplicit
 	if err := s.validate(); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)

@@ -279,8 +279,18 @@ func (u *uploadProgress) sent(done, total int) {
 	u.upload.upload(done, total)
 }
 
+// retry prints a sender retry. On a terminal it redraws the upload bar below it.
+func (u *uploadProgress) retry(line string) {
+	if u.upload == nil {
+		fmt.Fprintln(u.out, line)
+		return
+	}
+	u.upload.retry(line)
+}
+
+// line always prints the final count, and the others at most every few seconds.
 func (u *uploadProgress) line(format string, done, total int) {
-	if time.Since(u.last) < 3*time.Second {
+	if total == 0 || (done < total && time.Since(u.last) < 3*time.Second) {
 		return
 	}
 	u.last = time.Now()
