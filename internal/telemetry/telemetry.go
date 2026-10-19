@@ -68,6 +68,10 @@ func (s *Session) event(name string, at time.Time, attrs map[string]any) {
 	}
 }
 
+// MissingUnreadable marks records left out because a file could not be read. Unlike the
+// other Missing reasons, a later run can recover them once the file is readable.
+const MissingUnreadable = "unreadable subagent transcript"
+
 func (s *Session) miss(reason string) {
 	if s.Missing == nil {
 		s.Missing = map[string]int{}

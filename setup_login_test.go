@@ -493,3 +493,61 @@ func TestSetupKeepsCheckpointWhenFilesWereSkipped(t *testing.T) {
 		t.Fatalf("Codex checkpoint missing: %v", c.Imports)
 	}
 }
+
+func TestSetupKeepsCheckpointForUnreadableSubagent(t *testing.T) {
+	claude, codex := fixtureHomes(t)
+	home := filepath.Dir(claude)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	t.Setenv("CODEX_HOME", codex)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	id := "aaaaaaaa-0000-0000-0000-000000000001"
+	subagent := filepath.Join(claude, "projects", "-repo", id, "subagents", "agent-a.jsonl")
+	if err := os.MkdirAll(filepath.Dir(subagent), 0700); err != nil {
+		t.Fatal(err)
+	}
+	row := `{"type":"user","sessionId":"` + id + `","isSidechain":true,"timestamp":"2026-10-01T10:00:01Z","message":{"role":"user","content":"x"}}` + "\n"
+	if err := os.WriteFile(subagent, []byte(row), 0); err != nil {
+		t.Fatal(err)
+	}
+	var bodies strings.Builder
+	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodies.Write(mustBody(r))
+		w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+		io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+	run := func(input string) (accountConfig, string) {
+		t.Helper()
+		bodies.Reset()
+		var out, errs bytes.Buffer
+		if code := runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs); code != 0 {
+			t.Fatalf("wizard = %d: %s", code, &errs)
+		}
+		c, err := loadAccount("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c, errs.String()
+	}
+
+	c, errs := run("y\nn\n\nall\ny\n")
+	if !strings.Contains(errs, "1 unreadable subagent transcripts") || strings.Contains(bodies.String(), "subagent_completed") {
+		t.Fatalf("unreadable subagent not reported: %s", errs)
+	}
+	if _, ok := c.Imports["org-1/claude"]; ok {
+		t.Fatalf("advanced the Claude checkpoint past an unreadable subagent: %v", c.Imports)
+	}
+
+	if err := os.Chmod(subagent, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, errs = run("y\nn\n\n\ny\n")
+	if strings.Contains(errs, "unreadable") || !strings.Contains(bodies.String(), "subagent_completed") {
+		t.Fatalf("repaired subagent not imported: %s", errs)
+	}
+	if _, ok := c.Imports["org-1/claude"]; !ok {
+		t.Fatalf("Claude checkpoint missing after a complete import: %v", c.Imports)
+	}
+}

@@ -352,6 +352,10 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 				report(index + pairIndex + 1)
 				continue
 			}
+			if n := s.Missing[telemetry.MissingUnreadable]; n > 0 {
+				skipped = append(skipped, fmt.Sprintf("%q: %d unreadable subagent transcripts", j.path, n))
+				skippedTool(strings.TrimSuffix(j.source, "_code"))
+			}
 			since := claudeSince
 			if j.source == "codex" {
 				since = codexSince
