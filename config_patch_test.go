@@ -495,7 +495,7 @@ func TestConfigPatchExistingCodexTelemetryNeedsReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, errOut := runPatch("codex", claude, codex, host)
-	if code != 0 || !strings.Contains(out, "[features] rmcp_client: (removed)") || !strings.Contains(out, "[otel] exporters: https://old.example/v1/logs -> Navigara") {
+	if code != 0 || !strings.Contains(out, "[features] rmcp_client: (removed)") || !strings.Contains(out, "[otel.exporter.otlp-http] endpoint: https://old.example/v1/logs -> "+host+"/api/otlp/v1/logs; headers: replaced") || strings.Contains(out, "fixture-old") {
 		t.Fatalf("preview: code=%d out=%s err=%s", code, out, errOut)
 	}
 	code, _, errOut = runPatch("codex", claude, codex, host, "--apply")

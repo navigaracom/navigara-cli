@@ -48,7 +48,7 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 			return nil, err
 		}
 		codex := files[len(files)-1]
-		codex.notes, codex.conflict = codexTelemetryChanges(codex.before)
+		codex.notes, codex.conflict = codexTelemetryChanges(codex.before, endpoint)
 		var profiles []string
 		profile := shellSettings
 		switch firstNonEmpty(opts.shell, filepath.Base(os.Getenv("SHELL"))) {
@@ -65,6 +65,10 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 			}
 			profiles = append(profiles, login)
 		case "fish":
+			if _, err := os.Stat(filepath.Dir(fishConfig(home))); err != nil {
+				codex.warning = filepath.Dir(fishConfig(home)) + " does not exist. Codex sessions do not show your email until you add this line to config.fish:\n  set -gx OTEL_RESOURCE_ATTRIBUTES " + fishQuote("enduser.id="+opts.email)
+				break
+			}
 			profiles = []string{fishConfig(home)}
 			profile = fishSettings
 		default:

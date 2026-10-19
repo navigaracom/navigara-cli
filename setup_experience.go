@@ -95,7 +95,9 @@ func (p *setupInput) confirmReplacement(tool string, files []*setupFile) (bool, 
 	var changes []string
 	for _, f := range files {
 		if f.conflict != nil {
-			changes = append(changes, f.notes...)
+			for _, note := range f.notes {
+				changes = append(changes, wizardHeaderValue(note))
+			}
 		}
 	}
 	if !p.interactive() {
@@ -105,7 +107,7 @@ func (p *setupInput) confirmReplacement(tool string, files []*setupFile) (bool, 
 	value := false
 	err := p.form(huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().Title("Replace " + setupToolName(tool) + " telemetry?").
-			Description("Stream new activity to Navigara.\nSave a private settings backup.\n\n" + wizardHeaderValue(strings.Join(changes, "\n"))).
+			Description("Stream new activity to Navigara.\nSave a private settings backup.\n\n" + strings.Join(changes, "\n")).
 			Affirmative("Replace").Negative("Keep existing").Value(&value).
 			WithButtonAlignment(lipgloss.Left),
 	)))

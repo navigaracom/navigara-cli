@@ -38,13 +38,16 @@ func TestSetupPlansShellSelection(t *testing.T) {
 		{name: "flag overrides SHELL", shell: "/bin/zsh", flag: "fish", profile: ".config/fish/config.fish"},
 		{name: "flag without SHELL", flag: "bash", profile: ".bashrc"},
 		{name: "unset SHELL"},
+		{name: "fish without config directory", shell: "/usr/local/bin/fish", flag: "fish", profile: "missing"},
 		{name: "unknown SHELL", shell: "/bin/tcsh"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			home := t.TempDir()
 			codex := filepath.Join(home, ".codex")
-			if err := os.MkdirAll(filepath.Join(home, ".config", "fish"), 0700); err != nil {
-				t.Fatal(err)
+			if test.profile != "missing" {
+				if err := os.MkdirAll(filepath.Join(home, ".config", "fish"), 0700); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := os.Mkdir(codex, 0700); err != nil {
 				t.Fatal(err)
@@ -55,6 +58,12 @@ func TestSetupPlansShellSelection(t *testing.T) {
 			files, err := setupPlans(options{source: "codex", codexHome: codex, shell: test.flag, url: "https://app.example/api", token: "secret", email: "dev@example.com"}, home)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if test.profile == "missing" {
+				if len(files) != 1 || !strings.Contains(files[0].warning, "set -gx OTEL_RESOURCE_ATTRIBUTES 'enduser.id=dev@example.com'") {
+					t.Fatalf("want config.toml only and a manual fish line, got %d files, warning %q", len(files), files[0].warning)
+				}
+				return
 			}
 			if test.profile == "" {
 				if len(files) != 1 || !strings.Contains(files[0].warning, "export OTEL_RESOURCE_ATTRIBUTES=enduser.id='dev@example.com'") {

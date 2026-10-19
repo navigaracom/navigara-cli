@@ -130,8 +130,12 @@ func telemetryChange(key, old, new string) string {
 	return fmt.Sprintf("%s: %s -> %s", key, maskTelemetry(key, old), maskTelemetry(key, new))
 }
 
-// maskTelemetry hides header values, which usually hold secrets.
+// maskTelemetry hides header values and header helper commands, which
+// usually hold secrets.
 func maskTelemetry(key, value string) string {
+	if strings.Contains(strings.ToUpper(key), "HELPER") {
+		return "***"
+	}
 	if !strings.Contains(key, "HEADERS") {
 		return value
 	}
@@ -184,7 +188,7 @@ func codexSettings(data []byte, endpoint, token string) ([]byte, error) {
 
 // codexTelemetryChanges lists what codexSettings replaces or removes. Telemetry
 // outside the Navigara block is a conflict.
-func codexTelemetryChanges(data []byte) ([]string, error) {
+func codexTelemetryChanges(data []byte, endpoint string) ([]string, error) {
 	var changes []string
 	_, removed, _ := removeObsoleteCodexFeatures(data)
 	for _, key := range removed {
@@ -194,22 +198,28 @@ func codexTelemetryChanges(data []byte) ([]string, error) {
 	if err != nil || start != end || !hasOTELTOML(data) {
 		return changes, nil
 	}
-	endpoint := "another destination"
 	var decoded struct {
 		Otel map[string]map[string]struct {
 			Endpoint string `toml:"endpoint"`
 		} `toml:"otel"`
 	}
+	first := "another destination"
 	if toml.Unmarshal(data, &decoded) == nil {
-		for _, name := range []string{"exporter", "metrics_exporter", "trace_exporter"} {
-			if e := decoded.Otel[name]["otlp-http"].Endpoint; e != "" {
-				endpoint = e
-				break
+		for _, exporter := range []struct{ name, path string }{{"exporter", "/v1/logs"}, {"metrics_exporter", "/v1/metrics"}, {"trace_exporter", "/v1/traces"}} {
+			old := decoded.Otel[exporter.name]["otlp-http"].Endpoint
+			if old == "" {
+				continue
 			}
+			if first == "another destination" {
+				first = old
+			}
+			changes = append(changes, fmt.Sprintf("[otel.%s.otlp-http] endpoint: %s -> %s; headers: replaced", exporter.name, old, strings.TrimSuffix(endpoint, "/")+exporter.path))
 		}
 	}
-	changes = append(changes, "[otel] exporters: "+endpoint+" -> Navigara")
-	return changes, fmt.Errorf("Codex already sends telemetry to %s. Re-run with --replace, or use --source claude.", endpoint)
+	if first == "another destination" {
+		changes = append(changes, "[otel]: (replaced)")
+	}
+	return changes, fmt.Errorf("Codex already sends telemetry to %s. Re-run with --replace, or use --source claude.", first)
 }
 
 func shellSettings(data []byte, email string) ([]byte, error) {
@@ -277,31 +287,28 @@ func removeClaudeSettings(data []byte) ([]byte, error) {
 			return nil, errors.New("Claude settings env must be a JSON object of strings")
 		}
 	}
+	// Only the exact set of values that claudeSettings writes is Navigara's.
 	endpoint := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
-	if !strings.HasSuffix(endpoint, "/api/otlp") {
+	want := claudeTelemetryEnv(endpoint, "", "")
+	if !strings.HasSuffix(endpoint, "/api/otlp") || !strings.HasPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ") {
 		return data, nil
 	}
-	for key, value := range claudeTelemetryEnv(endpoint, "", "") {
-		switch key {
-		case "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS":
-			delete(env, key)
-		case "OTEL_RESOURCE_ATTRIBUTES":
-			var kept []string
-			for _, attr := range strings.Split(env[key], ",") {
-				if name, _, _ := strings.Cut(attr, "="); attr != "" && strings.TrimSpace(name) != "enduser.id" {
-					kept = append(kept, attr)
-				}
-			}
-			if len(kept) == 0 {
-				delete(env, key)
-			} else {
-				env[key] = strings.Join(kept, ",")
-			}
-		default:
-			if env[key] == value {
-				delete(env, key)
-			}
+	for key, value := range want {
+		if key != "OTEL_EXPORTER_OTLP_HEADERS" && key != "OTEL_RESOURCE_ATTRIBUTES" && env[key] != value {
+			return data, nil
 		}
+	}
+	var kept []string
+	for _, attr := range strings.Split(env["OTEL_RESOURCE_ATTRIBUTES"], ",") {
+		if name, _, _ := strings.Cut(attr, "="); attr != "" && strings.TrimSpace(name) != "enduser.id" {
+			kept = append(kept, attr)
+		}
+	}
+	for key := range want {
+		delete(env, key)
+	}
+	if len(kept) > 0 {
+		env["OTEL_RESOURCE_ATTRIBUTES"] = strings.Join(kept, ",")
 	}
 	if len(env) == 0 {
 		delete(settings, "env")

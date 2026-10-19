@@ -318,8 +318,8 @@ headers = { Authorization = "Bearer fixture-old" }
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := append(append(append([]byte(nil), prefix...), test.telemetry...), suffix...)
-			changes, conflict := codexTelemetryChanges(input)
-			if conflict == nil || !strings.Contains(conflict.Error(), "Codex already sends telemetry to https://old.example/v1/") || !strings.Contains(conflict.Error(), "--replace") || len(changes) != 1 {
+			changes, conflict := codexTelemetryChanges(input, testEndpoint)
+			if conflict == nil || !strings.Contains(conflict.Error(), "Codex already sends telemetry to https://old.example/v1/") || !strings.Contains(conflict.Error(), "--replace") || len(changes) < 2 || !strings.Contains(changes[1], "[otel.metrics_exporter.otlp-http] endpoint: https://old.example/v1/metrics -> ") {
 				t.Fatalf("expected a replaceable conflict, got %v, %q", conflict, changes)
 			}
 			got, err := codexSettings(input, testEndpoint, "new")
@@ -372,5 +372,26 @@ func TestShellSettingsRejectsAttributeInjectionAndBadMarkers(t *testing.T) {
 	}
 	if _, err := shellSettings([]byte("# >>> navigara telemetry >>> x\n"), "dev@example.com"); err == nil {
 		t.Fatal("malformed marker succeeded")
+	}
+}
+
+func TestClaudeTelemetryChangesMasksSecrets(t *testing.T) {
+	changes, conflict := claudeTelemetryChanges([]byte(`{"otelHeadersHelper":"echo Authorization=Bearer helper-secret","env":{"OTEL_EXPORTER_OTLP_HEADERS":"a=one-secret,b=two-secret"}}`), testEndpoint, "new-secret")
+	if conflict == nil || strings.Contains(strings.Join(changes, "\n"), "secret") {
+		t.Fatalf("changes = %q, conflict = %v", changes, conflict)
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsOtherCollectors(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := bytes.Replace(ours, []byte(`"OTEL_LOG_TOOL_DETAILS": "1"`), []byte(`"OTEL_LOG_TOOL_DETAILS": "0"`), 1)
+	if got, err := removeClaudeSettings(foreign); err != nil || !bytes.Equal(got, foreign) {
+		t.Fatalf("removed a collector that Navigara did not write: %s, %v", got, err)
+	}
+	if got, err := removeClaudeSettings(ours); err != nil || string(got) != "{}" {
+		t.Fatalf("remove = %s, %v", got, err)
 	}
 }
