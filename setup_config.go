@@ -48,8 +48,9 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	// Keep the user's own enduser.id so config remove can restore it.
-	if _, recorded := env[previousEnduserID]; !recorded && env["OTEL_EXPORTER_OTLP_ENDPOINT"] != endpoint {
+	// Keep the user's own enduser.id so config remove can restore it. An
+	// identity in a Navigara setup is Navigara's; its record carries over.
+	if _, recorded := env[previousEnduserID]; !recorded && !navigaraClaudeTelemetry(env) {
 		for _, attr := range strings.Split(env["OTEL_RESOURCE_ATTRIBUTES"], ",") {
 			if key, value, _ := strings.Cut(strings.TrimSpace(attr), "="); strings.TrimSpace(key) == "enduser.id" {
 				env[previousEnduserID] = value
@@ -68,6 +69,11 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 }
 
 const previousEnduserID = "NAVIGARA_PREVIOUS_ENDUSER_ID"
+
+// navigaraClaudeTelemetry reports whether env sends to a Navigara receiver.
+func navigaraClaudeTelemetry(env map[string]string) bool {
+	return strings.HasSuffix(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "/api/otlp") && strings.HasPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ")
+}
 
 func claudeTelemetryEnv(endpoint, token, attrs string) map[string]string {
 	return map[string]string{
@@ -316,16 +322,8 @@ func removeClaudeSettings(data []byte) ([]byte, error) {
 			return nil, errors.New("Claude settings env must be a JSON object of strings")
 		}
 	}
-	// Only the exact set of values that claudeSettings writes is Navigara's.
-	endpoint := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
-	want := claudeTelemetryEnv(endpoint, "", "")
-	if !strings.HasSuffix(endpoint, "/api/otlp") || !strings.HasPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ") {
+	if !navigaraClaudeTelemetry(env) {
 		return data, nil
-	}
-	for key, value := range want {
-		if key != "OTEL_EXPORTER_OTLP_HEADERS" && key != "OTEL_RESOURCE_ATTRIBUTES" && env[key] != value {
-			return data, nil
-		}
 	}
 	var kept []string
 	for _, attr := range strings.Split(env["OTEL_RESOURCE_ATTRIBUTES"], ",") {
@@ -336,7 +334,8 @@ func removeClaudeSettings(data []byte) ([]byte, error) {
 	if previous, ok := env[previousEnduserID]; ok {
 		kept = append(kept, "enduser.id="+previous)
 	}
-	for key := range want {
+	// The current keys include every key that an older version wrote.
+	for key := range claudeTelemetryEnv("", "", "") {
 		delete(env, key)
 	}
 	delete(env, previousEnduserID)

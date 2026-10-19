@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -412,15 +413,67 @@ func TestClaudeSettingsChangesListEveryKeyAndMaskSecrets(t *testing.T) {
 }
 
 func TestRemoveClaudeSettingsKeepsOtherCollectors(t *testing.T) {
+	foreign := []byte(`{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://collector.example/api/otlp","OTEL_EXPORTER_OTLP_HEADERS":"x-api-key=corp","CLAUDE_CODE_ENABLE_TELEMETRY":"1"}}`)
+	if got, err := removeClaudeSettings(foreign); err != nil || !bytes.Equal(got, foreign) {
+		t.Fatalf("removed a collector that Navigara did not write: %s, %v", got, err)
+	}
 	ours, err := claudeSettings([]byte(`{}`), "https://app.example/api/otlp", "token", "dev@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign := bytes.Replace(ours, []byte(`"OTEL_LOG_TOOL_DETAILS": "1"`), []byte(`"OTEL_LOG_TOOL_DETAILS": "0"`), 1)
-	if got, err := removeClaudeSettings(foreign); err != nil || !bytes.Equal(got, foreign) {
-		t.Fatalf("removed a collector that Navigara did not write: %s, %v", got, err)
-	}
 	if got, err := removeClaudeSettings(ours); err != nil || string(got) != "{}" {
 		t.Fatalf("remove = %s, %v", got, err)
+	}
+}
+
+// The 831b08e writer wrote nine keys and none of the later prompt, trace,
+// session and beta keys.
+func TestRemoveClaudeSettingsHandlesOlderLayout(t *testing.T) {
+	older := []byte(`{"theme":"dark","env":{"KEEP":"yes",
+		"CLAUDE_CODE_ENABLE_TELEMETRY":"1","OTEL_METRICS_EXPORTER":"otlp","OTEL_LOGS_EXPORTER":"otlp",
+		"OTEL_METRICS_INCLUDE_REPOSITORY":"true","OTEL_LOG_TOOL_DETAILS":"1","OTEL_EXPORTER_OTLP_PROTOCOL":"http/protobuf",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":"https://app.example/api/otlp","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Bearer old",
+		"OTEL_RESOURCE_ATTRIBUTES":"team=a,enduser.id=dev@example.com"}}`)
+	got, err := removeClaudeSettings(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(got, &settings); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"theme": "dark", "env": map[string]any{"KEEP": "yes", "OTEL_RESOURCE_ATTRIBUTES": "team=a"}}
+	if !reflect.DeepEqual(settings, want) {
+		t.Fatalf("remove = %s", got)
+	}
+}
+
+func TestClaudeSettingsSecondHostKeepsNoNavigaraIdentity(t *testing.T) {
+	first, err := claudeSettings([]byte(`{"env":{"KEEP":"yes"}}`), "https://a.example/api/otlp", "a", "a@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := claudeSettings(first, "https://b.example/api/otlp", "b", "b@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(second, []byte(previousEnduserID)) {
+		t.Fatalf("recorded a Navigara identity: %s", second)
+	}
+	got, err := removeClaudeSettings(second)
+	if err != nil || string(got) != "{\n  \"env\": {\n    \"KEEP\": \"yes\"\n  }\n}" {
+		t.Fatalf("remove = %s, %v", got, err)
+	}
+
+	user, err := claudeSettings([]byte(`{"env":{"OTEL_RESOURCE_ATTRIBUTES":"enduser.id=me@corp.example"}}`), "https://a.example/api/otlp", "a", "a@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := claudeSettings(user, "https://b.example/api/otlp", "b", "b@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := removeClaudeSettings(moved); err != nil || !bytes.Contains(got, []byte(`"OTEL_RESOURCE_ATTRIBUTES": "enduser.id=me@corp.example"`)) || bytes.Contains(got, []byte(previousEnduserID)) {
+		t.Fatalf("remove after a host change = %s, %v", got, err)
 	}
 }
