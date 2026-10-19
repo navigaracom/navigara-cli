@@ -176,8 +176,8 @@ func TestUploadAndConfigPatchLogInOnTerminal(t *testing.T) {
 					t.Fatal(err)
 				}
 				var out, errs bytes.Buffer
-				if code := runConfigPatch(context.Background(), []string{"--source", "claude", "--claude-home", claude}, &out, &errs); code != 0 {
-					t.Fatalf("code=%d err=%s", code, &errs)
+				if code := runConfigPatch(context.Background(), []string{"--source", "claude", "--claude-home", claude}, &out, &errs); code != 0 || !strings.Contains(out.String(), "Preview only; no tool settings changed and no ingestion request sent.\n") {
+					t.Fatalf("code=%d out=%s err=%s", code, &out, &errs)
 				}
 			}
 			if err != nil || !opened {

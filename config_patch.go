@@ -156,7 +156,7 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stdout, "Update:", f.path)
 	}
 	if !apply {
-		fmt.Fprintln(stdout, "Preview only; no files changed and no ingestion request sent.")
+		fmt.Fprintln(stdout, "Preview only; no tool settings changed and no ingestion request sent.")
 		return 0
 	}
 	if !directToken {
