@@ -355,6 +355,22 @@ func TestCodexDiscoveryErrors(t *testing.T) {
 	if _, err := CodexRollouts(blocked); err == nil {
 		t.Fatal("non-directory Codex home accepted")
 	}
+
+	locked := filepath.Join(home, "sessions", "2026")
+	if err := os.Mkdir(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(locked, 0700)
+	archived := filepath.Join(home, "archived_sessions")
+	if err := os.WriteFile(archived, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := CodexRollouts(home)
+	joined, _ := err.(interface{ Unwrap() []error })
+	if joined == nil || len(joined.Unwrap()) != 2 || !strings.Contains(err.Error(), locked) || !strings.Contains(err.Error(), archived) ||
+		len(paths) != 1 || filepath.Base(paths[0]) != "rollout-bad.jsonl" {
+		t.Fatalf("unreadable directory and root: paths=%v err=%v, want the other rollouts and one error per path", paths, err)
+	}
 }
 
 func TestEncodeStopsAtTheFirstEmitError(t *testing.T) {

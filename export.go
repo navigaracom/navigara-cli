@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,26 +24,38 @@ import (
 )
 
 // exportSessions rebuilds each selected session's telemetry, writes the OTLP bodies and,
-// with --send, posts them to the Navigara OTLP endpoint.
+// unless --dry-run, posts them to the Navigara OTLP endpoint.
 func exportSessions(ctx context.Context, opts options, stdout, stderr io.Writer) int {
 	ctx, stop := interruptible(ctx)
 	defer stop()
-	return exportSessionsWithProgress(ctx, opts, stdout, stderr, nil)
+	progress := newUploadProgress(stderr)
+	defer progress.stop()
+	stdout, stderr = progressWriter{stdout, progress.stop}, progressWriter{stderr, progress.stop}
+	if opts.resume != "" {
+		return resumeUpload(ctx, opts, stdout, stderr, progress.sent, progress.retry)
+	}
+	return uploadSessions(ctx, opts, stdout, stderr, progress.prepared, progress.sent, progress.retry)
 }
 
 // exportSessionsWithProgress reports discovered and inspected sessions without
 // affecting export order or output.
 func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stderr io.Writer, progress func(done, total int)) int {
+	return uploadSessions(ctx, opts, stdout, stderr, progress, nil, nil)
+}
+
+func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer, progress, uploaded func(done, total int), retried func(string)) (code int) {
+	requested := opts
+	if err := prepareUploadAccount(ctx, &opts, stderr); err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
 	var sender *sender
 	if opts.send {
-		explicitKey := opts.url != "" || opts.token != "" || opts.tokenExplicit
-		if err := prepareUploadAccount(ctx, &opts); err != nil {
-			fmt.Fprintln(stderr, "navigara:", err)
-			return 1
-		}
 		sender = newSender(opts.url, opts.token)
-		sender.retried = func(line string) { fmt.Fprintln(stderr, line) }
-		sender.explicitKey = explicitKey
+		if retried != nil {
+			sender.retried = retried
+		}
+		sender.explicitKey = requested.url != "" || requested.token != "" || requested.tokenExplicit
 		if err := sender.validate(); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 2
@@ -117,6 +130,22 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 		fmt.Fprintln(stderr, "navigara: skipping Codex: no signed-in email; pass --email or --allow-anonymous")
 		wantCodex = false
 	}
+	if !opts.humanSummary {
+		var emails []string
+		for _, e := range []struct {
+			want  bool
+			email string
+		}{{wantClaude, ident.Email}, {wantCodex, ident.CodexEmail}} {
+			if e.want && e.email != "" && !slices.Contains(emails, e.email) {
+				emails = append(emails, e.email)
+			}
+		}
+		if len(emails) == 0 {
+			fmt.Fprintln(stdout, "Sessions will be sent without an email.")
+		} else {
+			fmt.Fprintf(stdout, "Sessions will be attributed to %s.\n", strings.Join(emails, " and "))
+		}
+	}
 	pinned := map[string]bool{}
 	for _, id := range opts.sessions {
 		pinned[id] = true
@@ -137,11 +166,13 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 		return commits.between(repo, from, to)
 	}
 	type job struct {
-		source, id string
-		build      func() (*telemetry.Session, error)
+		source, id, path string
+		build            func() (*telemetry.Session, error)
 	}
 	var jobs []job
-	incomplete := false
+	// Unreadable history is skipped and reported at the end. The run fails only when no session in
+	// the filters was exported: an unreadable file may hold the sessions the filters ask for.
+	var skipped []string
 	// A missing default home has no history to read.
 	if _, err := os.Stat(claudeHome); wantClaude && opts.claudeHome == "" && errors.Is(err, fs.ErrNotExist) {
 		wantClaude = false
@@ -157,9 +188,8 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 			}
 			return stale(opts.since, append([]string{path}, subs...)...)
 		})
-		incomplete = len(scan.Errors) > 0
 		for _, err := range scan.Errors {
-			fmt.Fprintln(stderr, "navigara:", err)
+			skipped = append(skipped, err.Error())
 		}
 		seen := map[string]bool{}
 		for _, r := range scan.Records {
@@ -168,7 +198,7 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 				continue
 			}
 			seen[id] = true
-			jobs = append(jobs, job{"claude_code", id, func() (*telemetry.Session, error) {
+			jobs = append(jobs, job{"claude_code", id, path, func() (*telemetry.Session, error) {
 				subs, err := telemetry.ClaudeSubagents(path)
 				if err != nil {
 					return nil, err
@@ -181,31 +211,40 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 	if wantCodex {
 		seen := map[string]bool{}
 		paths, err := telemetry.CodexRollouts(codexHome)
-		if err != nil {
-			fmt.Fprintln(stderr, "navigara:", err)
-			incomplete = true
-		} else {
-			for _, path := range paths {
-				if stale(opts.since, path) {
-					continue
-				}
-				id, err := telemetry.CodexSessionID(path)
-				if err != nil {
-					fmt.Fprintln(stderr, "navigara:", err)
-					incomplete = true
-					continue
-				}
-				if seen[id] || !want(id) {
-					continue
-				}
-				seen[id] = true
-				jobs = append(jobs, job{"codex", id, func() (*telemetry.Session, error) {
-					return telemetry.BuildCodex(path, ident, opts.until)
-				}})
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			for _, err := range joined.Unwrap() {
+				skipped = append(skipped, err.Error())
 			}
 		}
+		for _, path := range paths {
+			if stale(opts.since, path) {
+				continue
+			}
+			id, err := telemetry.CodexSessionID(path)
+			if err != nil {
+				skipped = append(skipped, err.Error())
+				continue
+			}
+			if seen[id] || !want(id) {
+				continue
+			}
+			seen[id] = true
+			jobs = append(jobs, job{"codex", id, path, func() (*telemetry.Session, error) {
+				return telemetry.BuildCodex(path, ident, opts.until)
+			}})
+		}
 	}
-	if incomplete {
+	reportSkipped := func() {
+		if len(skipped) == 0 {
+			return
+		}
+		fmt.Fprintf(stderr, "Skipped %d session files that could not be read:\n", len(skipped))
+		for _, s := range skipped {
+			fmt.Fprintln(stderr, "  "+s)
+		}
+	}
+	if len(jobs) == 0 && len(skipped) > 0 {
+		reportSkipped()
 		return 1
 	}
 	sort.Slice(jobs, func(i, j int) bool {
@@ -219,11 +258,10 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 			progress(done, len(jobs))
 		}
 	}
-	report(0)
 
 	automaticOutput := opts.output == ""
 	if automaticOutput {
-		opts.output, err = os.MkdirTemp("", "navigara-backfill-")
+		opts.output, err = os.MkdirTemp("", "navigara-sessions-")
 	} else {
 		err = os.Mkdir(opts.output, 0700)
 	}
@@ -231,13 +269,19 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 		fmt.Fprintf(stderr, "navigara: output %q: %v\n", opts.output, err)
 		return 1
 	}
-	if automaticOutput {
+	if automaticOutput && sender != nil {
 		fmt.Fprintln(stdout, "Output:", opts.output)
 	}
-	// Prepare at most two sessions at a time, then encode, write and send their
-	// bodies serially in sorted session order.
+	report(0)
+	// Prepare at most two sessions at a time, then encode and write their bodies
+	// serially in sorted session order.
 	counts := map[string]int{}
-	exported, failed, events, points, bodies := 0, 0, 0, 0, 0
+	exported, events, points, bodies := 0, 0, 0, 0
+	defer func() {
+		if code != 0 && bodies == 0 {
+			os.Remove(opts.output) // Nothing to resume: drop the empty directory this run made.
+		}
+	}()
 	compressor := gzip.NewWriter(io.Discard)
 	defer compressor.Close()
 	estimated, partial := 0, 0
@@ -259,18 +303,10 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 		if err := writeRequest(path, data); err != nil {
 			return fmt.Errorf("output %q: %w", path, err)
 		}
-		if sender != nil {
-			if err := sender.post(ctx, telemetry.Body{Path: b.Path, Data: data}); err != nil {
-				return fmt.Errorf("send: %w (re-run without --output, or use a new --output directory: the receiver drops records it already has)", err)
-			}
-		}
 		return nil
 	})
 	interrupted := func() int {
 		fmt.Fprintln(stderr, "navigara: interrupted; the output is incomplete")
-		if sender != nil {
-			fmt.Fprintln(stderr, "navigara: re-run without --output, or use a new --output directory: the receiver drops records it already has")
-		}
 		return exitInterrupted
 	}
 	for index := 0; index < len(jobs); index += 2 {
@@ -298,8 +334,7 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 			j := jobs[index+pairIndex]
 			s, err := prepared[pairIndex].s, prepared[pairIndex].err
 			if err != nil {
-				failed++
-				fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
+				skipped = append(skipped, fmt.Sprintf("%q: %v", j.path, err))
 				report(index + pairIndex + 1)
 				continue
 			}
@@ -313,7 +348,7 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 				return interrupted()
 			}
 			if err != nil {
-				fmt.Fprintf(stderr, "navigara: %s: %v\n", j.id, err)
+				fmt.Fprintf(stderr, "navigara: %q: %v\n", j.path, err)
 				return 1
 			}
 			exported++
@@ -331,7 +366,7 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 			}
 			note := ""
 			if s.Estimated {
-				note = " cost=estimated"
+				note = ", cost estimated"
 			}
 			reasons := make([]string, 0, len(s.Missing))
 			for reason := range s.Missing {
@@ -339,9 +374,9 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 			}
 			sort.Strings(reasons)
 			for _, reason := range reasons {
-				note += fmt.Sprintf(" missing[%s]=%d", reason, s.Missing[reason])
+				note += fmt.Sprintf(", missing %s %d", reason, s.Missing[reason])
 			}
-			lines = append(lines, fmt.Sprintf("%s %s events=%d points=%d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
+			lines = append(lines, fmt.Sprintf("%s %s: activity events %d, usage measurements %d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
 		}
 	}
 	if ctx.Err() != nil {
@@ -360,19 +395,98 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 			fmt.Fprintf(stdout, "%d sessions have estimated costs; %d have fields unavailable in local history.\n", estimated, partial)
 		}
 	} else {
-		fmt.Fprintf(stdout, "sessions=%d failed=%d events=%d points=%d bodies=%d identity=%s\n",
-			exported, failed, events, points, bodies, firstNonEmpty(ident.Email, ident.CodexEmail, "anonymous"))
 		for _, line := range lines {
 			fmt.Fprintln(stdout, line)
 		}
+		fmt.Fprintf(stdout, "Sessions: %d. Upload batches: %d. Activity events: %d. Usage measurements: %d.\n", exported, bodies, events, points)
 	}
-	if sender != nil {
-		fmt.Fprintf(stdout, "sent=%d\n", sender.sent)
-	}
-	if failed > 0 {
+	reportSkipped()
+	if exported == 0 && len(skipped) > 0 {
 		return 1
 	}
-	return 0
+	if sender == nil {
+		if !opts.humanSummary {
+			fmt.Fprintf(stdout, "Dry run: nothing was sent. Request bodies are in %s.\n", opts.output)
+		}
+		return 0
+	}
+	if err := saveSetupBatches(opts.output, opts.url, opts.organizationID); err != nil {
+		fmt.Fprintf(stderr, "navigara: output %q: %v\n", opts.output, err)
+		return 1
+	}
+	return sendUpload(ctx, sender, opts.output, requested, stdout, stderr, uploaded)
+}
+
+// resumeUpload sends the batches of an earlier upload that the receiver has not accepted.
+func resumeUpload(ctx context.Context, opts options, stdout, stderr io.Writer, uploaded func(done, total int), retried func(string)) int {
+	requested := opts
+	opts.send = true
+	m, err := loadSetupBatches(opts.resume)
+	if err != nil {
+		fmt.Fprintf(stderr, "navigara: %q: %v\n", opts.resume, err)
+		return 1
+	}
+	// Check the frozen destination before any request carries a key.
+	wrongDestination := func() int {
+		fmt.Fprintf(stderr, "navigara: these upload batches belong to %s; resume them with --url %s or with navigara login for that host\n", m.URL, shellQuote(m.URL))
+		return 1
+	}
+	if opts.url != "" && otlpBase(opts.url) != otlpBase(m.URL) {
+		return wrongDestination()
+	}
+	if m.OrganizationID != "" && (opts.url != "" || opts.token != "" || opts.tokenExplicit) {
+		fmt.Fprintln(stderr, "navigara: these upload batches were prepared with navigara login; resume them without --url and --token so the organization can be checked")
+		return 1
+	}
+	if err := prepareUploadAccount(ctx, &opts, stderr); err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
+	if otlpBase(opts.url) != otlpBase(m.URL) {
+		return wrongDestination()
+	}
+	if m.OrganizationID != "" && m.OrganizationID != opts.organizationID {
+		fmt.Fprintln(stderr, "navigara: these upload batches belong to a different organization; run navigara login and select it")
+		return 1
+	}
+	s := newSender(opts.url, opts.token)
+	s.retried = retried
+	s.explicitKey = requested.url != "" || requested.token != "" || requested.tokenExplicit
+	if err := s.validate(); err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 2
+	}
+	if err := s.checkSetup(ctx); err != nil {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
+	return sendUpload(ctx, s, opts.resume, requested, stdout, stderr, uploaded)
+}
+
+// sendUpload sends the unsent batches in dir with the wizard's parallel sender. On failure it
+// prints the command that sends the rest.
+func sendUpload(ctx context.Context, s *sender, dir string, requested options, stdout, stderr io.Writer, uploaded func(done, total int)) int {
+	err := sendSetupBatches(ctx, dir, s, uploaded, true)
+	if err == nil {
+		fmt.Fprintf(stdout, "Navigara received %d upload batches.\n", s.sent)
+		return 0
+	}
+	code := 1
+	if ctx.Err() != nil {
+		err, code = errors.New("interrupted"), exitInterrupted
+	}
+	cmd := "navigara sessions upload --resume " + shellQuote(dir)
+	if requested.host != "" {
+		cmd += " --host " + shellQuote(requested.host)
+	}
+	if requested.url != "" {
+		cmd += " --url " + shellQuote(requested.url)
+	}
+	if requested.tokenExplicit {
+		cmd += " --token <Analytics Ingestor key>"
+	}
+	fmt.Fprintf(stderr, "navigara: %v\nTo send the remaining batches, run:\n  %s\n", err, cmd)
+	return code
 }
 
 // staleMargin covers coarse file times (1 s on HFS+) and the points a builder stamps just after

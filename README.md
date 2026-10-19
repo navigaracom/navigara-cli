@@ -17,10 +17,12 @@ navigara wizard
 
 | To… | Run… |
 | --- | --- |
-| Import all history | `navigara sessions upload --send` |
-| Import the past week | `navigara sessions upload --send --last 7d` |
-| Import only Claude history | `navigara sessions upload --send --source claude` |
-| Import only Codex history | `navigara sessions upload --send --source codex` |
+| Import all history | `navigara sessions upload` |
+| Import the past week | `navigara sessions upload --last 7d` |
+| Import only Claude history | `navigara sessions upload --source claude` |
+| Import only Codex history | `navigara sessions upload --source codex` |
+| See what would be sent, without sending | `navigara sessions upload --dry-run` |
+| Send the rest of a stopped upload | `navigara sessions upload --resume DIR` |
 | Enable future sync | `navigara sessions config patch --apply` |
 | Sync Codex only (requires bash or zsh) | `navigara sessions config patch --source codex --apply` |
 

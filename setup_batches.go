@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -107,7 +108,12 @@ func validBatch(data []byte) bool {
 	return err == nil && len(plain) <= maxOTLPBody && json.Valid(plain)
 }
 
-func sendSetupBatches(ctx context.Context, dir string, s *sender, uploaded func(done, total int)) error {
+// sentLog lists the batches the receiver accepted, one name per line.
+const sentLog = "sent.log"
+
+// sendSetupBatches posts the frozen batches in dir. With track, it skips the batches listed in
+// sent.log and adds each accepted batch to it.
+func sendSetupBatches(ctx context.Context, dir string, s *sender, uploaded func(done, total int), track bool) error {
 	m, err := loadSetupBatches(dir)
 	if err != nil {
 		return err
@@ -117,6 +123,20 @@ func sendSetupBatches(ctx context.Context, dir string, s *sender, uploaded func(
 	}
 	if err := s.validate(); err != nil {
 		return err
+	}
+	var log *os.File
+	var logMu sync.Mutex
+	if track {
+		data, err := os.ReadFile(filepath.Join(dir, sentLog))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		sent := strings.Fields(string(data))
+		m.Batches = slices.DeleteFunc(m.Batches, func(b setupBatch) bool { return slices.Contains(sent, b.Name) })
+		if log, err = os.OpenFile(filepath.Join(dir, sentLog), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600); err != nil {
+			return err
+		}
+		defer log.Close()
 	}
 	if uploaded != nil {
 		uploaded(0, len(m.Batches))
@@ -156,6 +176,11 @@ func sendSetupBatches(ctx context.Context, dir string, s *sender, uploaded func(
 				if err == nil {
 					kind, _, _ := strings.Cut(batch.Name, "-")
 					err = s.post(ctx, telemetry.Body{Path: "/v1/" + kind, Data: data})
+				}
+				if err == nil && log != nil {
+					logMu.Lock()
+					_, err = fmt.Fprintln(log, batch.Name)
+					logMu.Unlock()
 				}
 				if err != nil {
 					cancel(err)

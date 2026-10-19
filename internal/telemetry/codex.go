@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,30 +17,36 @@ import (
 )
 
 // CodexRollouts lists the rollout files under a Codex home, child threads included:
-// Codex reports each thread as its own session. Missing roots are optional.
+// Codex reports each thread as its own session. Missing roots are optional. An unreadable root
+// or directory is reported in the joined error, one error per path, and the rollouts found
+// elsewhere are still returned.
 func CodexRollouts(codexHome string) ([]string, error) {
 	var paths []string
+	var walkErrs []error
 	for _, dir := range []string{"sessions", "archived_sessions"} {
-		root, err := filepath.EvalSymlinks(filepath.Join(codexHome, dir))
+		name := filepath.Join(codexHome, dir)
+		root, err := filepath.EvalSymlinks(name)
 		if os.IsNotExist(err) {
 			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect Codex %s: %w", dir, err)
+		var info os.FileInfo
+		if err == nil {
+			info, err = os.Stat(root)
 		}
-		info, err := os.Stat(root)
 		if os.IsNotExist(err) {
 			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect Codex %s: %w", dir, err)
+		if err == nil && !info.IsDir() {
+			err = errors.New("not a directory")
 		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("inspect Codex %s: not a directory", dir)
+		if err != nil {
+			walkErrs = append(walkErrs, fmt.Errorf("inspect Codex %s %q: %w", dir, name, err))
+			continue
 		}
 		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return fmt.Errorf("walk Codex %s at %q: %w", dir, path, err)
+				walkErrs = append(walkErrs, fmt.Errorf("walk Codex %s at %q: %w", dir, path, err))
+				return nil
 			}
 			if d.Type().IsRegular() && strings.HasPrefix(d.Name(), "rollout-") && strings.HasSuffix(d.Name(), ".jsonl") {
 				paths = append(paths, path)
@@ -50,7 +57,7 @@ func CodexRollouts(codexHome string) ([]string, error) {
 		}
 	}
 	sort.Strings(paths)
-	return paths, nil
+	return paths, errors.Join(walkErrs...)
 }
 
 // CodexSessionID reads a rollout's thread id from its session_meta header.

@@ -78,10 +78,10 @@ func TestSetupBatchesRetryExactBodiesAndNoRescan(t *testing.T) {
 		mu.Unlock()
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 	})
-	if err := sendSetupBatches(context.Background(), d, s, nil); err != nil {
+	if err := sendSetupBatches(context.Background(), d, s, nil, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := sendSetupBatches(context.Background(), d, s, nil); err != nil {
+	if err := sendSetupBatches(context.Background(), d, s, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 4 {
@@ -120,7 +120,7 @@ func TestSetupBatchesRejectInvalidBeforeRequest(t *testing.T) {
 				requests.Add(1)
 				return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 			})
-			if err := sendSetupBatches(context.Background(), d, s, nil); err == nil {
+			if err := sendSetupBatches(context.Background(), d, s, nil, false); err == nil {
 				t.Fatal("accepted invalid batch")
 			}
 			if requests.Load() != 0 {
@@ -136,7 +136,7 @@ func TestSetupBatchesRejectInvalidBeforeRequest(t *testing.T) {
 			requests.Add(1)
 			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 		})
-		if err := sendSetupBatches(context.Background(), d, s, nil); err == nil {
+		if err := sendSetupBatches(context.Background(), d, s, nil, false); err == nil {
 			t.Fatal("accepted destination mismatch")
 		}
 		if requests.Load() != 0 {
@@ -178,7 +178,7 @@ func TestSetupBatchesReportOnlyAcceptedProgress(t *testing.T) {
 	var progress [][2]int
 	err := sendSetupBatches(context.Background(), d, s, func(done, total int) {
 		progress = append(progress, [2]int{done, total})
-	})
+	}, false)
 	if err == nil {
 		t.Fatal("accepted a rejected batch")
 	}
@@ -238,13 +238,13 @@ func TestSetupBatchesResumeAfterCancellation(t *testing.T) {
 		<-arrived
 		cancel()
 	}()
-	if err := sendSetupBatches(ctx, d, s, nil); !errors.Is(err, context.Canceled) {
+	if err := sendSetupBatches(ctx, d, s, nil, false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v, want context.Canceled", err)
 	}
 	mu.Lock()
 	hold = false
 	mu.Unlock()
-	if err := sendSetupBatches(context.Background(), d, s, nil); err != nil {
+	if err := sendSetupBatches(context.Background(), d, s, nil, false); err != nil {
 		t.Fatalf("resume after cancellation: %v", err)
 	}
 	// A request from the cancelled run may still reach the server late; the receiver drops

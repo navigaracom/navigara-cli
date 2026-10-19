@@ -72,7 +72,7 @@ func TestSetupBatchesUsesFourWorkersAndReportsAcceptedProgress(t *testing.T) {
 	var progress [][2]int
 	done := make(chan error, 1)
 	go func() {
-		done <- sendSetupBatches(context.Background(), d, s, func(n, total int) { progress = append(progress, [2]int{n, total}) })
+		done <- sendSetupBatches(context.Background(), d, s, func(n, total int) { progress = append(progress, [2]int{n, total}) }, false)
 	}()
 	for i := 0; i < 4; i++ {
 		select {
@@ -182,7 +182,7 @@ func TestSetupBatchesFatalAuthCancelsOtherRequests(t *testing.T) {
 			return nil, nil
 		}
 	})
-	err = sendSetupBatches(context.Background(), d, s, nil)
+	err = sendSetupBatches(context.Background(), d, s, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "Analytics Ingestor role") {
 		t.Fatalf("error=%v; want original auth rejection", err)
 	}

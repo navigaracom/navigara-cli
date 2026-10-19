@@ -44,7 +44,7 @@ func TestUploadUsesSavedAccountOnlyWithoutExplicitTransport(t *testing.T) {
 			case "offline":
 				opts.send = false
 			}
-			err := prepareUploadAccount(context.Background(), &opts)
+			err := prepareUploadAccount(context.Background(), &opts, io.Discard)
 			bad := mode == "url-only" || mode == "token-only" || mode == "other-host"
 			if (err != nil) != bad {
 				t.Fatalf("mode=%s err=%v", mode, err)

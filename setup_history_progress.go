@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -240,4 +242,75 @@ func (u *setupHistoryProgress) width() int {
 		return 0
 	}
 	return columns - 1 // Avoid a terminal's last-column autowrap.
+}
+
+// uploadProgress shows the wizard's progress bars on a terminal. Otherwise it prints a short
+// line at most every few seconds, so logs stay small.
+type uploadProgress struct {
+	out     io.Writer
+	history *setupHistoryProgress
+	upload  *setupProgress
+	last    time.Time
+}
+
+func newUploadProgress(out io.Writer) *uploadProgress {
+	u := &uploadProgress{out: out, last: time.Now()}
+	if p := newSetupInput(os.Stdin, out); p.interactive() {
+		u.history, u.upload = newSetupHistoryProgress(p), newSetupProgress(p)
+	}
+	return u
+}
+
+func (u *uploadProgress) prepared(done, total int) {
+	if u.history == nil {
+		u.line("Prepared %d/%d sessions", done, total)
+		return
+	}
+	u.history.discovering() // Restarts the bar after other output stopped it.
+	u.history.processed(done, total)
+}
+
+func (u *uploadProgress) sent(done, total int) {
+	if u.upload == nil {
+		u.line("Sent %d/%d batches", done, total)
+		return
+	}
+	u.history.stop()
+	u.upload.upload(done, total)
+}
+
+// retry prints a sender retry. On a terminal it redraws the upload bar below it.
+func (u *uploadProgress) retry(line string) {
+	if u.upload == nil {
+		fmt.Fprintln(u.out, line)
+		return
+	}
+	u.upload.retry(line)
+}
+
+// line always prints the final count, and the others at most every few seconds.
+func (u *uploadProgress) line(format string, done, total int) {
+	if total == 0 || (done < total && time.Since(u.last) < 3*time.Second) {
+		return
+	}
+	u.last = time.Now()
+	fmt.Fprintf(u.out, format+"\n", done, total)
+}
+
+func (u *uploadProgress) stop() {
+	if u.history != nil {
+		u.history.stop()
+		u.upload.stop()
+	}
+}
+
+// progressWriter ends a progress line before other output reaches the terminal.
+type progressWriter struct {
+	io.Writer
+	stop func()
+}
+
+func (w progressWriter) Write(p []byte) (int, error) {
+	w.stop()
+	return w.Writer.Write(p)
 }

@@ -28,8 +28,10 @@ type options struct {
 	humanSummary          bool
 	replaceCodexTelemetry bool
 	send                  bool
+	resume                string
 	host, url, token      string
 	tokenExplicit         bool
+	organizationID        string
 }
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
@@ -81,7 +83,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return invalid("unknown command: sessions " + args[0])
 	}
 	var opts options
-	var help, shortHelp bool
+	var help, shortHelp, dryRun, send bool
 	fs := flag.NewFlagSet("sessions upload", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {}
@@ -116,12 +118,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	})
 	fs.StringVar(&opts.email, "email", "", "email to attribute the sessions to (default: the signed-in account)")
 	fs.BoolVar(&opts.allowAnonymous, "allow-anonymous", false, "export without a user email")
-	fs.BoolVar(&opts.send, "send", false, "post the request bodies using saved login or --url and --token")
-	fs.StringVar(&opts.host, "host", "", "Navigara origin for --send with saved login (default saved host)")
+	fs.BoolVar(&dryRun, "dry-run", false, "write the request bodies to --output, but do not send them")
+	fs.BoolVar(&send, "send", false, "no effect; upload sends by default (kept for old scripts)")
+	fs.StringVar(&opts.resume, "resume", "", "send the batches of an earlier upload in DIR that Navigara did not receive")
+	fs.StringVar(&opts.host, "host", "", "Navigara origin with saved login (default saved host)")
 	fs.StringVar(&opts.url, "url", "", "Navigara base URL, for example https://app.navigara.com")
-	fs.StringVar(&opts.token, "token", "", "API key with the analytics ingestor role (default $NAVIGARA_TOKEN)")
+	fs.StringVar(&opts.token, "token", "", "Analytics Ingestor key (default $NAVIGARA_TOKEN)")
 	var last time.Duration
-	fs.Func("last", "only export points from the last duration (for example 24h or 7d)", func(value string) error {
+	fs.Func("last", "only export records from the last duration (for example 24h or 7d)", func(value string) error {
 		parsed, err := parseLast(value)
 		if err != nil {
 			return err
@@ -140,7 +144,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	var emptyPath string
 	fs.Visit(func(f *flag.Flag) {
-		if (f.Name == "output" || f.Name == "claude-home" || f.Name == "codex-home") && f.Value.String() == "" {
+		if (f.Name == "output" || f.Name == "claude-home" || f.Name == "codex-home" || f.Name == "resume") && f.Value.String() == "" {
 			emptyPath = f.Name
 		}
 	})
@@ -148,16 +152,27 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return invalid("--" + emptyPath + " must not be empty")
 	}
 	if help || shortHelp {
-		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]")
+		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]\n       navigara sessions upload --resume DIR")
 		fs.SetOutput(stdout)
 		fs.PrintDefaults()
 		return 0
 	}
+	if dryRun && send {
+		return invalid("use either --dry-run or --send")
+	}
+	var resumeConflict string
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "token" {
 			opts.tokenExplicit = true
 		}
+		if opts.resume != "" && f.Name != "resume" && f.Name != "host" && f.Name != "url" && f.Name != "token" && f.Name != "send" {
+			resumeConflict = f.Name
+		}
 	})
+	if resumeConflict != "" {
+		return invalid("--resume cannot be used with --" + resumeConflict)
+	}
+	opts.send = !dryRun
 	if !opts.tokenExplicit {
 		opts.token = os.Getenv("NAVIGARA_TOKEN")
 	}

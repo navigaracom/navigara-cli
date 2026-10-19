@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +61,12 @@ type received struct {
 }
 
 func TestUploadSendsPinnedSessions(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "legacy --send"}[legacy], func(t *testing.T) { testUploadSendsPinnedSessions(t, legacy) })
+	}
+}
+
+func testUploadSendsPinnedSessions(t *testing.T, legacy bool) {
 	claudeHome, codexHome := fixtureHomes(t)
 	var got received
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,15 +90,24 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 	defer server.Close()
 
 	output := filepath.Join(t.TempDir(), "out")
+	args := []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
+		"--session", "aaaaaaaa-0000-0000-0000-000000000002", "--output", output, "--url", server.URL, "--token", "secret"}
+	if legacy {
+		args = append(args, "--send")
+	}
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
-		"--session", "aaaaaaaa-0000-0000-0000-000000000002", "--output", output,
-		"--send", "--url", server.URL, "--token", "secret"}, &stdout, &stderr)
+	code := run(context.Background(), args, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
-	if len(got.paths) != 2 || got.paths[0] != "/otlp/v1/logs" || got.paths[1] != "/otlp/v1/metrics" {
-		t.Fatalf("posted %v, want logs then metrics", got.paths)
+	if !strings.Contains(stdout.String(), "Sessions: 1. Upload batches: 2.") || !strings.HasSuffix(stdout.String(), "Navigara received 2 upload batches.\n") {
+		t.Errorf("stdout = %q", stdout.String())
+	}
+	if len(got.paths) != 2 || got.paths[0] == got.paths[1] {
+		t.Fatalf("posted %v, want logs and metrics", got.paths)
+	}
+	if got.paths[0] != "/otlp/v1/logs" {
+		got.bodies[0], got.bodies[1] = got.bodies[1], got.bodies[0]
 	}
 	all := strings.Join(got.bodies, "")
 	if strings.Contains(all, "000000000001") || !strings.Contains(all, "000000000002") {
@@ -109,6 +125,198 @@ func TestUploadSendsPinnedSessions(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(output, "*.json.gz"))
 	if len(files) != 2 {
 		t.Errorf("wrote %d files, want 2", len(files))
+	}
+	if _, err := loadSetupBatches(output); err != nil {
+		t.Errorf("no upload manifest: %v", err)
+	}
+}
+
+func TestUploadDryRunSendsNothing(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	output := filepath.Join(t.TempDir(), "out")
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome, "--codex-home", codexHome,
+		"--output", output, "--url", "https://127.0.0.1:1/api", "--token", "secret"}, &stdout, &stderr)
+	if code != 0 || stderr.String() != "Prepared 2/2 sessions\n" {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if want := "Dry run: nothing was sent. Request bodies are in " + output + ".\n"; !strings.HasSuffix(stdout.String(), want) {
+		t.Fatalf("stdout = %q, want suffix %q", stdout.String(), want)
+	}
+	if files, _ := filepath.Glob(filepath.Join(output, "*.json.gz")); len(files) == 0 {
+		t.Fatal("dry run wrote no request bodies")
+	}
+	for _, word := range []string{"points", "="} {
+		if strings.Contains(stdout.String(), word) {
+			t.Errorf("summary uses %q: %q", word, stdout.String())
+		}
+	}
+}
+
+// A dry run attributes sessions to the same email as a send: the Navigara login, not the tool's
+// local account.
+func TestUploadDryRunUsesLoginEmail(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	config := `{"oauthAccount":{"emailAddress":"local@example.com"}}`
+	if err := os.WriteFile(filepath.Join(filepath.Dir(claudeHome), ".claude.json"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(filepath.Dir(claudeHome), "config"))
+	t.Setenv("NAVIGARA_TOKEN", "")
+	var batches atomic.Int32
+	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if string(mustBody(r)) != "{}" {
+			batches.Add(1)
+		}
+		w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+	}))
+	defer srv.Close()
+	lines := map[bool]string{}
+	for _, dry := range []bool{true, false} {
+		args := []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}
+		if dry {
+			args = append(args, "--dry-run")
+		}
+		var stdout, stderr bytes.Buffer
+		if code := run(context.Background(), args, &stdout, &stderr); code != 0 {
+			t.Fatalf("dry=%v exit=%d stderr=%q", dry, code, stderr.String())
+		}
+		lines[dry], _, _ = strings.Cut(stdout.String(), "\n")
+		if dry && batches.Load() != 0 {
+			t.Fatal("dry run sent batches")
+		}
+	}
+	if want := "Sessions will be attributed to dev@example.com."; lines[true] != want || lines[false] != want {
+		t.Fatalf("dry run %q, send %q, want %q", lines[true], lines[false], want)
+	}
+}
+
+func TestUploadResumeSendsOnlyUnsentBatches(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	output := filepath.Join(t.TempDir(), "it's $HOME `x`")
+	var failLogs atomic.Bool
+	failLogs.Store(true)
+	var mu sync.Mutex
+	var posted []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if string(mustBody(r)) == "{}" {
+			w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+			return
+		}
+		if r.URL.Path == "/otlp/v1/logs" && failLogs.Load() {
+			// Fail only once the metrics batch is recorded, so the first run sends exactly one batch.
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if data, _ := os.ReadFile(filepath.Join(output, sentLog)); strings.Contains(string(data), "metrics") {
+					break
+				}
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		posted = append(posted, r.URL.Path)
+		mu.Unlock()
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
+		"--output", output, "--url", server.URL, "--token", "secret"}, &stdout, &stderr)
+	_, cmd, _ := strings.Cut(stderr.String(), "\n  navigara ")
+	cmd, ok := strings.CutSuffix(cmd, " --token <Analytics Ingestor key>\n")
+	if code != 1 || !ok {
+		t.Fatalf("exit=%d stderr=%q, want a resume command", code, stderr.String())
+	}
+	// The shell must pass every argument through unchanged.
+	words, err := exec.Command("sh", "-c", `printf '%s\n' `+cmd).Output()
+	if want := strings.Join([]string{"sessions", "upload", "--resume", output, "--url", server.URL}, "\n") + "\n"; err != nil || string(words) != want {
+		t.Fatalf("shell read %q (%v), want %q", words, err, want)
+	}
+	if !reflect.DeepEqual(posted, []string{"/otlp/v1/metrics"}) {
+		t.Fatalf("first run posted %v", posted)
+	}
+
+	failLogs.Store(false)
+	posted = nil
+	stdout.Reset()
+	stderr.Reset()
+	code = run(context.Background(), []string{"sessions", "upload", "--resume", output, "--url", server.URL, "--token", "secret"}, &stdout, &stderr)
+	if code != 0 || stdout.String() != "Navigara received 1 upload batches.\n" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !reflect.DeepEqual(posted, []string{"/otlp/v1/logs"}) {
+		t.Fatalf("resume posted %v, want only the unsent logs batch", posted)
+	}
+
+	posted = nil
+	stdout.Reset()
+	if code = run(context.Background(), []string{"sessions", "upload", "--resume", output, "--url", server.URL, "--token", "secret"}, &stdout, &stderr); code != 0 || len(posted) != 0 {
+		t.Fatalf("exit=%d posted=%v after every batch was sent", code, posted)
+	}
+}
+
+func TestUploadProgressLinesWithoutTerminal(t *testing.T) {
+	var out bytes.Buffer
+	u := &uploadProgress{out: &out}
+	u.prepared(1, 4)
+	u.prepared(2, 4) // Within a few seconds of the last line.
+	u.last = time.Time{}
+	u.sent(3, 9)
+	u.prepared(4, 4) // The final count prints within the few seconds too.
+	u.sent(0, 0)
+	u.retry("Upload failed (HTTP 503), retrying")
+	if out.String() != "Prepared 1/4 sessions\nSent 3/9 batches\nPrepared 4/4 sessions\nUpload failed (HTTP 503), retrying\n" {
+		t.Fatalf("progress = %q", out.String())
+	}
+}
+
+// A resume checks the frozen destination and organization before any request carries a key.
+func TestUploadResumeKeepsTheKeyAwayFromAnotherDestination(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
+	defer server.Close()
+	for _, tc := range []struct{ name, frozenURL, org, want string }{
+		{"other destination", "https://frozen.example/api", "", "belong to https://frozen.example/api"},
+		{"login organization with a key", server.URL, "org-1", "prepared with navigara login"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			body, err := gzipBody([]byte(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeRequest(filepath.Join(dir, "logs-000001.json.gz"), body); err != nil {
+				t.Fatal(err)
+			}
+			if err := saveSetupBatches(dir, tc.frozenURL, tc.org); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"sessions", "upload", "--resume", dir, "--url", server.URL, "--token", "secret"}, &stdout, &stderr)
+			if code != 1 || !strings.Contains(stderr.String(), tc.want) || requests.Load() != 0 {
+				t.Fatalf("exit=%d requests=%d stderr=%q", code, requests.Load(), stderr.String())
+			}
+		})
+	}
+}
+
+// Sessions outside the window do not count: when every session in it fails, the run fails and
+// removes the empty output directory it made.
+func TestUploadFailsWhenEverySessionInTheWindowFails(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	bad := filepath.Join(claudeHome, "projects", "-repo", "bbbbbbbb-0000-0000-0000-000000000001.jsonl")
+	if err := os.WriteFile(bad, []byte("{malformed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "out")
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome,
+		"--codex-home", codexHome, "--since", "2026-10-02T00:00:00Z", "--output", output}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "Skipped 1 session files") || !strings.Contains(stdout.String(), "Sessions: 0.") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("failed run left its empty output directory: %v", err)
 	}
 }
 
@@ -140,7 +348,7 @@ func TestExportProgressCountsFilteredSessions(t *testing.T) {
 	if !reflect.DeepEqual(processed, [][2]int{{0, 2}, {1, 2}, {2, 2}}) {
 		t.Fatalf("processed = %#v", processed)
 	}
-	if got := stdout.String(); !strings.HasPrefix(got, "sessions=0 failed=0") {
+	if got := stdout.String(); !strings.Contains(got, "Sessions: 0.") {
 		t.Fatalf("filtered history changed command output: %q", got)
 	}
 }
@@ -172,12 +380,12 @@ func TestUploadPinnedCodexForkNeedsNoParentRollout(t *testing.T) {
 		parentHeader, body,
 	)
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "codex", "--email", "dev@example.com",
 		"--claude-home", claudeHome, "--codex-home", codexHome, "--session", "child", "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
-	if code != 0 || stderr.Len() != 0 {
+	if code != 0 || noProgress(stderr.String()) != "" {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "sessions=1 failed=0 events=1 points=0") || strings.Contains(stdout.String(), "parent") {
+	if !strings.Contains(stdout.String(), "Sessions: 1. Upload batches: 1. Activity events: 1. Usage measurements: 0.") || strings.Contains(stdout.String(), "parent") {
 		t.Fatalf("unexpected export summary: %q", stdout.String())
 	}
 }
@@ -197,6 +405,7 @@ func TestUploadStopsOnRejectedKey(t *testing.T) {
 }
 
 func TestUploadNeedsAnIdentity(t *testing.T) {
+	withConfigHome(t)
 	root := t.TempDir()
 	for _, home := range []string{".claude", ".codex"} {
 		if err := os.MkdirAll(filepath.Join(root, home), 0o700); err != nil {
@@ -204,7 +413,7 @@ func TestUploadNeedsAnIdentity(t *testing.T) {
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", filepath.Join(root, ".claude"), "--codex-home", filepath.Join(root, ".codex"),
+	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--claude-home", filepath.Join(root, ".claude"), "--codex-home", filepath.Join(root, ".codex"),
 		"--output", filepath.Join(root, "out")}, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "--email") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -219,7 +428,7 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 		root := t.TempDir()
 		output := filepath.Join(root, "out")
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--email", "dev@example.com",
+		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--email", "dev@example.com",
 			"--claude-home", filepath.Join(root, "missing"), "--codex-home", filepath.Join(root, "codex"), "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "missing") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -229,23 +438,51 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed transcript", func(t *testing.T) {
+	t.Run("only unreadable transcripts", func(t *testing.T) {
 		claudeHome, codexHome := fixtureHomes(t)
-		bad := filepath.Join(claudeHome, "projects", "-repo", "aaaaaaaa-0000-0000-0000-000000000001.jsonl")
-		if err := os.WriteFile(bad, []byte("{malformed\n"), 0o600); err != nil {
+		var bad []string
+		for _, id := range []string{"1", "2"} {
+			path := filepath.Join(claudeHome, "projects", "-repo", "aaaaaaaa-0000-0000-0000-00000000000"+id+".jsonl")
+			if err := os.WriteFile(path, []byte("{malformed\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			bad = append(bad, path)
+		}
+		if err := os.Chmod(bad[1], 0); err != nil {
 			t.Fatal(err)
 		}
 		output := filepath.Join(t.TempDir(), "out")
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome,
+		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome,
 			"--codex-home", codexHome, "--output", output}, &stdout, &stderr)
-		if code != 1 || !strings.Contains(stderr.String(), "line 1") {
+		if code != 1 || !strings.Contains(stderr.String(), "Skipped 2 session files that could not be read:") ||
+			!strings.Contains(stderr.String(), bad[0]) || !strings.Contains(stderr.String(), bad[1]) {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 		}
 		if _, err := os.Stat(output); !os.IsNotExist(err) {
 			t.Fatalf("output created after failed discovery: %v", err)
 		}
 	})
+}
+
+func TestUploadSkipsUnreadableTranscripts(t *testing.T) {
+	claudeHome, codexHome := fixtureHomes(t)
+	claudeHome, _ = filepath.EvalSymlinks(claudeHome)
+	malformed := filepath.Join(claudeHome, "projects", "-repo", "aaaaaaaa-0000-0000-0000-000000000001.jsonl")
+	if err := os.WriteFile(malformed, []byte("{malformed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unreadable := filepath.Join(claudeHome, "projects", "-repo", "aaaaaaaa-0000-0000-0000-000000000003.jsonl")
+	if err := os.WriteFile(unreadable, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome,
+		"--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
+	report := fmt.Sprintf("Skipped 2 session files that could not be read:\n  %q: \"line 1: invalid JSON record\"\n  %q: \"permission denied\"\n", malformed, unreadable)
+	if code != 0 || noProgress(stderr.String()) != report || !strings.Contains(stdout.String(), "Sessions: 1.") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q, want report %q", code, stdout.String(), stderr.String(), report)
+	}
 }
 
 func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
@@ -256,7 +493,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 		}
 		output := filepath.Join(t.TempDir(), "out")
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), []string{"sessions", "upload", "--source", "all", "--claude-home", claudeHome,
+		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "all", "--claude-home", claudeHome,
 			"--codex-home", codexHome, "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "Codex home") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -271,7 +508,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 		missing := filepath.Join(root, "missing")
 		output := filepath.Join(root, "out")
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "codex", "--email", "dev@example.com",
 			"--claude-home", filepath.Join(root, "claude"), "--codex-home", missing, "--output", output}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "missing") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -292,9 +529,9 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 		}
 		output := filepath.Join(t.TempDir(), "out")
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "codex", "--email", "dev@example.com",
 			"--claude-home", claudeHome, "--codex-home", codexHome, "--output", output}, &stdout, &stderr)
-		if code != 1 || !strings.Contains(stderr.String(), "invalid Codex rollout header") {
+		if code != 1 || !strings.Contains(stderr.String(), "invalid Codex rollout header") || !strings.Contains(stderr.String(), rollout) {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 		}
 		if _, err := os.Stat(output); !os.IsNotExist(err) {
@@ -308,7 +545,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 			t.Fatal(err)
 		}
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com",
+		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "codex", "--email", "dev@example.com",
 			"--claude-home", claudeHome, "--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "not a directory") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -316,7 +553,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 	})
 }
 
-func TestUploadReportsBuildFailuresAfterSendingOtherSessions(t *testing.T) {
+func TestUploadSkipsBuildFailuresAndSendsOtherSessions(t *testing.T) {
 	for _, send := range []bool{false, true} {
 		t.Run(map[bool]string{false: "dry run", true: "send"}[send], func(t *testing.T) {
 			claudeHome, codexHome := fixtureHomes(t)
@@ -339,13 +576,16 @@ func TestUploadReportsBuildFailuresAfterSendingOtherSessions(t *testing.T) {
 			}))
 			defer server.Close()
 			args := []string{"sessions", "upload", "--source", "codex", "--email", "dev@example.com", "--claude-home", claudeHome,
-				"--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}
-			if send {
-				args = append(args, "--send", "--url", server.URL, "--token", "secret")
+				"--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out"), "--url", server.URL, "--token", "secret"}
+			if !send {
+				args = append(args, "--dry-run")
 			}
 			var stdout, stderr bytes.Buffer
 			code := run(context.Background(), args, &stdout, &stderr)
-			if code != 1 || (send && requests.Load() == 0) || (!send && requests.Load() != 0) || !strings.Contains(stdout.String(), "failed=1") || !strings.Contains(stderr.String(), "bad") {
+			codexHome, _ = filepath.EvalSymlinks(codexHome)
+			bad := filepath.Join(codexHome, "sessions", "rollout-bad.jsonl")
+			if code != 0 || (send && requests.Load() == 0) || (!send && requests.Load() != 0) || !strings.Contains(stdout.String(), "Sessions: 1.") ||
+				!strings.Contains(stderr.String(), "Skipped 1 session files that could not be read:\n  \""+bad+"\": line 2") {
 				t.Fatalf("exit=%d requests=%d stdout=%q stderr=%q", code, requests.Load(), stdout.String(), stderr.String())
 			}
 		})
@@ -363,7 +603,7 @@ func TestUploadSkipsASourceWithoutItsOwnEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
+	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--claude-home", claudeHome, "--codex-home", codexHome,
 		"--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 	if code != 0 || !strings.Contains(stderr.String(), "skipping Codex") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
@@ -467,7 +707,7 @@ func TestCommitIndexKeepsADeletedBranchCommit(t *testing.T) {
 func TestUploadIgnoresUnselectedExplicitHome(t *testing.T) {
 	claudeHome, _ := fixtureHomes(t)
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"sessions", "upload", "--source", "claude", "--claude-home", claudeHome,
+	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome,
 		"--codex-home", filepath.Join(t.TempDir(), "missing"), "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 	if code != 0 || !strings.Contains(stdout.String(), "claude_code") {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -505,8 +745,8 @@ func TestUploadUntilExcludesFutureSessions(t *testing.T) {
 				t.Run(window.until, func(t *testing.T) {
 					out := filepath.Join(t.TempDir(), "out")
 					var stdout, stderr bytes.Buffer
-					code := run(context.Background(), []string{"sessions", "upload", "--source", source, "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome, "--until", window.until, "--output", out}, &stdout, &stderr)
-					if code != 0 || !strings.Contains(stdout.String(), fmt.Sprintf("sessions=%d failed=0", window.want)) || stderr.Len() != 0 {
+					code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", source, "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome, "--until", window.until, "--output", out}, &stdout, &stderr)
+					if code != 0 || !strings.Contains(stdout.String(), fmt.Sprintf("Sessions: %d.", window.want)) || noProgress(stderr.String()) != "" {
 						t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 					}
 					files, err := filepath.Glob(filepath.Join(out, "*.json.gz"))
@@ -557,12 +797,12 @@ func TestUploadSkipsHistoryThatEndsBeforeSince(t *testing.T) {
 	upload := func(since string) (int, string) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), []string{"sessions", "upload", "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome,
+		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--email", "dev@example.com", "--claude-home", claudeHome, "--codex-home", codexHome,
 			"--since", since, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
 		return code, stdout.String() + stderr.String()
 	}
 
-	// Old histories hold an invalid row: reading them would fail the upload.
+	// Old histories hold an invalid row: reading them would report them as skipped.
 	dir := filepath.Join(claudeHome, "projects", "-repo")
 	write(filepath.Join(dir, "c-old.jsonl"), old, claudeRow("c-old", "2025-01-01T00:00:00Z"), `not json`, claudeRow("c-old", "2025-01-01T00:00:01Z"))
 	write(filepath.Join(codexHome, "sessions", "rollout-x-old.jsonl"), old, codexMeta("x-old", "2025-01-01T00:00:00Z"), `not json`,
@@ -579,7 +819,7 @@ func TestUploadSkipsHistoryThatEndsBeforeSince(t *testing.T) {
 		`{"type":"user","sessionId":"c-sub","isSidechain":true,"timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"x"}}`)
 
 	code, got := upload("2026-09-01T00:00:00Z")
-	if code != 0 || !strings.Contains(got, "sessions=4 failed=0") {
+	if code != 0 || !strings.Contains(got, "Sessions: 4.") {
 		t.Fatalf("exit=%d output=%q; want the skewed, cost-state and subagent sessions only", code, got)
 	}
 	for _, id := range []string{"claude_code c-cost", "claude_code c-skew", "claude_code c-sub", "codex x-skew"} {
@@ -587,7 +827,7 @@ func TestUploadSkipsHistoryThatEndsBeforeSince(t *testing.T) {
 			t.Errorf("missing %s in %q", id, got)
 		}
 	}
-	if code, got := upload("2024-01-01T00:00:00Z"); code == 0 {
+	if _, got := upload("2024-01-01T00:00:00Z"); !strings.Contains(got, "Skipped 2 session files") {
 		t.Fatalf("read nothing old: %q", got)
 	}
 }
@@ -628,3 +868,39 @@ func TestExportReportsInterruptAfterLastSession(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%q, want an interrupted export", code, stderr.String())
 	}
 }
+
+func TestUploadDryRunNeedsNoUsableLogin(t *testing.T) {
+	offline := httptest.NewServer(http.NotFoundHandler())
+	offline.Close()
+	for _, mode := range []string{"env token", "expired session", "auth server offline"} {
+		t.Run(mode, func(t *testing.T) {
+			claudeHome, codexHome := fixtureHomes(t)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(filepath.Dir(claudeHome), "config"))
+			t.Setenv("NAVIGARA_TOKEN", "env-secret")
+			if mode != "env token" {
+				expires := time.Now().Add(time.Hour)
+				if mode == "expired session" {
+					expires = time.Now().Add(-time.Hour)
+				}
+				if err := saveAccount(accountConfig{Host: offline.URL, SessionToken: "session-secret", SessionExpiresAt: expires,
+					UserID: "user-1", Email: "login@example.com", OrganizationID: "org-1"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome,
+				"--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
+			if code != 0 || !strings.HasPrefix(stdout.String(), "Sessions will be attributed to dev@example.com.\n") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if note := strings.Contains(stderr.String(), "Saved login could not be checked"); note != (mode != "env token") {
+				t.Fatalf("stderr=%q", stderr.String())
+			}
+		})
+	}
+}
+
+var progressLine = regexp.MustCompile(`(?m)^(Prepared \d+/\d+ sessions|Sent \d+/\d+ batches)\n`)
+
+// noProgress drops the progress lines that an upload without a terminal prints.
+func noProgress(s string) string { return progressLine.ReplaceAllString(s, "") }
