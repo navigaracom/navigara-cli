@@ -449,12 +449,12 @@ func sendUpload(ctx context.Context, s *sender, dir string, requested options, s
 	if ctx.Err() != nil {
 		err, code = errors.New("interrupted"), exitInterrupted
 	}
-	cmd := fmt.Sprintf("navigara sessions upload --resume %q", dir)
+	cmd := "navigara sessions upload --resume " + shellQuote(dir)
 	if requested.host != "" {
-		cmd += " --host " + requested.host
+		cmd += " --host " + shellQuote(requested.host)
 	}
 	if requested.url != "" {
-		cmd += " --url " + requested.url
+		cmd += " --url " + shellQuote(requested.url)
 	}
 	if requested.tokenExplicit {
 		cmd += " --token <Analytics Ingestor key>"

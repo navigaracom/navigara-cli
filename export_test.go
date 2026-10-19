@@ -192,7 +192,7 @@ func TestUploadDryRunUsesLoginEmail(t *testing.T) {
 
 func TestUploadResumeSendsOnlyUnsentBatches(t *testing.T) {
 	claudeHome, codexHome := fixtureHomes(t)
-	output := filepath.Join(t.TempDir(), "out")
+	output := filepath.Join(t.TempDir(), "it's $HOME `x`")
 	var failLogs atomic.Bool
 	failLogs.Store(true)
 	var mu sync.Mutex
@@ -221,9 +221,15 @@ func TestUploadResumeSendsOnlyUnsentBatches(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
 		"--output", output, "--url", server.URL, "--token", "secret"}, &stdout, &stderr)
-	want := fmt.Sprintf("navigara sessions upload --resume %q --url %s --token <Analytics Ingestor key>", output, server.URL)
-	if code != 1 || !strings.Contains(stderr.String(), want) {
-		t.Fatalf("exit=%d stderr=%q, want resume command %q", code, stderr.String(), want)
+	_, cmd, _ := strings.Cut(stderr.String(), "\n  navigara ")
+	cmd, ok := strings.CutSuffix(cmd, " --token <Analytics Ingestor key>\n")
+	if code != 1 || !ok {
+		t.Fatalf("exit=%d stderr=%q, want a resume command", code, stderr.String())
+	}
+	// The shell must pass every argument through unchanged.
+	words, err := exec.Command("sh", "-c", `printf '%s\n' `+cmd).Output()
+	if want := strings.Join([]string{"sessions", "upload", "--resume", output, "--url", server.URL}, "\n") + "\n"; err != nil || string(words) != want {
+		t.Fatalf("shell read %q (%v), want %q", words, err, want)
 	}
 	if !reflect.DeepEqual(posted, []string{"/otlp/v1/metrics"}) {
 		t.Fatalf("first run posted %v", posted)
