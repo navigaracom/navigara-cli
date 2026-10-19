@@ -97,8 +97,11 @@ func claudeLink(home string) (toolLink, error) {
 	}
 	env := settings.Env
 	token, hasToken := strings.CutPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ")
-	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "" || !hasToken {
+	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || env["OTEL_METRICS_EXPORTER"] != "otlp" || env["OTEL_LOGS_EXPORTER"] != "otlp" || env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "" || !hasToken {
 		return toolLink{}, errors.New("telemetry is not set up; run navigara wizard")
+	}
+	if err := validateClaudeEnv(env, env["OTEL_EXPORTER_OTLP_ENDPOINT"], token); err != nil {
+		return toolLink{}, err
 	}
 	return toolLink{endpoint: env["OTEL_EXPORTER_OTLP_ENDPOINT"], token: token, email: enduserID(env["OTEL_RESOURCE_ATTRIBUTES"])}, nil
 }
@@ -115,49 +118,54 @@ func codexLink(home string) (toolLink, error) {
 	if err != nil {
 		return toolLink{}, err
 	}
+	type exporter struct {
+		OTLP struct {
+			Endpoint string            `toml:"endpoint"`
+			Headers  map[string]string `toml:"headers"`
+		} `toml:"otlp-http"`
+	}
 	var block struct {
 		OTEL struct {
-			Metrics struct {
-				OTLP struct {
-					Endpoint string            `toml:"endpoint"`
-					Headers  map[string]string `toml:"headers"`
-				} `toml:"otlp-http"`
-			} `toml:"metrics_exporter"`
+			Metrics exporter `toml:"metrics_exporter"`
+			Logs    exporter `toml:"exporter"`
 		} `toml:"otel"`
 	}
 	if start == end || toml.Unmarshal(data[start:end], &block) != nil {
 		return toolLink{}, errors.New("no Navigara block in config.toml; run navigara wizard")
 	}
-	metrics := block.OTEL.Metrics.OTLP
-	endpoint, hasEndpoint := strings.CutSuffix(metrics.Endpoint, "/v1/metrics")
-	token, hasToken := strings.CutPrefix(metrics.Headers["Authorization"], "Bearer ")
-	if !hasEndpoint || !hasToken {
+	endpoint, hasEndpoint := strings.CutSuffix(block.OTEL.Metrics.OTLP.Endpoint, "/v1/metrics")
+	token, hasToken := strings.CutPrefix(block.OTEL.Metrics.OTLP.Headers["Authorization"], "Bearer ")
+	logs := block.OTEL.Logs.OTLP
+	if !hasEndpoint || !hasToken || logs.Endpoint != endpoint+"/v1/logs" || logs.Headers["Authorization"] != "Bearer "+token {
 		return toolLink{}, errors.New("the Navigara block in config.toml is not complete; run navigara wizard")
 	}
 	return toolLink{endpoint: endpoint, token: token, email: shellEmail()}, nil
 }
 
-// shellEmail reads the email that setup exports to Codex from the shell profile.
+// shellEmail reads the email that setup exports to Codex from the profile of the user's shell.
 func shellEmail() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	for _, path := range []string{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc"), filepath.Join(home, ".bashrc")} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		start, end, err := managedRange(data)
-		if err != nil || start == end {
-			continue
-		}
-		_, value, found := strings.Cut(string(data[start:end]), "enduser.id=\"'")
-		if value, _, closed := strings.Cut(value, "'\n"); found && closed {
-			return strings.ReplaceAll(value, `'"'"'`, "'")
-		}
+	profile := filepath.Join(home, ".bashrc")
+	if filepath.Base(os.Getenv("SHELL")) == "zsh" {
+		profile = filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc")
 	}
-	return ""
+	data, err := os.ReadFile(profile)
+	if err != nil {
+		return ""
+	}
+	start, end, err := managedRange(data)
+	if err != nil {
+		return ""
+	}
+	_, value, found := strings.Cut(string(data[start:end]), "enduser.id=\"'")
+	value, _, closed := strings.Cut(value, "'\n")
+	if !found || !closed {
+		return ""
+	}
+	return strings.ReplaceAll(value, `'"'"'`, "'")
 }
 
 func enduserID(attrs string) string {
