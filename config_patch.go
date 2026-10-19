@@ -53,10 +53,23 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		if !tokenFlag {
 			opts.token = envToken
 		}
-		host := firstNonEmpty(opts.host, defaultHost)
+		if opts.email == "" {
+			message := "--email is required with --token."
+			if !tokenFlag {
+				message = "NAVIGARA_TOKEN is set; --email is required with a token."
+			}
+			fmt.Fprintln(stderr, "navigara:", message)
+			return 1
+		}
 		var err error
-		if opts.host, err = canonicalHost(host); err != nil {
-			fmt.Fprintln(stderr, "navigara:", err)
+		if opts.host == "" {
+			opts.host = defaultHost
+			if saved, err := loadAccount(""); err == nil && saved.UserID != "" {
+				opts.host = saved.Host
+				fmt.Fprintf(stdout, "Using the host of your saved login: %s\n", opts.host)
+			}
+		} else if opts.host, err = canonicalHost(opts.host); err != nil {
+			fmt.Fprintln(stderr, "navigara:", errHostFormat)
 			return 1
 		}
 		if err := validEmail(opts.email); err != nil {
@@ -112,7 +125,7 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 
 	var c accountConfig
 	if !directToken {
-		c, err = verifiedAccount(ctx, opts.host)
+		c, err = signedInAccount(ctx, opts.host, "navigara sessions config patch", stderr)
 		if err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 1

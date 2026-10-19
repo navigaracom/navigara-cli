@@ -306,8 +306,9 @@ func TestConfigPatchTokenRejectsInvalidDirectCredentialsWithoutOAuthFallback(t *
 	}{
 		{name: "empty flag overrides environment", env: "env-secret", args: []string{"--token", "", "--email", "dev@example.com"}, want: "nonempty analytics ingestor token"},
 		{name: "empty environment", env: "", args: []string{"--email", "dev@example.com"}, want: "nonempty analytics ingestor token"},
-		{name: "missing email", args: []string{"--token", "flag-secret"}, want: "email must not be empty"},
-		{name: "invalid host", args: []string{"--token", "flag-secret", "--email", "dev@example.com", "--host", "https://bad host"}, want: "host must be an origin"},
+		{name: "missing email", args: []string{"--token", "flag-secret"}, want: "--email is required with --token."},
+		{name: "missing email with environment token", env: "env-secret", want: "NAVIGARA_TOKEN is set; --email is required with a token."},
+		{name: "invalid host", args: []string{"--token", "flag-secret", "--email", "dev@example.com", "--host", "https://bad host"}, want: "--host must look like https://navigara.example.com (no path, HTTPS only)."},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("NAVIGARA_TOKEN", test.env)

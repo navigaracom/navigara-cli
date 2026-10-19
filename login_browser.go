@@ -11,8 +11,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,7 +24,7 @@ type loginSession struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 
-func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(string) error) (loginSession, error) {
+func (c *authClient) browserLogin(ctx context.Context, command string, out io.Writer, open func(string) error) (loginSession, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	issuer, err := canonicalHost(c.host)
@@ -95,16 +97,29 @@ func (c *authClient) browserLogin(ctx context.Context, out io.Writer, open func(
 	go func() { _ = server.Serve(listener) }()
 	waitCtx, stop := interruptible(ctx)
 	defer stop()
-	fmt.Fprintf(out, "Sign in to Navigara in your browser:\n%s\n", loginURL)
-	if err := open(loginURL); err != nil {
-		fmt.Fprintln(out, "Could not open a browser. Open the URL above on this computer.")
+	fmt.Fprintf(out, "Sign in to Navigara in your browser.\nIf the browser did not open, copy this link:\n%s\n", loginURL)
+	if ssh := os.Getenv("SSH_CONNECTION"); ssh != "" {
+		port := listener.Addr().(*net.TCPAddr).Port
+		fmt.Fprintf(out, "You are on SSH. Open the link in a browser on this machine, or forward the port: ssh -L %d:127.0.0.1:%d %s\n", port, port, sshServer(ssh))
 	}
+	if err := open(loginURL); err != nil {
+		fmt.Fprintln(out, "Could not open a browser.")
+	}
+	fmt.Fprintln(out, "Waiting for sign-in in your browser (up to 5 min). Press Ctrl-C to cancel.")
 	select {
 	case result := <-done:
 		return result.session, result.err
 	case <-waitCtx.Done():
-		return loginSession{}, errors.New("login cancelled or timed out; run navigara login again")
+		return loginSession{}, fmt.Errorf("login cancelled or timed out; run %s again", command)
 	}
+}
+
+// sshServer returns the server address from SSH_CONNECTION ("client port server port").
+func sshServer(conn string) string {
+	if fields := strings.Fields(conn); len(fields) == 4 {
+		return fields[2]
+	}
+	return "<host>"
 }
 
 func validOAuthCallback(q url.Values, state, issuer string) bool {

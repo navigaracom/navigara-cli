@@ -16,6 +16,7 @@ type setupInput struct {
 	r        *bufio.Reader
 	out      io.Writer
 	terminal *os.File
+	command  string // what the user ran, for login recovery messages
 }
 
 func (p *setupInput) ask(label, fallback string) (string, error) {

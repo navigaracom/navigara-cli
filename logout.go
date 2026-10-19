@@ -37,7 +37,7 @@ func runLogout(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if *host != "" {
 		wanted, err := canonicalHost(*host)
 		if err != nil {
-			fmt.Fprintln(stderr, "navigara:", err)
+			fmt.Fprintln(stderr, "navigara:", errHostFormat)
 			return 2
 		}
 		if saved.Host != wanted {

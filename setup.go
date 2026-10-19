@@ -46,6 +46,7 @@ func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, st
 		return 2
 	}
 	p := newSetupInput(input, stdout)
+	p.command = "navigara wizard"
 	var err error
 	if *resume != "" {
 		err = resumeSetup(ctx, *resume, *host, p, stderr, open)

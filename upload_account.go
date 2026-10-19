@@ -12,6 +12,9 @@ import (
 func prepareUploadAccount(ctx context.Context, opts *options, stderr io.Writer) error {
 	// A dry run ignores $NAVIGARA_TOKEN: only --url or --token choose a destination there.
 	if opts.url != "" || opts.tokenExplicit || (opts.send && opts.token != "") {
+		if opts.url == "" && !opts.tokenExplicit {
+			return errors.New("NAVIGARA_TOKEN is set. Unset it to use your saved login, or add --url.")
+		}
 		if opts.url == "" || opts.token == "" {
 			return errors.New("explicit upload requires both --url and --token (or NAVIGARA_TOKEN); omit both to use navigara login")
 		}
@@ -35,7 +38,7 @@ func prepareUploadAccount(ctx context.Context, opts *options, stderr io.Writer) 
 		opts.email = c.Email
 		return nil
 	}
-	c, err := verifiedAccount(ctx, opts.host)
+	c, err := signedInAccount(ctx, opts.host, "navigara sessions upload", stderr)
 	if err != nil {
 		return err
 	}
