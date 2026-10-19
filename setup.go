@@ -238,6 +238,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		}
 	}
 	progress := newSetupProgress(p)
+	progress.stderr = stderr
 	s.retried = progress.retry
 	uploadCtx, stopUpload := interruptible(ctx)
 	err = sendSetupBatches(uploadCtx, opts.output, s, progress.upload)

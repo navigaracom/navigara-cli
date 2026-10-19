@@ -314,3 +314,20 @@ func TestSetupProgressPrintsRetryOutsidePlainOutput(t *testing.T) {
 		t.Fatalf("stdout=%q stderr=%q", out.String(), errs.String())
 	}
 }
+
+func TestUploadPrintsRetriesToCommandStderr(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	var out, errs bytes.Buffer
+	run(context.Background(), []string{"sessions", "upload", "--send", "--url", srv.URL, "--token", "secret", "--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
+	if !strings.Contains(errs.String(), "Upload failed (HTTP 503), retrying in 2 s (attempt 1 of 5)…\n") {
+		t.Fatalf("stderr=%q", errs.String())
+	}
+}

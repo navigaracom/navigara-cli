@@ -40,6 +40,7 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 			return 1
 		}
 		sender = newSender(opts.url, opts.token)
+		sender.retried = func(line string) { fmt.Fprintln(stderr, line) }
 		if err := sender.validate(); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 2
