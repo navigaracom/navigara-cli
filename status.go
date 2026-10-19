@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -20,29 +22,40 @@ type toolLink struct {
 }
 
 func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintln(stdout, "Usage: navigara sessions status\n\nShows the saved login and the live sync settings of Claude Code and Codex.\nExit code 0 means that each tool found on this computer sends to Navigara and Navigara accepts its key.")
-		return 0
+	var shell string
+	fs := flag.NewFlagSet("sessions status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprintln(stdout, "Usage: navigara sessions status [--shell bash|zsh|fish]\n\nShows the saved login and the live sync settings of Claude Code and Codex.\nExit code 0 means that each tool found on this computer sends to Navigara and Navigara accepts its key.")
 	}
-	if len(args) != 0 {
-		fmt.Fprintln(stderr, "navigara: unexpected argument:", args[0])
+	fs.StringVar(&shell, "shell", "", "shell profile for the Codex identity: bash, zsh, fish (default $SHELL)")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
-	if c, err := loadAccount(""); err != nil {
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "navigara: unexpected argument:", fs.Arg(0))
+		return 2
+	}
+	c, err := loadAccount("")
+	if err != nil {
 		fmt.Fprintln(stdout, "Login: cannot read:", err)
 	} else if c.SessionToken == "" {
 		fmt.Fprintln(stdout, "Login: not signed in")
 	} else {
 		fmt.Fprintf(stdout, "Login: %s as %s, organization %s\n", c.Host, firstNonEmpty(c.Email, "unknown"), firstNonEmpty(c.OrganizationName, c.OrganizationID, "unknown"))
 	}
+	shell = firstNonEmpty(shell, filepath.Base(os.Getenv("SHELL")))
 	claudeHome, codexHome, homeErr := toolHomes("", "")
 	ok, found := true, false
 	for _, tool := range []struct {
-		name, home string
-		read       func(string) (toolLink, error)
+		name, key, home string
+		read            func(string) (toolLink, error)
 	}{
-		{"Claude Code", claudeHome, claudeLink},
-		{"Codex", codexHome, codexLink},
+		{"Claude Code", "claude", claudeHome, claudeLink},
+		{"Codex", "codex", codexHome, func(home string) (toolLink, error) { return codexLink(home, shell) }},
 	} {
 		if tool.home == "" {
 			fmt.Fprintf(stdout, "%s: cannot find its home: %v\n", tool.name, homeErr)
@@ -54,6 +67,9 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			continue
 		}
 		found = true
+		if at, imported := c.Imports[c.OrganizationID+"/"+tool.key]; imported && c.OrganizationID != "" {
+			fmt.Fprintf(stdout, "%s: last import %s\n", tool.name, at.Local().Format(time.RFC3339))
+		}
 		link, err := tool.read(tool.home)
 		if err != nil {
 			fmt.Fprintf(stdout, "%s: not connected: %v\n", tool.name, err)
@@ -97,7 +113,7 @@ func claudeLink(home string) (toolLink, error) {
 	}
 	env := settings.Env
 	token, hasToken := strings.CutPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ")
-	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || env["OTEL_METRICS_EXPORTER"] != "otlp" || env["OTEL_LOGS_EXPORTER"] != "otlp" || env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "" || !hasToken {
+	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || env["OTEL_METRICS_EXPORTER"] != "otlp" || env["OTEL_LOGS_EXPORTER"] != "otlp" || env["OTEL_EXPORTER_OTLP_PROTOCOL"] != "http/protobuf" || env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "" || !hasToken {
 		return toolLink{}, errors.New("telemetry is not set up; run navigara wizard")
 	}
 	if err := validateClaudeEnv(env, env["OTEL_EXPORTER_OTLP_ENDPOINT"], token); err != nil {
@@ -106,7 +122,7 @@ func claudeLink(home string) (toolLink, error) {
 	return toolLink{endpoint: env["OTEL_EXPORTER_OTLP_ENDPOINT"], token: token, email: enduserID(env["OTEL_RESOURCE_ATTRIBUTES"])}, nil
 }
 
-func codexLink(home string) (toolLink, error) {
+func codexLink(home, shell string) (toolLink, error) {
 	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
 	if errors.Is(err, os.ErrNotExist) {
 		return toolLink{}, errors.New("no config.toml")
@@ -139,33 +155,49 @@ func codexLink(home string) (toolLink, error) {
 	if !hasEndpoint || !hasToken || logs.Endpoint != endpoint+"/v1/logs" || logs.Headers["Authorization"] != "Bearer "+token {
 		return toolLink{}, errors.New("the Navigara block in config.toml is not complete; run navigara wizard")
 	}
-	return toolLink{endpoint: endpoint, token: token, email: shellEmail()}, nil
+	email, err := codexEmail(shell)
+	if err != nil {
+		return toolLink{}, err
+	}
+	return toolLink{endpoint: endpoint, token: token, email: email}, nil
 }
 
-// shellEmail reads the email that setup exports to Codex from the profile of the user's shell.
-func shellEmail() string {
+// codexEmail reads the email that setup exports to Codex from the profile of the user's shell.
+// The block must be exactly what setup writes for that email.
+func codexEmail(shell string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "", err
 	}
-	profile := filepath.Join(home, ".bashrc")
-	if filepath.Base(os.Getenv("SHELL")) == "zsh" {
+	profile, prefix, suffix := filepath.Join(home, ".bashrc"), "enduser.id=\"'", "'\n"
+	unquote, write := strings.NewReplacer(`'"'"'`, "'"), shellSettings
+	switch shell {
+	case "zsh":
 		profile = filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc")
+	case "bash":
+	case "fish":
+		profile, prefix, suffix = fishConfig(home), "'enduser.id=", "')\n"
+		unquote, write = strings.NewReplacer(`\\`, `\`, `\'`, "'"), fishSettings
+	default:
+		return "", errors.New("no Codex email: $SHELL is not bash, zsh, or fish; use --shell")
 	}
+	missing := fmt.Errorf("no Navigara email block in %s; run navigara wizard", profile)
 	data, err := os.ReadFile(profile)
 	if err != nil {
-		return ""
+		return "", missing
 	}
 	start, end, err := managedRange(data)
-	if err != nil {
-		return ""
+	if err != nil || start == end {
+		return "", missing
 	}
-	_, value, found := strings.Cut(string(data[start:end]), "enduser.id=\"'")
-	value, _, closed := strings.Cut(value, "'\n")
-	if !found || !closed {
-		return ""
+	block := string(data[start:end])
+	_, value, found := strings.Cut(block, prefix)
+	value, _, closed := strings.Cut(value, suffix)
+	email := unquote.Replace(value)
+	if expected, err := write(nil, email); !found || !closed || err != nil || string(expected) != block {
+		return "", fmt.Errorf("the Navigara email block in %s is changed; run navigara wizard", profile)
 	}
-	return strings.ReplaceAll(value, `'"'"'`, "'")
+	return email, nil
 }
 
 func enduserID(attrs string) string {

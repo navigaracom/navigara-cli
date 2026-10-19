@@ -17,12 +17,12 @@ func TestSessionsStatus(t *testing.T) {
 		name             string
 		reject, codex    bool
 		codexLogsRemoved bool
-		claude           string
+		claude, identity string
 		code             int
 		want, avoid      []string
 	}{
 		{name: "connected", codex: true, claude: "connected", code: 0,
-			want: []string{"Login: http://127.0.0.1", "as dev@example.com, organization Acme", "Claude Code: connected to 127.0.0.1", "Codex: connected to 127.0.0.1:", "as o'neil@example.com", "Navigara accepts the Analytics Ingestor key"}},
+			want: []string{"Claude Code: last import 2026-10-01T", "Codex: last import 2026-10-02T", "Login: http://127.0.0.1", "as dev@example.com, organization Acme", "Claude Code: connected to 127.0.0.1", "Codex: connected to 127.0.0.1:", "as o'neil@example.com", "Navigara accepts the Analytics Ingestor key"}},
 		{name: "rejected key", reject: true, codex: true, claude: "connected", code: 1,
 			want: []string{"Navigara does not accept the Analytics Ingestor key"}},
 		{name: "codex absent", claude: "connected", code: 0,
@@ -33,6 +33,12 @@ func TestSessionsStatus(t *testing.T) {
 			want: []string{"Codex: not connected: the Navigara block in config.toml is not complete"}},
 		{name: "claude exporters off", claude: "exporters off", code: 1,
 			want: []string{"Claude Code: not connected: telemetry is not set up"}},
+		{name: "claude grpc", claude: "grpc", code: 1,
+			want: []string{"Claude Code: not connected: telemetry is not set up"}},
+		{name: "codex without identity", codex: true, identity: "none", code: 1,
+			want: []string{"Codex: not connected: no Navigara email block in"}},
+		{name: "codex fish identity", codex: true, identity: "fish", code: 0,
+			want: []string{"Codex: connected to 127.0.0.1:", "as o'neil@example.com"}},
 		{name: "nothing found", code: 0,
 			want: []string{"Claude Code: not found", "Codex: not found", "No Claude Code or Codex home found"}, avoid: []string{"connected to"}},
 	} {
@@ -53,7 +59,8 @@ func TestSessionsStatus(t *testing.T) {
 				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
 			}))
 			defer srv.Close()
-			if err := saveAccount(accountConfig{Version: 1, Host: srv.URL, SessionToken: "session", Email: "dev@example.com", OrganizationName: "Acme", SessionExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+			if err := saveAccount(accountConfig{Version: 1, Host: srv.URL, SessionToken: "session", Email: "dev@example.com", OrganizationName: "Acme", SessionExpiresAt: time.Now().Add(time.Hour),
+				OrganizationID: "org", Imports: map[string]time.Time{"org/claude": time.Date(2026, 10, 1, 12, 0, 0, 0, time.Local), "org/codex": time.Date(2026, 10, 2, 12, 0, 0, 0, time.Local), "other/claude": time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}}); err != nil {
 				t.Fatal(err)
 			}
 			endpoint := otlpBase(srv.URL + "/api")
@@ -77,6 +84,10 @@ func TestSessionsStatus(t *testing.T) {
 				data, err := claudeSettings(nil, endpoint, "test-secret", "dev@example.com")
 				data = bytes.ReplaceAll(data, []byte(`"otlp"`), []byte(`"none"`))
 				write(filepath.Join(claudeHome, "settings.json"), data, err)
+			case "grpc":
+				data, err := claudeSettings(nil, endpoint, "test-secret", "dev@example.com")
+				data = bytes.ReplaceAll(data, []byte(`"http/protobuf"`), []byte(`"grpc"`))
+				write(filepath.Join(claudeHome, "settings.json"), data, err)
 			case "plain":
 				write(filepath.Join(claudeHome, "settings.json"), []byte(`{"model":"x"}`), nil)
 			}
@@ -86,8 +97,15 @@ func TestSessionsStatus(t *testing.T) {
 					data = bytes.Replace(data, []byte("[otel.exporter.otlp-http]"), []byte("[otel.removed.otlp-http]"), 1)
 				}
 				write(filepath.Join(codexHome, "config.toml"), data, err)
-				data, err = shellSettings(nil, "o'neil@example.com")
-				write(filepath.Join(home, ".zshrc"), data, err)
+				switch tc.identity {
+				case "":
+					data, err = shellSettings(nil, "o'neil@example.com")
+					write(filepath.Join(home, ".zshrc"), data, err)
+				case "fish":
+					t.Setenv("SHELL", "/usr/bin/fish")
+					data, err = fishSettings(nil, "o'neil@example.com")
+					write(fishConfig(home), data, err)
+				}
 			}
 			var out, errs bytes.Buffer
 			code := run(context.Background(), []string{"sessions", "status"}, &out, &errs)
@@ -99,7 +117,7 @@ func TestSessionsStatus(t *testing.T) {
 					t.Errorf("missing %q in:\n%s", want, out.String())
 				}
 			}
-			for _, avoid := range append(tc.avoid, "test-secret") {
+			for _, avoid := range append(tc.avoid, "test-secret", "2020-") {
 				if strings.Contains(out.String(), avoid) {
 					t.Errorf("unexpected %q in:\n%s", avoid, out.String())
 				}
