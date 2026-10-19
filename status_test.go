@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ func TestSessionsStatus(t *testing.T) {
 		codexLogsRemoved bool
 		claude, identity string
 		metricsOverride  string
+		codexProtocol    string
 		code             int
 		want, avoid      []string
 	}{
@@ -31,11 +34,13 @@ func TestSessionsStatus(t *testing.T) {
 		{name: "claude not set up", codex: true, claude: "plain", code: 1,
 			want: []string{"Claude Code: not connected: telemetry is not set up"}},
 		{name: "codex logs exporter removed", codex: true, codexLogsRemoved: true, code: 1,
-			want: []string{"Codex: not connected: the Navigara block in config.toml is not complete"}},
+			want: []string{"Codex: not connected: [otel.exporter.otlp-http] in config.toml is not what setup writes"}},
 		{name: "claude exporters off", claude: "exporters off", code: 1,
-			want: []string{"Claude Code: not connected: telemetry is not set up"}},
+			want: []string{"Claude Code: not connected: OTEL_LOGS_EXPORTER in settings.json is not what setup writes"}},
 		{name: "claude grpc", claude: "grpc", code: 1,
-			want: []string{"Claude Code: not connected: telemetry is not set up"}},
+			want: []string{"Claude Code: not connected: OTEL_EXPORTER_OTLP_PROTOCOL in settings.json is not what setup writes"}},
+		{name: "codex json protocol", codex: true, codexProtocol: "json", code: 1,
+			want: []string{"Codex: not connected: [otel.metrics_exporter.otlp-http] protocol in config.toml is not what setup writes"}},
 		{name: "codex without identity", codex: true, identity: "none", code: 1,
 			want: []string{"Codex: not connected: no Navigara email block in"}},
 		{name: "codex fish identity", codex: true, identity: "fish", code: 0,
@@ -99,6 +104,9 @@ func TestSessionsStatus(t *testing.T) {
 			}
 			if tc.codex {
 				data, err := codexSettings(nil, endpoint, "test-secret")
+				if tc.codexProtocol != "" {
+					data = bytes.ReplaceAll(data, []byte(`protocol = "binary"`), []byte(`protocol = "`+tc.codexProtocol+`"`))
+				}
 				if tc.codexLogsRemoved {
 					data = bytes.Replace(data, []byte("[otel.exporter.otlp-http]"), []byte("[otel.removed.otlp-http]"), 1)
 				}
@@ -129,5 +137,62 @@ func TestSessionsStatus(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStatusRejectsEachChangedManagedSetting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	profile, err := shellSettings(nil, "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), profile, 0600); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "https://app.navigara.com/api/otlp"
+	attrs := "enduser.id=dev@example.com"
+	for key := range claudeTelemetryEnv(endpoint, "secret", attrs) {
+		env := claudeTelemetryEnv(endpoint, "secret", attrs)
+		env[key] += "x"
+		data, _ := json.Marshal(map[string]any{"env": env})
+		if err := os.WriteFile(filepath.Join(home, "settings.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		link, err := claudeLink(home)
+		switch key {
+		case "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_RESOURCE_ATTRIBUTES":
+			// Status reports these values and the preflight checks them.
+			if err != nil || link == (toolLink{endpoint: endpoint, token: "secret", email: "dev@example.com"}) {
+				t.Errorf("changed %s: %+v %v", key, link, err)
+			}
+		default:
+			if err == nil || !strings.HasPrefix(err.Error(), key+" ") && !strings.Contains(err.Error(), "not set up") {
+				t.Errorf("changed %s: %v", key, err)
+			}
+		}
+	}
+	block := codexBlock(endpoint, "secret")
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, " = ") {
+			continue
+		}
+		changed := slices.Clone(lines)
+		changed[i] = strings.Replace(line, `"`, `"x`, 1)
+		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(strings.Join(changed, "\n")), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := codexLink(home, "zsh"); err == nil {
+			t.Errorf("changed line %q: accepted", line)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(block), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codexLink(home, "zsh"); err != nil {
+		t.Fatalf("unchanged block: %v", err)
 	}
 }

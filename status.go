@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,15 +108,31 @@ func claudeLink(home string) (toolLink, error) {
 		return toolLink{}, err
 	}
 	var settings struct {
-		Env map[string]string `json:"env"`
+		Env           map[string]string `json:"env"`
+		HeadersHelper json.RawMessage   `json:"otelHeadersHelper"`
 	}
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return toolLink{}, errors.New("settings.json is not valid JSON")
 	}
 	env := settings.Env
+	endpoint := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
 	token, hasToken := strings.CutPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ")
-	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || env["OTEL_METRICS_EXPORTER"] != "otlp" || env["OTEL_LOGS_EXPORTER"] != "otlp" || env["OTEL_EXPORTER_OTLP_PROTOCOL"] != "http/protobuf" || env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "" || !hasToken {
+	email := enduserID(env["OTEL_RESOURCE_ATTRIBUTES"])
+	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || endpoint == "" || !hasToken {
 		return toolLink{}, errors.New("telemetry is not set up; run navigara wizard")
+	}
+	attrs, err := resourceAttributes(env["OTEL_RESOURCE_ATTRIBUTES"], email)
+	if err != nil || email == "" {
+		attrs = ""
+	}
+	expected := claudeTelemetryEnv(endpoint, token, attrs)
+	for _, key := range slices.Sorted(maps.Keys(expected)) {
+		if env[key] != expected[key] {
+			return toolLink{}, fmt.Errorf("%s in settings.json is not what setup writes; run navigara wizard", key)
+		}
+	}
+	if settings.HeadersHelper != nil {
+		return toolLink{}, errors.New("otelHeadersHelper in settings.json is not what setup writes; run navigara wizard")
 	}
 	shell := map[string]string{}
 	for _, entry := range os.Environ() {
@@ -122,11 +140,11 @@ func claudeLink(home string) (toolLink, error) {
 		shell[key] = value
 	}
 	for _, env := range []map[string]string{env, shell} {
-		if err := validateClaudeEnv(env, settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"], token); err != nil {
+		if err := validateClaudeEnv(env, endpoint, token); err != nil {
 			return toolLink{}, err
 		}
 	}
-	return toolLink{endpoint: env["OTEL_EXPORTER_OTLP_ENDPOINT"], token: token, email: enduserID(env["OTEL_RESOURCE_ATTRIBUTES"])}, nil
+	return toolLink{endpoint: endpoint, token: token, email: email}, nil
 }
 
 func codexLink(home, shell string) (toolLink, error) {
@@ -141,26 +159,34 @@ func codexLink(home, shell string) (toolLink, error) {
 	if err != nil {
 		return toolLink{}, err
 	}
-	type exporter struct {
-		OTLP struct {
-			Endpoint string            `toml:"endpoint"`
-			Headers  map[string]string `toml:"headers"`
-		} `toml:"otlp-http"`
-	}
 	var block struct {
 		OTEL struct {
-			Metrics exporter `toml:"metrics_exporter"`
-			Logs    exporter `toml:"exporter"`
+			Metrics struct {
+				OTLP struct {
+					Endpoint string            `toml:"endpoint"`
+					Headers  map[string]string `toml:"headers"`
+				} `toml:"otlp-http"`
+			} `toml:"metrics_exporter"`
 		} `toml:"otel"`
 	}
 	if start == end || toml.Unmarshal(data[start:end], &block) != nil {
 		return toolLink{}, errors.New("no Navigara block in config.toml; run navigara wizard")
 	}
-	endpoint, hasEndpoint := strings.CutSuffix(block.OTEL.Metrics.OTLP.Endpoint, "/v1/metrics")
-	token, hasToken := strings.CutPrefix(block.OTEL.Metrics.OTLP.Headers["Authorization"], "Bearer ")
-	logs := block.OTEL.Logs.OTLP
-	if !hasEndpoint || !hasToken || logs.Endpoint != endpoint+"/v1/logs" || logs.Headers["Authorization"] != "Bearer "+token {
-		return toolLink{}, errors.New("the Navigara block in config.toml is not complete; run navigara wizard")
+	endpoint := strings.TrimSuffix(block.OTEL.Metrics.OTLP.Endpoint, "/v1/metrics")
+	token := strings.TrimPrefix(block.OTEL.Metrics.OTLP.Headers["Authorization"], "Bearer ")
+	got, want := strings.Split(string(data[start:end]), "\n"), strings.Split(codexBlock(endpoint, token), "\n")
+	table := ""
+	for i, line := range want {
+		key, _, _ := strings.Cut(line, " =")
+		if strings.HasPrefix(line, "[") {
+			table, key = line, ""
+		}
+		if i >= len(got) || got[i] != line {
+			return toolLink{}, fmt.Errorf("%s in config.toml is not what setup writes; run navigara wizard", strings.TrimSpace(table+" "+key))
+		}
+	}
+	if len(got) != len(want) {
+		return toolLink{}, errors.New("the Navigara block in config.toml is not what setup writes; run navigara wizard")
 	}
 	email, err := codexEmail(shell)
 	if err != nil {
