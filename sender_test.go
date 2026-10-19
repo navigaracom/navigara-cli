@@ -287,6 +287,17 @@ func TestSenderExplainsRejectedKeys(t *testing.T) {
 	}
 }
 
+func TestUploadExplainsRejectedExplicitKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	defer srv.Close()
+	var out, errs bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "upload", "--send", "--url", srv.URL, "--token", "secret", "--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
+	want := "navigara: Navigara rejected the key (expired or revoked). Create a new Analytics Ingestor key, or remove --url/--token/NAVIGARA_TOKEN to use your saved login.\n"
+	if code != 1 || errs.String() != want {
+		t.Fatalf("exit=%d stderr=%q, want %q", code, errs.String(), want)
+	}
+}
+
 func TestSetupProbeFailsFastWhenConnectionIsRefused(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

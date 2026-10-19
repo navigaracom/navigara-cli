@@ -30,6 +30,8 @@ type sender struct {
 	codexReceipts map[[32]byte]int
 	// retried reports each failed attempt that will be retried. It can be called concurrently.
 	retried func(string)
+	// explicitKey marks a key from --token or NAVIGARA_TOKEN, which login does not replace.
+	explicitKey bool
 }
 
 // maxOTLPBody is the receiver's limit for a decoded request body.
@@ -176,6 +178,8 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 				s.sentMu.Unlock()
 			}
 			return nil
+		case resp.StatusCode == http.StatusUnauthorized && s.explicitKey:
+			return fmt.Errorf("%w (expired or revoked). Create a new Analytics Ingestor key, or remove --url/--token/NAVIGARA_TOKEN to use your saved login.", errIngestionAuthRejected)
 		case resp.StatusCode == http.StatusUnauthorized:
 			return fmt.Errorf("%w (expired or revoked). Run navigara login, or create a new Analytics Ingestor key.", errIngestionAuthRejected)
 		case resp.StatusCode == http.StatusForbidden:
