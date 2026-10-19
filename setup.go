@@ -48,7 +48,7 @@ func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, st
 	p := newSetupInput(input, stdout)
 	var err error
 	if *resume != "" {
-		err = resumeSetup(ctx, *resume, *host, p, open)
+		err = resumeSetup(ctx, *resume, *host, p, stderr, open)
 	} else {
 		err = freshSetup(ctx, *host, p, stderr, open)
 	}
@@ -203,7 +203,16 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	if history != nil {
 		history.finalizing()
 	}
-	err = saveSetupBatches(opts.output, opts.url, c.OrganizationID)
+	var imported []string
+	if window != "skip" {
+		for _, tool := range selected {
+			// A file skipped now may be readable later; keep its history in the next import.
+			if !opts.skippedTools[tool] {
+				imported = append(imported, tool)
+			}
+		}
+	}
+	err = saveSetupManifest(opts.output, setupManifest{URL: opts.url, OrganizationID: c.OrganizationID, ImportedUntil: opts.until, ImportedTools: imported})
 	if history != nil {
 		history.stop()
 	}
@@ -267,22 +276,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		progress.stop()
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
-	if window != "skip" {
-		updated := c
-		updated.Imports = maps.Clone(c.Imports)
-		if updated.Imports == nil {
-			updated.Imports = map[string]time.Time{}
-		}
-		for _, tool := range selected {
-			// A file skipped now may be readable later; keep its history in the next import.
-			if !opts.skippedTools[tool] {
-				updated.Imports[c.OrganizationID+"/"+tool] = opts.until
-			}
-		}
-		if err = writeAccount(updated, &c); err != nil {
-			fmt.Fprintln(stderr, "navigara: could not save the import time:", err)
-		}
-	}
+	saveImports(c, opts.until, imported, stderr)
 	sessions := -1
 	if window != "skip" {
 		fmt.Sscanf(historyOut.String(), "%d sessions", &sessions)
@@ -298,7 +292,28 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	return nil
 }
 
-func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func(string) error) error {
+// saveImports never moves a checkpoint back, so resuming an older payload keeps a newer import.
+func saveImports(c accountConfig, until time.Time, tools []string, stderr io.Writer) {
+	if len(tools) == 0 {
+		return
+	}
+	updated := c
+	updated.Imports = maps.Clone(c.Imports)
+	if updated.Imports == nil {
+		updated.Imports = map[string]time.Time{}
+	}
+	for _, tool := range tools {
+		key := c.OrganizationID + "/" + tool
+		if !updated.Imports[key].After(until) {
+			updated.Imports[key] = until
+		}
+	}
+	if err := writeAccount(updated, &c); err != nil {
+		fmt.Fprintln(stderr, "navigara: could not save the import time:", err)
+	}
+}
+
+func resumeSetup(ctx context.Context, dir, host string, p *setupInput, stderr io.Writer, open func(string) error) error {
 	m, err := loadSetupBatches(dir)
 	if err != nil {
 		return err
@@ -370,6 +385,9 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 		body += "Check: open " + url + " after your next session.\n"
 	}
 	p.status("History upload received", body)
+	if m.OrganizationID != "" {
+		saveImports(c, m.ImportedUntil, m.ImportedTools, stderr)
+	}
 	continueSetup(p, url, p.confirmOpen(), open)
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/navigaracom/navigara-cli/internal/telemetry"
 )
@@ -26,16 +27,23 @@ type setupManifest struct {
 	URL            string
 	OrganizationID string `json:",omitempty"`
 	Batches        []setupBatch
+	// ImportedTools get ImportedUntil as their import checkpoint once every batch is accepted.
+	ImportedUntil time.Time `json:",omitzero"`
+	ImportedTools []string  `json:",omitempty"`
 }
 
 var batchName = regexp.MustCompile(`^(logs|metrics)-[0-9]+\.json\.gz$`)
 
 func saveSetupBatches(dir, url, organizationID string) error {
+	return saveSetupManifest(dir, setupManifest{URL: url, OrganizationID: organizationID})
+}
+
+func saveSetupManifest(dir string, m setupManifest) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	m := setupManifest{Version: 2, URL: url, OrganizationID: organizationID}
+	m.Version = 2
 	for _, e := range entries {
 		if !batchName.MatchString(e.Name()) {
 			return errors.New("unexpected file in setup export")

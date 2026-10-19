@@ -202,6 +202,12 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !reflect.DeepEqual(manifest.ImportedTools, []string{"claude"}) || manifest.ImportedUntil.IsZero() {
+				t.Fatalf("manifest lacks the import checkpoint: %v %v", manifest.ImportedTools, manifest.ImportedUntil)
+			}
+			if c, err := loadAccount(""); err != nil || len(c.Imports) != 0 {
+				t.Fatalf("failed upload saved a checkpoint: %v %v", c.Imports, err)
+			}
 			expectedPayloads := map[string]int{}
 			for _, batch := range manifest.Batches {
 				body, err := os.ReadFile(filepath.Join(dirs[0], batch.Name))
@@ -236,6 +242,9 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 			}
 			if strings.Contains(out.String()+errs.String(), "test-secret") {
 				t.Fatal("token exposed")
+			}
+			if c, err := loadAccount(""); err != nil || !c.Imports["org-1/claude"].Equal(manifest.ImportedUntil) || len(c.Imports) != 1 {
+				t.Fatalf("resume did not save the checkpoint: %v %v", c.Imports, err)
 			}
 		})
 	}

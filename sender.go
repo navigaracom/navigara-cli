@@ -218,5 +218,5 @@ func (s *sender) codexSummary() string {
 	if total == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%d Codex usage records were skipped because they overlap live data.\n", total)
+	return fmt.Sprintf("%d Codex usage records were skipped because they may overlap live data.\n", total)
 }

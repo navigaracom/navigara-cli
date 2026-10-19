@@ -189,7 +189,7 @@ func TestSenderBackfillReceipt(t *testing.T) {
 	}{
 		{"legacy ignores stray count", "", "5", "", `{}`, false, "Navigara did not report how many Codex usage records were skipped.\n"},
 		{"zero", "v1", "0", "", `{}`, false, ""},
-		{"omitted", "v1", "3", "overlap-unverified-v1", `{}`, false, "3 Codex usage records were skipped because they overlap live data.\n"},
+		{"omitted", "v1", "3", "overlap-unverified-v1", `{}`, false, "3 Codex usage records were skipped because they may overlap live data.\n"},
 		{"negative", "v1", "-1", "", `{}`, true, ""},
 		{"missing", "v1", "", "", `{}`, true, ""},
 		{"signed", "v1", "+1", "overlap-unverified-v1", `{}`, true, ""},

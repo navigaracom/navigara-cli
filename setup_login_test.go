@@ -269,6 +269,9 @@ func TestSetupReplacesRejectedCachedIngestionKey(t *testing.T) {
 			if err != nil || saved.IngestToken != "replacement-secret" {
 				t.Fatalf("replacement key was not saved: %#v err=%v", saved, err)
 			}
+			if len(saved.Imports) != 0 {
+				t.Fatalf("saved a checkpoint without imported history: %v", saved.Imports)
+			}
 		})
 	}
 }
