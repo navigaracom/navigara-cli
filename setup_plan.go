@@ -158,7 +158,7 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 		}
 		if i == 0 && len(files) == 1 {
 			if !bytes.Equal(files[0].before, files[0].after) {
-				files[0].notes = claudeKeptKeys(files[0].after)
+				files[0].notes = claudeKeptKeys(files[0].before, files[0].after)
 			}
 			if origin := claudeUnknownOrigin(files[0].before, known); origin != "" {
 				files[0].warning = "Claude Code sends telemetry to " + origin + ", which is not a known Navigara address; nothing removed. Use --host " + origin + " if it is your Navigara instance."

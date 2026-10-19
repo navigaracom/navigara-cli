@@ -61,7 +61,7 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	for key, value := range claudeTelemetryEnv(endpoint, token, attrs) {
 		env[key] = value
 	}
-	env[navigaraManaged] = "1"
+	env[managedEndpoint], env[managedEmail] = endpoint, email
 	raw, err := json.Marshal(env)
 	if err != nil {
 		return nil, err
@@ -72,19 +72,24 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 
 const previousEnduserID = "NAVIGARA_PREVIOUS_ENDUSER_ID"
 
-// navigaraManaged marks settings.json telemetry that Navigara wrote. It is
-// not in claudeTelemetryEnv, so status checks ignore it.
-const navigaraManaged = "NAVIGARA_MANAGED"
+// The marker keys record the endpoint and email that Navigara wrote to
+// settings.json. They are not in claudeTelemetryEnv, so status checks ignore
+// them.
+const (
+	managedEndpoint = "NAVIGARA_MANAGED_ENDPOINT"
+	managedEmail    = "NAVIGARA_MANAGED_EMAIL"
+)
 
 // navigaraClaudeTelemetry reports whether Navigara wrote the telemetry in env.
-// The /api/otlp path and a Bearer header alone are not proof; the marker or a
-// known Navigara origin is.
+// The /api/otlp path and a Bearer header alone are not proof. A marked file
+// needs the endpoint that the marker recorded; an older file without markers
+// needs a known Navigara origin.
 func navigaraClaudeTelemetry(env map[string]string, known []string) bool {
 	if !looksLikeNavigaraClaude(env) {
 		return false
 	}
-	if env[navigaraManaged] == "1" {
-		return true
+	if marker, ok := env[managedEndpoint]; ok {
+		return env["OTEL_EXPORTER_OTLP_ENDPOINT"] == marker
 	}
 	origin := urlOrigin(env["OTEL_EXPORTER_OTLP_ENDPOINT"])
 	for _, host := range known {
@@ -114,6 +119,9 @@ func claudeUnknownOrigin(data []byte, known []string) string {
 		Env map[string]string `json:"env"`
 	}
 	if json.Unmarshal(data, &settings) != nil || !looksLikeNavigaraClaude(settings.Env) || navigaraClaudeTelemetry(settings.Env, known) {
+		return ""
+	}
+	if _, marked := settings.Env[managedEndpoint]; marked {
 		return ""
 	}
 	return urlOrigin(settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"])
@@ -174,6 +182,12 @@ func claudeTelemetryConflict(data []byte, endpoint, token string) error {
 	}
 	current := settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"]
 	ours := current == endpoint && navigaraBearer(settings.Env["OTEL_EXPORTER_OTLP_HEADERS"])
+	if marker, ok := settings.Env[managedEndpoint]; ok {
+		ours = ours && current == marker
+		if id, ok := enduserIDOf(settings.Env["OTEL_RESOURCE_ATTRIBUTES"]); ok && id != settings.Env[managedEmail] {
+			foreign = true
+		}
+	}
 	for key, value := range claudeTelemetryEnv(endpoint, token, "") {
 		if old, ok := settings.Env[key]; ok && key != "OTEL_RESOURCE_ATTRIBUTES" && old != value && !(ours && navigaraClaudeValue(key, old)) {
 			foreign = true
@@ -370,23 +384,42 @@ func removeManagedBlock(data []byte, managed func([]byte) (int, int, error)) ([]
 // wrote and the current version does not.
 var olderClaudeTelemetryValues = map[string]string{"OTEL_LOG_USER_PROMPTS": "0"}
 
-// claudeKeptKeys lists the Navigara keys that removeClaudeSettings kept
-// because the user changed them.
-func claudeKeptKeys(after []byte) []string {
-	var settings struct {
+// claudeKeptKeys lists the Navigara settings that removeClaudeSettings kept.
+func claudeKeptKeys(before, after []byte) []string {
+	var old, settings struct {
 		Env map[string]string `json:"env"`
 	}
-	if json.Unmarshal(after, &settings) != nil {
+	if json.Unmarshal(before, &old) != nil || json.Unmarshal(after, &settings) != nil {
 		return nil
 	}
 	var kept []string
 	for key := range claudeTelemetryEnv("", "", "") {
-		if _, ok := settings.Env[key]; ok && key != "OTEL_RESOURCE_ATTRIBUTES" {
+		value, ok := settings.Env[key]
+		switch {
+		case !ok || key == "OTEL_RESOURCE_ATTRIBUTES":
+		case key == "OTEL_EXPORTER_OTLP_ENDPOINT" || !navigaraClaudeValue(key, value):
 			kept = append(kept, "Kept (changed by you): "+key)
+		default:
+			kept = append(kept, "Kept: "+key)
+		}
+	}
+	if marker, ok := old.Env[managedEmail]; ok {
+		if id, ok := enduserIDOf(settings.Env["OTEL_RESOURCE_ATTRIBUTES"]); ok && id != marker {
+			kept = append(kept, "Kept (changed by you): enduser.id")
 		}
 	}
 	sort.Strings(kept)
 	return kept
+}
+
+// enduserIDOf returns the enduser.id entry of OTEL_RESOURCE_ATTRIBUTES.
+func enduserIDOf(attrs string) (string, bool) {
+	for _, attr := range strings.Split(attrs, ",") {
+		if key, value, _ := strings.Cut(strings.TrimSpace(attr), "="); strings.TrimSpace(key) == "enduser.id" {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 // removeClaudeSettings removes the env keys that claudeSettings wrote. It
@@ -405,16 +438,27 @@ func removeClaudeSettings(data []byte, known []string) ([]byte, error) {
 			return nil, errors.New("Claude settings env must be a JSON object of strings")
 		}
 	}
-	if !navigaraClaudeTelemetry(env, known) {
+	marker, marked := env[managedEndpoint]
+	email, emailMarked := env[managedEmail]
+	switch {
+	case marked && env["OTEL_EXPORTER_OTLP_ENDPOINT"] != marker:
+		// The user changed the endpoint: the telemetry is theirs now.
+		delete(env, managedEndpoint)
+		delete(env, managedEmail)
+		delete(env, previousEnduserID)
+		return marshalClaudeEnv(settings, env)
+	case !navigaraClaudeTelemetry(env, known):
 		return data, nil
 	}
 	var kept []string
+	id, hasID := enduserIDOf(env["OTEL_RESOURCE_ATTRIBUTES"])
+	ours := hasID && (!emailMarked || id == email)
 	for _, attr := range strings.Split(env["OTEL_RESOURCE_ATTRIBUTES"], ",") {
-		if name, _, _ := strings.Cut(attr, "="); attr != "" && strings.TrimSpace(name) != "enduser.id" {
+		if name, _, _ := strings.Cut(attr, "="); attr != "" && (strings.TrimSpace(name) != "enduser.id" || !ours) {
 			kept = append(kept, attr)
 		}
 	}
-	if previous, ok := env[previousEnduserID]; ok {
+	if previous, ok := env[previousEnduserID]; ok && (ours || !hasID) {
 		kept = append(kept, "enduser.id="+previous)
 	}
 	// The current keys include every key that an older version wrote. A key
@@ -430,10 +474,15 @@ func removeClaudeSettings(data []byte, known []string) ([]byte, error) {
 		}
 	}
 	delete(env, previousEnduserID)
-	delete(env, navigaraManaged)
+	delete(env, managedEndpoint)
+	delete(env, managedEmail)
 	if len(kept) > 0 {
 		env["OTEL_RESOURCE_ATTRIBUTES"] = strings.Join(kept, ",")
 	}
+	return marshalClaudeEnv(settings, env)
+}
+
+func marshalClaudeEnv(settings map[string]json.RawMessage, env map[string]string) ([]byte, error) {
 	if len(env) == 0 {
 		delete(settings, "env")
 	} else {

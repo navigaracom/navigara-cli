@@ -498,7 +498,7 @@ func TestRemoveClaudeSettingsKeepsKeysChangedByUser(t *testing.T) {
 	if want := map[string]any{"env": map[string]any{"KEEP": "yes", "OTEL_LOGS_EXPORTER": "none"}}; !reflect.DeepEqual(settings, want) {
 		t.Fatalf("remove = %s", got)
 	}
-	if notes := claudeKeptKeys(got); !reflect.DeepEqual(notes, []string{"Kept (changed by you): OTEL_LOGS_EXPORTER"}) {
+	if notes := claudeKeptKeys(changed, got); !reflect.DeepEqual(notes, []string{"Kept (changed by you): OTEL_LOGS_EXPORTER"}) {
 		t.Fatalf("notes = %q", notes)
 	}
 }
@@ -532,7 +532,7 @@ func TestRemoveClaudeSettingsKeepsCustomHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notes := claudeKeptKeys(got)
+	notes := claudeKeptKeys(edited, got)
 	if !bytes.Contains(got, []byte("X-Corp=custom")) || !reflect.DeepEqual(notes, []string{"Kept (changed by you): OTEL_EXPORTER_OTLP_HEADERS"}) {
 		t.Fatalf("remove = %s, notes = %q", got, notes)
 	}
@@ -551,10 +551,56 @@ func TestRemoveClaudeSettingsNeedsProofOfNavigara(t *testing.T) {
 		t.Fatalf("--host origin did not prove Navigara: %s, %v", got, err)
 	}
 	marked, err := claudeSettings(nil, "https://self-hosted.example/api/otlp", "token", "dev@example.com")
-	if err != nil || !bytes.Contains(marked, []byte(`"NAVIGARA_MANAGED": "1"`)) {
+	if err != nil || !bytes.Contains(marked, []byte(`"NAVIGARA_MANAGED_ENDPOINT": "https://self-hosted.example/api/otlp"`)) || !bytes.Contains(marked, []byte(`"NAVIGARA_MANAGED_EMAIL": "dev@example.com"`)) {
 		t.Fatalf("patch wrote no marker: %s, %v", marked, err)
 	}
 	if got, err := removeClaudeSettings(marked, known); err != nil || string(got) != "{}" {
 		t.Fatalf("marked settings were not removed: %s, %v", got, err)
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsEditedEndpoint(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{"env":{"KEEP":"yes"}}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(ours, []byte(`"OTEL_EXPORTER_OTLP_ENDPOINT": "https://app.example/api/otlp"`), []byte(`"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.example/api/otlp"`), 1)
+	got, err := removeClaudeSettings(edited, []string{"https://app.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after struct{ Env map[string]string }
+	if json.Unmarshal(edited, &before) != nil || json.Unmarshal(got, &after) != nil {
+		t.Fatal("invalid JSON")
+	}
+	delete(before.Env, managedEndpoint)
+	delete(before.Env, managedEmail)
+	if !reflect.DeepEqual(before.Env, after.Env) {
+		t.Fatalf("remove deleted more than the markers: %s", got)
+	}
+	notes := claudeKeptKeys(edited, got)
+	if len(notes) == 0 || !strings.Contains(strings.Join(notes, "\n"), "Kept (changed by you): OTEL_EXPORTER_OTLP_ENDPOINT") {
+		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsEditedEnduserID(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{"env":{"OTEL_RESOURCE_ATTRIBUTES":"team=a,enduser.id=me@corp.example"}}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(ours, []byte("enduser.id=dev@example.com"), []byte("enduser.id=other@example.com"), 1)
+	if err := claudeTelemetryConflict(edited, "https://app.example/api/otlp", "token"); err == nil {
+		t.Fatal("patch would overwrite an edited enduser.id")
+	}
+	got, err := removeClaudeSettings(edited, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "{\n  \"env\": {\n    \"OTEL_RESOURCE_ATTRIBUTES\": \"team=a,enduser.id=other@example.com\"\n  }\n}" {
+		t.Fatalf("remove = %s", got)
+	}
+	if notes := claudeKeptKeys(edited, got); !reflect.DeepEqual(notes, []string{"Kept (changed by you): enduser.id"}) {
+		t.Fatalf("notes = %q", notes)
 	}
 }
