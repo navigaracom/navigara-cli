@@ -622,3 +622,18 @@ func TestConfigRemoveSkipsSymlinkedProfileWithoutBlock(t *testing.T) {
 		t.Fatal("symlinked profile was replaced")
 	}
 }
+
+func TestConfigRemoveExplainsUnknownOrigin(t *testing.T) {
+	_, claude, codex, _ := patchFixture(t)
+	foreign := []byte(`{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://collector.example/api/otlp","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Bearer corp-secret"}}`)
+	path := filepath.Join(claude, "settings.json")
+	if err := os.WriteFile(path, foreign, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "config", "remove", "--apply", "--source", "claude", "--claude-home", claude, "--codex-home", codex}, &out, &errOut)
+	want := "Claude Code sends telemetry to https://collector.example, which is not a known Navigara address; nothing removed. Use --host https://collector.example if it is your Navigara instance.\n"
+	if got, _ := os.ReadFile(path); code != 0 || !strings.Contains(out.String(), want) || !bytes.Equal(got, foreign) || strings.Contains(out.String(), "secret") {
+		t.Fatalf("code=%d out=%s err=%s", code, &out, &errOut)
+	}
+}

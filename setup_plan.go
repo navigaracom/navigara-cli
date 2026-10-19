@@ -105,8 +105,9 @@ func fishConfig(home string) string {
 }
 
 // removePlans plans the removal of every Navigara block and key. It plans only
-// files that exist.
-func removePlans(opts options, home string) ([]*setupFile, error) {
+// files that exist. known lists the Navigara origins that prove an older
+// Claude layout without the marker.
+func removePlans(opts options, home string, known []string) ([]*setupFile, error) {
 	var files []*setupFile
 	// A file without Navigara settings is only reported. It may be a symlink,
 	// for example a dotfile manager's profile, which setup never writes.
@@ -139,7 +140,7 @@ func removePlans(opts options, home string) ([]*setupFile, error) {
 		path      string
 		transform func([]byte) ([]byte, error)
 	}{
-		{filepath.Join(opts.claudeHome, "settings.json"), removeClaudeSettings},
+		{filepath.Join(opts.claudeHome, "settings.json"), func(b []byte) ([]byte, error) { return removeClaudeSettings(b, known) }},
 		{filepath.Join(opts.codexHome, "config.toml"), func(b []byte) ([]byte, error) { return removeManagedBlock(b, tomlManagedRange) }},
 		{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc"), shell},
 		{filepath.Join(home, ".bashrc"), shell},
@@ -155,8 +156,13 @@ func removePlans(opts options, home string) ([]*setupFile, error) {
 		if err := add(target.path, target.transform); err != nil {
 			return nil, err
 		}
-		if i == 0 && len(files) == 1 && !bytes.Equal(files[0].before, files[0].after) {
-			files[0].notes = claudeKeptKeys(files[0].after)
+		if i == 0 && len(files) == 1 {
+			if !bytes.Equal(files[0].before, files[0].after) {
+				files[0].notes = claudeKeptKeys(files[0].after)
+			}
+			if origin := claudeUnknownOrigin(files[0].before, known); origin != "" {
+				files[0].warning = "Claude Code sends telemetry to " + origin + ", which is not a known Navigara address; nothing removed. Use --host " + origin + " if it is your Navigara instance."
+			}
 		}
 	}
 	return files, nil

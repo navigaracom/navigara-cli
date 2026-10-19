@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -50,7 +51,7 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	}
 	// Keep the user's own enduser.id so config remove can restore it. An
 	// identity in a Navigara setup is Navigara's; its record carries over.
-	if _, recorded := env[previousEnduserID]; !recorded && !navigaraClaudeTelemetry(env) {
+	if _, recorded := env[previousEnduserID]; !recorded && !navigaraClaudeTelemetry(env, []string{defaultHost, urlOrigin(endpoint)}) {
 		for _, attr := range strings.Split(env["OTEL_RESOURCE_ATTRIBUTES"], ",") {
 			if key, value, _ := strings.Cut(strings.TrimSpace(attr), "="); strings.TrimSpace(key) == "enduser.id" {
 				env[previousEnduserID] = value
@@ -60,6 +61,7 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	for key, value := range claudeTelemetryEnv(endpoint, token, attrs) {
 		env[key] = value
 	}
+	env[navigaraManaged] = "1"
 	raw, err := json.Marshal(env)
 	if err != nil {
 		return nil, err
@@ -70,9 +72,51 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 
 const previousEnduserID = "NAVIGARA_PREVIOUS_ENDUSER_ID"
 
-// navigaraClaudeTelemetry reports whether env sends to a Navigara receiver.
-func navigaraClaudeTelemetry(env map[string]string) bool {
+// navigaraManaged marks settings.json telemetry that Navigara wrote. It is
+// not in claudeTelemetryEnv, so status checks ignore it.
+const navigaraManaged = "NAVIGARA_MANAGED"
+
+// navigaraClaudeTelemetry reports whether Navigara wrote the telemetry in env.
+// The /api/otlp path and a Bearer header alone are not proof; the marker or a
+// known Navigara origin is.
+func navigaraClaudeTelemetry(env map[string]string, known []string) bool {
+	if !looksLikeNavigaraClaude(env) {
+		return false
+	}
+	if env[navigaraManaged] == "1" {
+		return true
+	}
+	origin := urlOrigin(env["OTEL_EXPORTER_OTLP_ENDPOINT"])
+	for _, host := range known {
+		if host != "" && origin == host {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeNavigaraClaude(env map[string]string) bool {
 	return strings.HasSuffix(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "/api/otlp") && strings.HasPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ")
+}
+
+func urlOrigin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// claudeUnknownOrigin returns the origin of Navigara-like telemetry that
+// navigaraClaudeTelemetry cannot prove, or "".
+func claudeUnknownOrigin(data []byte, known []string) string {
+	var settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if json.Unmarshal(data, &settings) != nil || !looksLikeNavigaraClaude(settings.Env) || navigaraClaudeTelemetry(settings.Env, known) {
+		return ""
+	}
+	return urlOrigin(settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"])
 }
 
 // navigaraBearer reports whether value is exactly the header that Navigara
@@ -346,8 +390,8 @@ func claudeKeptKeys(after []byte) []string {
 }
 
 // removeClaudeSettings removes the env keys that claudeSettings wrote. It
-// changes nothing unless the endpoint is a Navigara endpoint.
-func removeClaudeSettings(data []byte) ([]byte, error) {
+// changes nothing unless navigaraClaudeTelemetry proves that Navigara wrote them.
+func removeClaudeSettings(data []byte, known []string) ([]byte, error) {
 	var settings map[string]json.RawMessage
 	if len(bytes.TrimSpace(data)) == 0 {
 		return data, nil
@@ -361,7 +405,7 @@ func removeClaudeSettings(data []byte) ([]byte, error) {
 			return nil, errors.New("Claude settings env must be a JSON object of strings")
 		}
 	}
-	if !navigaraClaudeTelemetry(env) {
+	if !navigaraClaudeTelemetry(env, known) {
 		return data, nil
 	}
 	var kept []string
@@ -386,6 +430,7 @@ func removeClaudeSettings(data []byte) ([]byte, error) {
 		}
 	}
 	delete(env, previousEnduserID)
+	delete(env, navigaraManaged)
 	if len(kept) > 0 {
 		env["OTEL_RESOURCE_ATTRIBUTES"] = strings.Join(kept, ",")
 	}

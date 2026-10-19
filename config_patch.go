@@ -232,6 +232,7 @@ func runConfigRemove(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("sessions config remove", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: navigara sessions config remove [options]") }
+	fs.StringVar(&opts.host, "host", "", "Navigara origin whose settings to remove (default saved host and "+defaultHost+")")
 	fs.StringVar(&opts.source, "source", "all", "tool source: all, claude, codex")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home (default $CODEX_HOME or ~/.codex)")
@@ -255,17 +256,30 @@ func runConfigRemove(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "navigara: --source must be all, claude, or codex")
 		return 2
 	}
+	known := []string{defaultHost}
+	if saved, err := loadAccount(""); err == nil {
+		known = append(known, saved.Host)
+	}
 	home, err := os.UserHomeDir()
+	if err == nil && opts.host != "" {
+		opts.host, err = canonicalHost(opts.host)
+		known = append(known, opts.host)
+	}
 	if err == nil {
 		opts.claudeHome, opts.codexHome, err = toolHomes(opts.claudeHome, opts.codexHome)
 	}
 	var files []*setupFile
 	if err == nil {
-		files, err = removePlans(opts, home)
+		files, err = removePlans(opts, home, known)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
+	}
+	for _, f := range files {
+		if f.warning != "" {
+			fmt.Fprintln(stdout, f.warning)
+		}
 	}
 	var changed []*setupFile
 	for _, f := range files {
