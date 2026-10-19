@@ -189,7 +189,7 @@ func refreshSetupPlans(files []*setupFile, opts options, home string) error {
 		if refreshed[i].path != f.path || refreshed[i].existed != f.existed || !bytes.Equal(refreshed[i].before, f.before) {
 			return fmt.Errorf("settings plans changed; run the command again")
 		}
-		f.after = refreshed[i].after
+		f.after, f.notes, f.conflict, f.warning = refreshed[i].after, refreshed[i].notes, refreshed[i].conflict, refreshed[i].warning
 	}
 	return nil
 }

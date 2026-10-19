@@ -656,3 +656,17 @@ func TestRemoveCodexSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeKeptKeysIgnoresRestoredIdentity(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{"env":{"OTEL_RESOURCE_ATTRIBUTES":"enduser.id=me@corp.example"}}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := removeClaudeSettings(ours, nil)
+	if err != nil || !bytes.Contains(got, []byte(`"OTEL_RESOURCE_ATTRIBUTES": "enduser.id=me@corp.example"`)) {
+		t.Fatalf("remove = %s, %v", got, err)
+	}
+	if notes := claudeKeptKeys(ours, got); len(notes) != 0 {
+		t.Fatalf("notes = %q", notes)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -114,5 +115,32 @@ func TestRefreshSetupPlansRejectsChangedSnapshots(t *testing.T) {
 				t.Fatal("replaced original output after rejecting changed snapshot")
 			}
 		})
+	}
+}
+
+func TestRefreshSetupPlansUpdatesChangeLines(t *testing.T) {
+	home := t.TempDir()
+	claude := filepath.Join(home, ".claude")
+	if err := os.Mkdir(claude, 0700); err != nil {
+		t.Fatal(err)
+	}
+	opts := options{source: "claude", claudeHome: claude, url: "https://app.example/api", token: "old", email: "dev@example.com"}
+	patched, err := claudeSettings(nil, otlpBase(opts.url), opts.token, opts.email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"), patched, 0600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := setupPlans(opts, home)
+	if err != nil || len(files[0].notes) != 0 {
+		t.Fatalf("notes = %q, %v", files[0].notes, err)
+	}
+	opts.token = "rotated"
+	if err := refreshSetupPlans(files, opts, home); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(files[0].notes, []string{"env.OTEL_EXPORTER_OTLP_HEADERS: Authorization=*** -> Authorization=***"}) {
+		t.Fatalf("notes after rotation = %q", files[0].notes)
 	}
 }
