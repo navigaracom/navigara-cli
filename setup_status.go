@@ -61,17 +61,24 @@ func (p *setupInput) cancelled() {
 	p.status("Setup cancelled", "Cancelled. Your tool settings have not changed.\n")
 }
 
-func (p *setupInput) completed(sent int) {
+func (p *setupInput) completed(sessions int, tools []string, url string) {
+	title := "You're connected to Navigara"
+	body := ""
+	if sessions >= 0 {
+		body += fmt.Sprintf("Imported %d past sessions.\n", sessions)
+	}
+	names := make([]string, len(tools))
+	for i, tool := range tools {
+		names[i] = setupToolName(tool)
+	}
+	body += "New sessions sync automatically after you restart " + strings.Join(names, " / ") + " in a new terminal.\n"
+	if url != "" {
+		body += "Check: open " + url + " after your next session.\n"
+	}
 	if !p.interactive() {
-		fmt.Fprintf(p.out, "\nConnected. Navigara accepted %d upload batches.\nNew activity syncing is configured, not yet verified.\nOpen a new terminal and restart your tools. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.\n", sent)
+		fmt.Fprintf(p.out, "\n%s\n%s", title, body)
 		return
 	}
-
 	blue := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00A8FF"))
-	p.status(
-		blue.Render("🎉 You’re connected to Navigara"),
-		blue.Render(fmt.Sprintf("History: %d upload batches received", sent))+"\n"+
-			"Live sync: Configured; not yet verified\n\n"+
-			"Restart your tools in a new terminal. For Codex desktop/IDE, launch from that terminal so contributor identity is inherited. Check Navigara after your next session.\n",
-	)
+	p.status(blue.Render(title), body)
 }

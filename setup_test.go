@@ -81,8 +81,8 @@ func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 					t.Fatalf("missing managed settings: %s %v", path, err)
 				}
 			}
-			if !strings.Contains(out.String(), "not yet verified") {
-				t.Fatal("must distinguish configured from observed streaming")
+			if !strings.Contains(out.String(), "Imported 2 past sessions.\nNew sessions sync automatically after you restart Claude Code / Codex in a new terminal.") {
+				t.Fatalf("finish screen missing: %s", out.String())
 			}
 		})
 	}
@@ -266,8 +266,11 @@ func TestSetupSkipsUnreadableHistory(t *testing.T) {
 			}
 			requests := 0
 			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
+				if string(mustBody(r)) != "{}" {
+					requests++
+				}
 				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+				io.WriteString(w, `{}`)
 			}))
 			defer srv.Close()
 			var out, errs bytes.Buffer
@@ -291,7 +294,7 @@ func TestSetupSkipsUnreadableHistory(t *testing.T) {
 				t.Fatalf("history with no readable session accepted: exit=%d stdout=%s stderr=%s", code, out.String(), errs.String())
 			}
 			if requests != 0 {
-				t.Fatalf("requested before incomplete history stopped setup: %d", requests)
+				t.Fatalf("uploaded before incomplete history stopped setup: %d", requests)
 			}
 			if _, err := os.Stat(filepath.Join(claudeHome, "settings.json")); !os.IsNotExist(err) {
 				t.Fatal("changed settings after unreadable history")

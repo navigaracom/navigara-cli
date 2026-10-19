@@ -27,6 +27,8 @@ type accountConfig struct {
 	IngestToken      string    `json:"ingestToken,omitempty"`
 	SessionExpiresAt time.Time `json:"sessionExpiresAt,omitempty"`
 	IngestExpiresAt  time.Time `json:"ingestExpiresAt,omitempty"`
+	// Imports maps "<organization ID>/<tool>" to the end of the last wizard import.
+	Imports map[string]time.Time `json:"imports,omitempty"`
 }
 
 func canonicalHost(raw string) (string, error) {

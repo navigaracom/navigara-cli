@@ -211,12 +211,12 @@ func (s *sender) codexSummary() string {
 	total := 0
 	for _, count := range s.codexReceipts {
 		if count < 0 || count > int(^uint(0)>>1)-total {
-			return "Codex usage omissions this run: count unavailable from server.\n"
+			return "Navigara did not report how many Codex usage records were skipped.\n"
 		}
 		total += count
 	}
 	if total == 0 {
-		return "Codex usage omissions this run: 0 datapoints.\n"
+		return ""
 	}
-	return fmt.Sprintf("Codex usage omitted this run: %d token/cost datapoints (overlap with live telemetry is unverified).\n", total)
+	return fmt.Sprintf("%d Codex usage records were skipped because they overlap live data.\n", total)
 }

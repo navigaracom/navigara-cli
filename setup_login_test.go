@@ -57,6 +57,7 @@ func TestSetupStartsLoginOnSelectedHost(t *testing.T) {
 	for _, mode := range []string{"default", "override", "expired"} {
 		t.Run(mode, func(t *testing.T) {
 			withConfigHome(t)
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var out, errs bytes.Buffer
@@ -92,9 +93,24 @@ func TestSetupStartsLoginOnSelectedHost(t *testing.T) {
 	}
 }
 
+func TestSetupWithoutToolsStopsBeforeLogin(t *testing.T) {
+	withConfigHome(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	var out, errs bytes.Buffer
+	code := runSetupWithBrowser(context.Background(), nil, strings.NewReader(""), &out, &errs, func(string) error {
+		t.Error("opened the browser without a tool")
+		return nil
+	})
+	want := "navigara: Claude Code and Codex were not found on this computer (looked in ~/.claude and ~/.codex). Install one, run it once, then run navigara wizard again.\n"
+	if code != 1 || errs.String() != want || out.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, &out, &errs)
+	}
+}
+
 func TestSetupLoginReturnsToWizard(t *testing.T) {
 	withConfigHome(t)
-	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing"))
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing"))
 	var out, errs bytes.Buffer
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +139,7 @@ func TestSetupLoginReturnsToWizard(t *testing.T) {
 		}
 		return err
 	})
-	if code != 1 || !strings.Contains(errs.String(), "no tools selected") {
+	if code != 1 || !strings.Contains(errs.String(), "input ended") {
 		t.Fatalf("didn't resume wizard after login: %d %s", code, &errs)
 	}
 	c, err := loadAccount("")
@@ -316,6 +332,10 @@ func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
 	}
 	posts := 0
 	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/api-keys") {
+			json.NewEncoder(w).Encode(map[string]any{"plainTextKey": "new-secret", "apiKey": map[string]any{"organizationId": "org-1", "expiresAt": time.Now().Add(time.Hour)}})
+			return
+		}
 		posts++
 		t.Error("ingestion request after concurrent edit")
 	}))
@@ -344,6 +364,91 @@ func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
 		t.Fatalf("concurrent settings were not preserved: %q, %v", got, err)
 	}
 	if posts != 0 {
-		t.Fatalf("minted or uploaded after concurrent edit: %d requests", posts)
+		t.Fatalf("uploaded after concurrent edit: %d requests", posts)
+	}
+}
+
+func TestSetupPermissionErrorComesBeforeHistoryScan(t *testing.T) {
+	claude, codex := fixtureHomes(t)
+	home := filepath.Dir(claude)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	t.Setenv("CODEX_HOME", codex)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/api-keys") {
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	c, err := loadAccount("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.IngestToken, c.IngestExpiresAt = "", time.Time{}
+	if err = saveAccount(c); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	code := runSetup(context.Background(), nil, strings.NewReader("y\ny\n\nall\ny\n"), &out, &errs)
+	want := "navigara: Your Navigara role cannot create an API key for \"One\". Ask an organization admin to grant you access, then run navigara wizard again.\n"
+	if code != 1 || errs.String() != want {
+		t.Fatalf("exit=%d stderr=%q", code, &errs)
+	}
+	if strings.Contains(out.String(), "sessions ready to import") {
+		t.Fatalf("scanned history before the key check: %s", &out)
+	}
+}
+
+func TestSetupRerunImportsOnlySinceLastImport(t *testing.T) {
+	claude, codex := fixtureHomes(t)
+	home := filepath.Dir(claude)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	t.Setenv("CODEX_HOME", codex)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+		io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+	connected := "Already connected to " + srv.URL + " as dev@example.com.\n"
+	for _, run := range []struct {
+		input, want string
+		imports     int
+	}{
+		// Codex first: the fixture's two Claude sessions stay unimported.
+		{"n\ny\n\nall\ny\n", "Imported 0 past sessions.", 1},
+		// Claude is new, so "since last import" still imports all of its history.
+		{"y\ny\n\n\ny\n", "Imported 2 past sessions.", 2},
+		// Both tools were imported: nothing older than the last import comes back.
+		{"y\ny\n\n\ny\n", "Imported 0 past sessions.", 2},
+	} {
+		c, err := loadAccount("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := len(c.Imports)
+		var out, errs bytes.Buffer
+		if code := runSetup(context.Background(), nil, strings.NewReader(run.input), &out, &errs); code != 0 {
+			t.Fatalf("wizard = %d: %s", code, &errs)
+		}
+		if strings.Contains(out.String(), connected) != (before > 0) || !strings.Contains(out.String(), run.want) {
+			t.Fatalf("want %q, connected=%v: %s", run.want, before > 0, &out)
+		}
+		if before > 0 && !strings.Contains(out.String(), "(since last import, 7d, 24h, all, or skip) [since]") {
+			t.Fatalf("re-run did not default to the last import: %s", &out)
+		}
+		if c, err = loadAccount(""); err != nil || len(c.Imports) != run.imports {
+			t.Fatalf("imports = %v, %v", c.Imports, err)
+		}
+		for _, at := range c.Imports {
+			if time.Since(at) > time.Minute {
+				t.Fatalf("stale import time %v", at)
+			}
+		}
 	}
 }

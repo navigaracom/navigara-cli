@@ -32,7 +32,7 @@ func TestLastInvalidCreatesNoOutput(t *testing.T) {
 		t.Run(fmt.Sprintf("%q", value), func(t *testing.T) {
 			output := filepath.Join(t.TempDir(), "output")
 			var stdout, stderr bytes.Buffer
-			if code := run(context.Background(), []string{"sessions", "upload", "--last=" + value, "--output", output}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--last") {
+			if code := run(context.Background(), []string{"sessions", "upload", "--last=" + value, "--output", output}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--last must be a positive duration in hours or days, for example 24h, 7d or 30d") {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 			if _, err := os.Lstat(output); !os.IsNotExist(err) {

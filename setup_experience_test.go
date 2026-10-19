@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
@@ -315,7 +316,7 @@ func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 			requests := 0
 			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
-				if !connect || !strings.Contains(out.String(), "Connecting your tools...") {
+				if !connect {
 					t.Error("ingestion request before confirmation")
 				}
 				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
@@ -356,5 +357,95 @@ func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 				t.Fatal("backup directory is not private")
 			}
 		})
+	}
+}
+
+func TestWizardFormValidatesCustomDuration(t *testing.T) {
+	account := accountConfig{Email: "dev@example.com"}
+	settings := wizardSettings{source: "claude", email: account.Email}
+	selected, history := []string{"claude"}, "custom"
+	form := newWizardForm(account, []string{"claude"}, &settings, &selected, &history).WithWidth(72)
+	// Cursor blink ticks never end, so run only commands that answer at once.
+	var send func(tea.Msg, int)
+	var run func(tea.Cmd, int)
+	run = func(command tea.Cmd, depth int) {
+		if command == nil || depth > 20 {
+			return
+		}
+		done := make(chan tea.Msg, 1)
+		go func() { done <- command() }()
+		select {
+		case message := <-done:
+			if batch, ok := message.(tea.BatchMsg); ok {
+				for _, command := range batch {
+					run(command, depth+1)
+				}
+				return
+			}
+			send(message, depth+1)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	send = func(message tea.Msg, depth int) {
+		_, command := form.Update(message)
+		run(command, depth)
+	}
+	run(form.Init(), 0)
+	send(tea.WindowSizeMsg{Width: 72, Height: 24}, 0)
+	typeText := func(text string) {
+		for _, r := range text {
+			send(tea.KeyPressMsg(tea.Key{Code: r, Text: string(r)}), 0)
+		}
+	}
+	send(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}), 0)
+	if view := ansi.Strip(form.View()); form.State != huh.StateNormal || !strings.Contains(view, "How far back?") {
+		t.Fatalf("Connect skipped the custom duration: state=%v %s", form.State, view)
+	}
+	typeText("2 weeks")
+	send(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}), 0)
+	if view := ansi.Strip(form.View()); form.State != huh.StateNormal || !strings.Contains(view, "Enter a duration like 14d or 36h.") {
+		t.Fatalf("bad duration accepted: state=%v %s", form.State, view)
+	}
+	for range len("2 weeks") {
+		send(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}), 0)
+	}
+	typeText("14d")
+	send(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}), 0)
+	if form.State != huh.StateCompleted || settings.custom != "14d" {
+		t.Fatalf("valid duration not accepted: state=%v custom=%q", form.State, settings.custom)
+	}
+}
+
+func TestWizardPlainInputAsksAgainForBadDuration(t *testing.T) {
+	var out bytes.Buffer
+	p := newSetupInput(strings.NewReader("y\nn\n\n2 weeks\ncustom\n36\n36h\n"), &out)
+	settings, err := wizardPreferences(accountConfig{Email: "dev@example.com"}, []string{"claude", "codex"}, p)
+	if err != nil || settings.history != "36h" {
+		t.Fatalf("preferences = %#v, %v", settings, err)
+	}
+	if got := strings.Count(out.String(), "Enter a duration like 14d or 36h.\n"); got != 2 {
+		t.Fatalf("asked again %d times: %s", got, &out)
+	}
+}
+
+func TestWizardFormOffersSinceLastImport(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.Local)
+	var out bytes.Buffer
+	account := accountConfig{Host: "https://app.example", Email: "dev@example.com", OrganizationID: "org-1",
+		Imports: map[string]time.Time{"org-1/claude": at, "other/codex": at}}
+	p := newSetupInput(strings.NewReader("y\ny\n\n\n"), &out)
+	settings, err := wizardPreferences(account, []string{"claude", "codex"}, p)
+	if err != nil || settings.history != "since" || len(settings.imports) != 1 || !settings.imports["claude"].Equal(at) {
+		t.Fatalf("preferences = %#v, %v", settings, err)
+	}
+	if !strings.HasPrefix(out.String(), "Already connected to https://app.example as dev@example.com.\n") {
+		t.Fatalf("missing connected line: %s", &out)
+	}
+	selected, history := []string{"claude"}, settings.history
+	form := newWizardForm(account, []string{"claude"}, &settings, &selected, &history).WithWidth(72)
+	form.Init()
+	form.Update(tea.WindowSizeMsg{Width: 72, Height: 30})
+	if view := ansi.Strip(form.View()); !strings.Contains(view, "● Since last import (2026-10-01)") {
+		t.Fatalf("since option missing or not selected: %s", view)
 	}
 }

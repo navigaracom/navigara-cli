@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var errLast = errors.New("--last must be a positive duration")
+var errLast = errors.New("--last must be a positive duration in hours or days, for example 24h, 7d or 30d")
 
 func parseLast(value string) (time.Duration, error) {
 	if digits, ok := strings.CutSuffix(value, "d"); ok {

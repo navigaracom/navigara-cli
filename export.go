@@ -67,6 +67,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	}
 	wantClaude := opts.source == "all" || opts.source == "claude"
 	wantCodex := opts.source == "all" || opts.source == "codex"
+	claudeSince, codexSince := opts.sinceFor("claude"), opts.sinceFor("codex")
 	claudeHome, codexHome, err := toolHomes(opts.claudeHome, opts.codexHome)
 	if (wantClaude && claudeHome == "") || (wantCodex && codexHome == "") {
 		fmt.Fprintln(stderr, "navigara:", err)
@@ -179,14 +180,14 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	}
 	if wantClaude {
 		scan := session.Scan("claude", claudeHome, codexHome, func(path string) bool {
-			if opts.since.IsZero() {
+			if claudeSince.IsZero() {
 				return false
 			}
 			subs, err := telemetry.ClaudeSubagents(path)
 			if err != nil {
 				return false
 			}
-			return stale(opts.since, append([]string{path}, subs...)...)
+			return stale(claudeSince, append([]string{path}, subs...)...)
 		})
 		for _, err := range scan.Errors {
 			skipped = append(skipped, err.Error())
@@ -217,7 +218,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			}
 		}
 		for _, path := range paths {
-			if stale(opts.since, path) {
+			if stale(codexSince, path) {
 				continue
 			}
 			id, err := telemetry.CodexSessionID(path)
@@ -338,7 +339,11 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 				report(index + pairIndex + 1)
 				continue
 			}
-			s.Within(opts.since, opts.until)
+			since := claudeSince
+			if j.source == "codex" {
+				since = codexSince
+			}
+			s.Within(since, opts.until)
 			if len(s.Events) == 0 && len(s.Points) == 0 {
 				report(index + pairIndex + 1)
 				continue

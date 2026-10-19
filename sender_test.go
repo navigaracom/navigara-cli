@@ -187,9 +187,9 @@ func TestSenderBackfillReceipt(t *testing.T) {
 		fail                               bool
 		summary                            string
 	}{
-		{"legacy ignores stray count", "", "5", "", `{}`, false, "unavailable"},
-		{"zero", "v1", "0", "", `{}`, false, "0 datapoints"},
-		{"omitted", "v1", "3", "overlap-unverified-v1", `{}`, false, "3 token/cost datapoints"},
+		{"legacy ignores stray count", "", "5", "", `{}`, false, "Navigara did not report how many Codex usage records were skipped.\n"},
+		{"zero", "v1", "0", "", `{}`, false, ""},
+		{"omitted", "v1", "3", "overlap-unverified-v1", `{}`, false, "3 Codex usage records were skipped because they overlap live data.\n"},
 		{"negative", "v1", "-1", "", `{}`, true, ""},
 		{"missing", "v1", "", "", `{}`, true, ""},
 		{"signed", "v1", "+1", "overlap-unverified-v1", `{}`, true, ""},
@@ -217,7 +217,7 @@ func TestSenderBackfillReceipt(t *testing.T) {
 			if test.fail && s.sent != 0 {
 				t.Fatal("invalid receipt counted as accepted")
 			}
-			if !test.fail && !strings.Contains(s.codexSummary(), test.summary) {
+			if !test.fail && s.codexSummary() != test.summary {
 				t.Fatal(s.codexSummary())
 			}
 		})
@@ -244,11 +244,11 @@ func TestSenderParallelReceiptsReplaceResentBatch(t *testing.T) {
 		}(i)
 	}
 	workers.Wait()
-	if s.sent != 8 || !strings.Contains(s.codexSummary(), "8 token/cost datapoints") {
+	if s.sent != 8 || !strings.Contains(s.codexSummary(), "8 Codex usage records were skipped") {
 		t.Fatalf("sent=%d, %s", s.sent, s.codexSummary())
 	}
 	s.codexReceipts[[32]byte{}] = -1
-	if !strings.Contains(s.codexSummary(), "unavailable") {
+	if !strings.Contains(s.codexSummary(), "did not report") {
 		t.Fatal("missing receipt became zero")
 	}
 }

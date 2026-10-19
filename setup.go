@@ -7,9 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -60,10 +63,6 @@ func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, st
 }
 
 func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Writer, open func(string) error) error {
-	c, err := ensureAccount(ctx, host, p, false, open)
-	if err != nil {
-		return err
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -71,10 +70,6 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 	var opts options
 	if opts.claudeHome, opts.codexHome, err = toolHomes("", ""); err != nil {
 		return err
-	}
-	if !p.interactive() {
-		writeAccountSummary(p.out, c)
-		fmt.Fprintln(p.out, "\nConnect this computer to Navigara\nImport past sessions and keep new activity in sync.")
 	}
 	var available []string
 	for _, tool := range []struct{ name, path string }{{"claude", opts.claudeHome}, {"codex", opts.codexHome}} {
@@ -90,11 +85,30 @@ func freshSetup(ctx context.Context, host string, p *setupInput, stderr io.Write
 		}
 		available = append(available, tool.name)
 	}
+	if len(available) == 0 {
+		return fmt.Errorf("Claude Code and Codex were not found on this computer (looked in %s and %s). Install one, run it once, then run navigara wizard again.",
+			homePath(opts.claudeHome, home), homePath(opts.codexHome, home))
+	}
+	c, err := ensureAccount(ctx, host, p, false, open)
+	if err != nil {
+		return err
+	}
+	if !p.interactive() {
+		writeAccountSummary(p.out, c)
+		fmt.Fprintln(p.out, "\nConnect this computer to Navigara\nImport past sessions and keep new activity in sync.")
+	}
 	preferences, err := wizardPreferences(c, available, p)
 	if err != nil {
 		return err
 	}
 	return setupAttempt(ctx, c, opts, home, preferences, p, stderr, open)
+}
+
+func homePath(path, home string) string {
+	if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok {
+		return filepath.Join("~", rest)
+	}
+	return path
 }
 
 func setupAttempt(ctx context.Context, c accountConfig, opts options, home string, preferences wizardSettings, p *setupInput, stderr io.Writer, open func(string) error) error {
@@ -103,7 +117,12 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
 	window := preferences.history
 	var last time.Duration
-	if window != "all" && window != "skip" {
+	if window == "since" {
+		opts.sourceSince = map[string]time.Time{}
+		for _, tool := range selected {
+			opts.sourceSince[tool] = preferences.imports[tool]
+		}
+	} else if window != "all" && window != "skip" {
 		var err error
 		last, err = parseLast(window)
 		if err != nil {
@@ -130,6 +149,10 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		p.cancelled()
 		return nil
 	}
+	if err = ensureIngestion(ctx, &c); err != nil {
+		return err
+	}
+	opts.token = c.IngestToken
 	opts.until = time.Now().UTC()
 	if last > 0 {
 		opts.since = opts.until.Add(-last)
@@ -202,10 +225,6 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 				return err
 			}
 		}
-		if err := ensureIngestion(ctx, &c); err != nil {
-			return err
-		}
-		opts.token = c.IngestToken
 		if err := refreshSetupPlans(files, opts, home); err != nil {
 			return err
 		}
@@ -247,9 +266,29 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		progress.stop()
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
-	p.completed(s.sent)
-	p.status("Codex usage receipt", s.codexSummary())
-	continueSetup(p, c.Host, p.interactive(), open)
+	updated := c
+	updated.Imports = maps.Clone(c.Imports)
+	if updated.Imports == nil {
+		updated.Imports = map[string]time.Time{}
+	}
+	for _, tool := range selected {
+		updated.Imports[c.OrganizationID+"/"+tool] = opts.until
+	}
+	if err = writeAccount(updated, &c); err != nil {
+		fmt.Fprintln(stderr, "navigara: could not save the import time:", err)
+	}
+	sessions := -1
+	if window != "skip" {
+		fmt.Sscanf(historyOut.String(), "%d sessions", &sessions)
+	}
+	url := welcomeURL(c.Host)
+	p.completed(sessions, selected, url)
+	if slices.Contains(selected, "codex") {
+		if receipt := s.codexSummary(); receipt != "" {
+			p.status("Codex usage receipt", receipt)
+		}
+	}
+	continueSetup(p, url, p.confirmOpen(), open)
 	return nil
 }
 
@@ -316,9 +355,15 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 		progress.stop()
 		return err
 	}
-	p.status("History upload received", fmt.Sprintf("Navigara received %d upload batches.\n", s.sent)+s.codexSummary())
+	body := fmt.Sprintf("Navigara received %d upload batches.\n", s.sent) + s.codexSummary()
+	url := ""
 	if m.OrganizationID != "" {
-		continueSetup(p, c.Host, p.interactive(), open)
+		url = welcomeURL(c.Host)
 	}
+	if url != "" {
+		body += "Check: open " + url + " after your next session.\n"
+	}
+	p.status("History upload received", body)
+	continueSetup(p, url, p.confirmOpen(), open)
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"reflect"
 )
 
 func runLogout(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -46,7 +47,7 @@ func runLogout(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 
 	clear := accountConfig{Version: 1, Host: saved.Host}
-	if saved == clear {
+	if reflect.DeepEqual(saved, clear) {
 		fmt.Fprintln(stdout, "Already signed out of Navigara on this computer.")
 		return 0
 	}

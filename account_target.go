@@ -86,7 +86,7 @@ func ensureIngestion(ctx context.Context, c *accountConfig) error {
 	}, &response)
 	if err != nil {
 		if errors.Is(err, authHTTPError(403)) {
-			return errors.New("you need organization admin access to create a Navigara CLI ingestion key; ask an organization admin")
+			return fmt.Errorf("Your Navigara role cannot create an API key for %q. Ask an organization admin to grant you access, then run navigara wizard again.", c.OrganizationName)
 		}
 		return err
 	}

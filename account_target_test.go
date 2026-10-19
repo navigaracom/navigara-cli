@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestVerifiedAccountRequiresSavedAuthAndDoesNotWrite(t *testing.T) {
 		t.Fatalf("expected login guidance, got %v", err)
 	}
 	after, err := loadAccount("")
-	if err != nil || after != before {
+	if err != nil || !reflect.DeepEqual(after, before) {
 		t.Fatalf("verification wrote config: before=%#v after=%#v err=%v", before, after, err)
 	}
 }

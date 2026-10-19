@@ -3,15 +3,19 @@ package main
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 )
 
 type wizardSettings struct {
-	source, email, history string
+	source, email, history, custom string
+	// imports holds the end of the last import for each tool imported before.
+	imports map[string]time.Time
 }
 
 func newWizardForm(account accountConfig, available []string, settings *wizardSettings, selected *[]string, history *string) *huh.Form {
@@ -24,6 +28,17 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			connectDescription = "Claude sends prompt text and tool arguments.\n" + connectDescription
 		}
 	}
+	historyOptions := []huh.Option[string]{huh.NewOption("All available history", "all")}
+	if since := earliestImport(settings.imports); !since.IsZero() {
+		historyOptions = append([]huh.Option[string]{huh.NewOption("Since last import ("+since.Local().Format(time.DateOnly)+")", "since")}, historyOptions...)
+	}
+	historyOptions = append(historyOptions,
+		huh.NewOption("Last 30 days", "30d"),
+		huh.NewOption("Last 7 days", "7d"),
+		huh.NewOption("Last 24 hours", "24h"),
+		huh.NewOption("Do not import history", "skip"),
+		huh.NewOption("Custom duration", "custom"),
+	)
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().Title("Tools to connect").
 			Options(tools...).Value(selected).Height(len(available)+1).
@@ -35,19 +50,18 @@ func newWizardForm(account accountConfig, available []string, settings *wizardSe
 			}),
 		huh.NewInput().Title("Your email").Prompt("  ").Value(&settings.email).
 			Validate(func(email string) error { return validEmail(strings.TrimSpace(email)) }),
-		huh.NewSelect[string]().Title("Import past sessions").Options(
-			huh.NewOption("All available history", "all"),
-			huh.NewOption("Last 30 days", "30d"),
-			huh.NewOption("Last 7 days", "7d"),
-			huh.NewOption("Last 24 hours", "24h"),
-			huh.NewOption("Do not import history", "skip"),
-			huh.NewOption("Custom duration", "custom"),
-		).Value(history).Height(7),
+		huh.NewSelect[string]().Title("Import past sessions").Options(historyOptions...).
+			Value(history).Height(len(historyOptions)+1),
 		huh.NewConfirm().Key("continue").Title("Close running sessions first.").
 			Description(connectDescription).
 			Affirmative("Connect").Negative("Cancel").Value(&continueSetup).
 			WithButtonAlignment(lipgloss.Left),
-	).Title("  Connect this computer to Navigara").Description(fmt.Sprintf("  Account       %s\n  Organization  %s\n  Instance      %s", wizardHeaderValue(account.Email), wizardHeaderValue(account.OrganizationName), wizardHeaderValue(account.Host))))
+	).Title("  Connect this computer to Navigara").Description(fmt.Sprintf("  Account       %s\n  Organization  %s\n  Instance      %s", wizardHeaderValue(account.Email), wizardHeaderValue(account.OrganizationName), wizardHeaderValue(account.Host))),
+		huh.NewGroup(
+			huh.NewInput().Title("How far back?").Description("For example 14d or 36h.").Prompt("  ").
+				Placeholder("14d").Value(&settings.custom).Validate(validDuration),
+		).WithHideFunc(func() bool { return *history != "custom" || !continueSetup }),
+	)
 	form.WithTheme(huh.ThemeFunc(func(isDark bool) *huh.Styles {
 		styles := huh.ThemeCharm(isDark)
 		styles.FieldSeparator = lipgloss.NewStyle().SetString("\n")
@@ -92,18 +106,30 @@ func (p *setupInput) confirmCodexReplacement() (bool, error) {
 }
 
 func wizardPreferences(account accountConfig, available []string, p *setupInput) (wizardSettings, error) {
-	if len(available) == 0 {
-		return wizardSettings{}, errors.New("no tools selected; run Claude Code or Codex once, then rerun navigara wizard")
+	settings := wizardSettings{source: setupSource(available), email: account.Email, history: "all", imports: map[string]time.Time{}}
+	connected := false
+	for key, at := range account.Imports {
+		org, tool, _ := strings.Cut(key, "/")
+		if org != account.OrganizationID {
+			continue
+		}
+		connected = true
+		if slices.Contains(available, tool) {
+			settings.imports[tool] = at
+			settings.history = "since"
+		}
 	}
-	settings := wizardSettings{source: setupSource(available), email: account.Email, history: "all"}
+	if connected {
+		fmt.Fprintf(p.out, "Already connected to %s as %s.\n", account.Host, account.Email)
+	}
 	return editWizardPreferences(account, available, settings, p)
 }
 
 func editWizardPreferences(account accountConfig, available []string, settings wizardSettings, p *setupInput) (wizardSettings, error) {
 	selected := selectedTools(available, settings.source)
-	history, customHistory := settings.history, "7d"
+	history := settings.history
 	if !knownHistory(history) {
-		customHistory, history = history, "custom"
+		settings.custom, history = history, "custom"
 	}
 	if p.interactive() {
 		form := newWizardForm(account, available, &settings, &selected, &history)
@@ -144,7 +170,16 @@ func editWizardPreferences(account accountConfig, available []string, settings w
 		if settings.email, err = p.ask("Your email", settings.email); err != nil {
 			return settings, err
 		}
-		if settings.history, err = p.ask("How much history should we import? (7d, 24h, all, or skip)", settings.history); err != nil {
+		question := "How much history should we import? (7d, 24h, all, or skip)"
+		if len(settings.imports) > 0 {
+			question = "How much history should we import? (since last import, 7d, 24h, all, or skip)"
+		}
+		if settings.history, err = p.askHistory(question, settings.history, func(value string) error {
+			if knownHistory(value) && (value != "since" || len(settings.imports) > 0) {
+				return nil
+			}
+			return validDuration(value)
+		}); err != nil {
 			return settings, err
 		}
 	}
@@ -157,17 +192,51 @@ func editWizardPreferences(account accountConfig, available []string, settings w
 		return settings, err
 	}
 	if settings.history == "custom" {
-		var err error
-		settings.history, err = p.ask("How far back? (for example 12h or 14d)", customHistory)
-		if err != nil {
-			return settings, err
+		if p.interactive() {
+			settings.history = strings.TrimSpace(settings.custom)
+		} else {
+			var err error
+			if settings.history, err = p.askHistory("How far back? (for example 12h or 14d)", firstNonEmpty(settings.custom, "7d"), validDuration); err != nil {
+				return settings, err
+			}
 		}
 	}
 	return settings, nil
 }
 
+func validDuration(value string) error {
+	if _, err := parseLast(strings.TrimSpace(value)); err != nil {
+		return errors.New("Enter a duration like 14d or 36h.")
+	}
+	return nil
+}
+
+// askHistory asks again until the answer is valid, so a typo never ends the wizard.
+func (p *setupInput) askHistory(question, fallback string, valid func(string) error) (string, error) {
+	for {
+		answer, err := p.ask(question, fallback)
+		if err != nil {
+			return "", err
+		}
+		if err = valid(answer); err == nil {
+			return answer, nil
+		}
+		fmt.Fprintln(p.out, err)
+	}
+}
+
+func earliestImport(imports map[string]time.Time) time.Time {
+	var earliest time.Time
+	for _, at := range imports {
+		if earliest.IsZero() || at.Before(earliest) {
+			earliest = at
+		}
+	}
+	return earliest
+}
+
 func knownHistory(history string) bool {
-	for _, candidate := range []string{"all", "30d", "7d", "24h", "skip", "custom"} {
+	for _, candidate := range []string{"all", "since", "30d", "7d", "24h", "skip", "custom"} {
 		if history == candidate {
 			return true
 		}
