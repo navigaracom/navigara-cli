@@ -581,3 +581,19 @@ func TestConfigRemoveRestoresOriginalSettings(t *testing.T) {
 		t.Fatalf("second remove: code=%d out=%s", code, out)
 	}
 }
+
+func TestConfigRemovePreviewListsKeysChangedByUser(t *testing.T) {
+	_, claude, codex, _ := patchFixture(t)
+	ours, err := claudeSettings([]byte(`{}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := bytes.Replace(ours, []byte(`"OTEL_TRACES_EXPORTER": "none"`), []byte(`"OTEL_TRACES_EXPORTER": "otlp"`), 1)
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"), changed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"sessions", "config", "remove", "--source", "claude", "--claude-home", claude, "--codex-home", codex}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "  Kept (changed by you): OTEL_TRACES_EXPORTER\n") {
+		t.Fatalf("code=%d out=%s err=%s", code, &out, &errOut)
+	}
+}

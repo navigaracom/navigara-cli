@@ -139,6 +139,9 @@ func removePlans(opts options, home string) ([]*setupFile, error) {
 		if err := add(target.path, target.transform); err != nil {
 			return nil, err
 		}
+		if i == 0 && len(files) == 1 && !bytes.Equal(files[0].before, files[0].after) {
+			files[0].notes = claudeKeptKeys(files[0].after)
+		}
 	}
 	return files, nil
 }

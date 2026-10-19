@@ -477,3 +477,25 @@ func TestClaudeSettingsSecondHostKeepsNoNavigaraIdentity(t *testing.T) {
 		t.Fatalf("remove after a host change = %s, %v", got, err)
 	}
 }
+
+func TestRemoveClaudeSettingsKeepsKeysChangedByUser(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{"env":{"KEEP":"yes"}}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := bytes.Replace(ours, []byte(`"OTEL_LOGS_EXPORTER": "otlp"`), []byte(`"OTEL_LOGS_EXPORTER": "none"`), 1)
+	got, err := removeClaudeSettings(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(got, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]any{"env": map[string]any{"KEEP": "yes", "OTEL_LOGS_EXPORTER": "none"}}; !reflect.DeepEqual(settings, want) {
+		t.Fatalf("remove = %s", got)
+	}
+	if notes := claudeKeptKeys(got); !reflect.DeepEqual(notes, []string{"Kept (changed by you): OTEL_LOGS_EXPORTER"}) {
+		t.Fatalf("notes = %q", notes)
+	}
+}

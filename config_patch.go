@@ -274,6 +274,9 @@ func runConfigRemove(args []string, stdout, stderr io.Writer) int {
 			continue
 		}
 		fmt.Fprintln(stdout, "Update:", f.path)
+		for _, note := range f.notes {
+			fmt.Fprintln(stdout, "  "+note)
+		}
 		changed = append(changed, f)
 	}
 	if len(changed) == 0 {

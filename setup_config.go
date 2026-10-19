@@ -306,6 +306,29 @@ func removeManagedBlock(data []byte, managed func([]byte) (int, int, error)) ([]
 	return append(append([]byte(nil), data[:start]...), data[end:]...), nil
 }
 
+// olderClaudeTelemetryValues holds values that an earlier Navigara version
+// wrote and the current version does not.
+var olderClaudeTelemetryValues = map[string]string{"OTEL_LOG_USER_PROMPTS": "0"}
+
+// claudeKeptKeys lists the Navigara keys that removeClaudeSettings kept
+// because the user changed them.
+func claudeKeptKeys(after []byte) []string {
+	var settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if json.Unmarshal(after, &settings) != nil {
+		return nil
+	}
+	var kept []string
+	for key := range claudeTelemetryEnv("", "", "") {
+		if _, ok := settings.Env[key]; ok && key != "OTEL_RESOURCE_ATTRIBUTES" {
+			kept = append(kept, "Kept (changed by you): "+key)
+		}
+	}
+	sort.Strings(kept)
+	return kept
+}
+
 // removeClaudeSettings removes the env keys that claudeSettings wrote. It
 // changes nothing unless the endpoint is a Navigara endpoint.
 func removeClaudeSettings(data []byte) ([]byte, error) {
@@ -334,9 +357,17 @@ func removeClaudeSettings(data []byte) ([]byte, error) {
 	if previous, ok := env[previousEnduserID]; ok {
 		kept = append(kept, "enduser.id="+previous)
 	}
-	// The current keys include every key that an older version wrote.
-	for key := range claudeTelemetryEnv("", "", "") {
-		delete(env, key)
+	// The current keys include every key that an older version wrote. A key
+	// with a value that no Navigara version wrote was changed by the user.
+	for key, value := range claudeTelemetryEnv(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "", "") {
+		switch key {
+		case "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_RESOURCE_ATTRIBUTES":
+			delete(env, key)
+		default:
+			if current, ok := env[key]; ok && (current == value || current == olderClaudeTelemetryValues[key]) {
+				delete(env, key)
+			}
+		}
 	}
 	delete(env, previousEnduserID)
 	if len(kept) > 0 {
