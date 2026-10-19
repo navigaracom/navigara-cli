@@ -117,6 +117,9 @@ func (c *authClient) browserLogin(ctx context.Context, command string, out io.Wr
 // sshServer returns the server address from SSH_CONNECTION ("client port server port").
 func sshServer(conn string) string {
 	if fields := strings.Fields(conn); len(fields) == 4 {
+		if fields[3] != "22" {
+			return "-p " + fields[3] + " " + fields[2]
+		}
 		return fields[2]
 	}
 	return "<host>"

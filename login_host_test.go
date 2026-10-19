@@ -77,6 +77,9 @@ func TestBrowserLoginGuidance(t *testing.T) {
 	if err == nil || err.Error() != "login cancelled or timed out; run navigara wizard again" {
 		t.Fatalf("err = %v", err)
 	}
+	if got := sshServer("10.0.0.1 51000 192.0.2.7 2222"); got != "-p 2222 192.0.2.7" {
+		t.Errorf("custom SSH port: %q", got)
+	}
 	t.Setenv("SSH_CONNECTION", "")
 	out.Reset()
 	ctx, cancel = context.WithCancel(context.Background())
