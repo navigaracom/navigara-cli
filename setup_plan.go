@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func setupPlans(opts options, home string) ([]*setupFile, error) {
@@ -39,7 +42,7 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 			return nil, err
 		}
 		f := files[len(files)-1]
-		f.notes, f.conflict = claudeTelemetryChanges(f.before, endpoint, opts.token)
+		f.notes, f.conflict = settingsChanges(f.before, f.after, json.Unmarshal), claudeTelemetryConflict(f.before, endpoint, opts.token)
 	}
 	if opts.source == "all" || opts.source == "codex" {
 		if err := add(filepath.Join(opts.codexHome, "config.toml"), func(b []byte) ([]byte, error) {
@@ -48,7 +51,7 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 			return nil, err
 		}
 		codex := files[len(files)-1]
-		codex.notes, codex.conflict = codexTelemetryChanges(codex.before, endpoint)
+		codex.notes, codex.conflict = settingsChanges(codex.before, codex.after, toml.Unmarshal), codexTelemetryConflict(codex.before)
 		var profiles []string
 		profile := shellSettings
 		switch firstNonEmpty(opts.shell, filepath.Base(os.Getenv("SHELL"))) {

@@ -453,7 +453,7 @@ func TestConfigPatchExistingClaudeTelemetryNeedsReplace(t *testing.T) {
 	}
 
 	write(`{"env":{"KEEP":"yes"}}`)
-	if code, out, errOut := runPatch("claude", claude, codex, host, "--apply"); code != 0 || strings.Contains(out, "->") {
+	if code, out, errOut := runPatch("claude", claude, codex, host, "--apply"); code != 0 || !strings.Contains(out, "env.OTEL_RESOURCE_ATTRIBUTES: (none) -> enduser.id=dev@example.com") || strings.Contains(out, "KEEP") {
 		t.Fatalf("no existing telemetry: code=%d out=%s err=%s", code, out, errOut)
 	}
 	if code, out, errOut := runPatch("claude", claude, codex, host, "--apply"); code != 0 || !strings.Contains(out, "Unchanged: "+path) || !strings.Contains(out, "No changes needed.") || strings.Contains(out, "applied") {
@@ -495,7 +495,7 @@ func TestConfigPatchExistingCodexTelemetryNeedsReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, errOut := runPatch("codex", claude, codex, host)
-	if code != 0 || !strings.Contains(out, "[features] rmcp_client: (removed)") || !strings.Contains(out, "[otel.exporter.otlp-http] endpoint: https://old.example/v1/logs -> "+host+"/api/otlp/v1/logs; headers: replaced") || strings.Contains(out, "fixture-old") {
+	if code != 0 || !strings.Contains(out, "features.rmcp_client: true -> (removed)") || !strings.Contains(out, "otel.exporter.otlp-http.endpoint: https://old.example/v1/logs -> "+host+"/api/otlp/v1/logs") || strings.Contains(out, "fixture-old") {
 		t.Fatalf("preview: code=%d out=%s err=%s", code, out, errOut)
 	}
 	code, _, errOut = runPatch("codex", claude, codex, host, "--apply")
@@ -529,7 +529,7 @@ func TestConfigRemoveRestoresOriginalSettings(t *testing.T) {
 	root, claude, codex, host := patchFixture(t)
 	claudePath, codexPath, zshrc := filepath.Join(claude, "settings.json"), filepath.Join(codex, "config.toml"), filepath.Join(root, ".zshrc")
 	originals := map[string]string{
-		claudePath: `{"theme":"dark","env":{"KEEP":"yes","OTEL_RESOURCE_ATTRIBUTES":"team=a"}}`,
+		claudePath: `{"theme":"dark","env":{"KEEP":"yes","OTEL_RESOURCE_ATTRIBUTES":"team=a,enduser.id=me@corp.example"}}`,
 		codexPath:  "model = \"o3\"\n\n[projects.\"/work\"]\ntrust_level = \"trusted\"\n",
 		zshrc:      "export PATH=/bin\n",
 	}
@@ -544,6 +544,9 @@ func TestConfigRemoveRestoresOriginalSettings(t *testing.T) {
 	backups, _ := filepath.Glob(filepath.Join(root, "state", "navigara", "backups", "*", "*"))
 	if len(backups) != 3 {
 		t.Fatalf("want 3 backups in one run folder, got %v", backups)
+	}
+	if code, out, errOut := runPatch("all", claude, codex, host, "--apply", "--email", "new@example.com"); code != 0 {
+		t.Fatalf("second patch: code=%d out=%s err=%s", code, out, errOut)
 	}
 
 	remove := func(args ...string) (int, string, string) {

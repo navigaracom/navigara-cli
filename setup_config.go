@@ -48,6 +48,14 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Keep the user's own enduser.id so config remove can restore it.
+	if _, recorded := env[previousEnduserID]; !recorded && env["OTEL_EXPORTER_OTLP_ENDPOINT"] != endpoint {
+		for _, attr := range strings.Split(env["OTEL_RESOURCE_ATTRIBUTES"], ",") {
+			if key, value, _ := strings.Cut(strings.TrimSpace(attr), "="); strings.TrimSpace(key) == "enduser.id" {
+				env[previousEnduserID] = value
+			}
+		}
+	}
 	for key, value := range claudeTelemetryEnv(endpoint, token, attrs) {
 		env[key] = value
 	}
@@ -58,6 +66,8 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	settings["env"] = raw
 	return json.MarshalIndent(settings, "", "  ")
 }
+
+const previousEnduserID = "NAVIGARA_PREVIOUS_ENDUSER_ID"
 
 func claudeTelemetryEnv(endpoint, token, attrs string) map[string]string {
 	return map[string]string{
@@ -80,63 +90,95 @@ func claudeTelemetryEnv(endpoint, token, attrs string) map[string]string {
 	}
 }
 
-// claudeTelemetryChanges lists the existing settings.json telemetry values
-// that claudeSettings replaces or removes. Values that Navigara wrote before
-// (same endpoint) are updates, not conflicts.
-func claudeTelemetryChanges(data []byte, endpoint, token string) ([]string, error) {
+// claudeTelemetryConflict reports existing settings.json telemetry that
+// Navigara did not write. Values with the same endpoint are Navigara's own.
+func claudeTelemetryConflict(data []byte, endpoint, token string) error {
 	var settings struct {
 		Env               map[string]string `json:"env"`
 		OtelHeadersHelper *string           `json:"otelHeadersHelper"`
 	}
 	if len(bytes.TrimSpace(data)) == 0 || json.Unmarshal(data, &settings) != nil {
-		return nil, nil
+		return nil
 	}
-	var changes []string
-	if settings.OtelHeadersHelper != nil {
-		changes = append(changes, telemetryChange("otelHeadersHelper", *settings.OtelHeadersHelper, ""))
-	}
+	foreign := settings.OtelHeadersHelper != nil
 	for _, key := range claudeFileTelemetryOverrides {
-		if old, ok := settings.Env[key]; ok {
-			changes = append(changes, telemetryChange(key, old, ""))
-		}
+		_, ok := settings.Env[key]
+		foreign = foreign || ok
 	}
 	current := settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"]
 	if current != endpoint {
-		want := claudeTelemetryEnv(endpoint, token, "")
-		keys := make([]string, 0, len(want))
-		for key := range want {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			if old, ok := settings.Env[key]; ok && key != "OTEL_RESOURCE_ATTRIBUTES" && old != want[key] {
-				changes = append(changes, telemetryChange(key, old, want[key]))
+		for key, value := range claudeTelemetryEnv(endpoint, token, "") {
+			if old, ok := settings.Env[key]; ok && key != "OTEL_RESOURCE_ATTRIBUTES" && old != value {
+				foreign = true
 			}
 		}
 	}
-	if len(changes) == 0 {
-		return nil, nil
+	switch {
+	case !foreign:
+		return nil
+	case current != "" && current != endpoint:
+		return fmt.Errorf("Claude Code already sends telemetry to %s. Re-run with --replace, or use --source codex.", current)
 	}
-	if current != "" && current != endpoint {
-		return changes, fmt.Errorf("Claude Code already sends telemetry to %s. Re-run with --replace, or use --source codex.", current)
-	}
-	return changes, errors.New("Claude Code already has telemetry settings. Re-run with --replace, or use --source codex.")
+	return errors.New("Claude Code already has telemetry settings. Re-run with --replace, or use --source codex.")
 }
 
-func telemetryChange(key, old, new string) string {
-	if new == "" {
-		return fmt.Sprintf("%s: %s -> (removed)", key, maskTelemetry(key, old))
+// settingsChanges lists every added, changed and removed setting between two
+// versions of a JSON or TOML file, with secrets masked.
+func settingsChanges(before, after []byte, unmarshal func([]byte, any) error) []string {
+	flatten := func(data []byte) map[string]string {
+		out := map[string]string{}
+		var doc map[string]any
+		if unmarshal(data, &doc) != nil {
+			return out
+		}
+		var walk func(prefix string, value any)
+		walk = func(prefix string, value any) {
+			if table, ok := value.(map[string]any); ok {
+				for key, child := range table {
+					walk(strings.TrimPrefix(prefix+"."+key, "."), child)
+				}
+				return
+			}
+			out[prefix] = fmt.Sprint(value)
+		}
+		walk("", doc)
+		return out
 	}
-	return fmt.Sprintf("%s: %s -> %s", key, maskTelemetry(key, old), maskTelemetry(key, new))
+	old, updated := flatten(before), flatten(after)
+	keys := make([]string, 0, len(old)+len(updated))
+	for key := range old {
+		keys = append(keys, key)
+	}
+	for key := range updated {
+		if _, ok := old[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	var changes []string
+	for _, key := range keys {
+		from, hadOld := old[key]
+		to, hasNew := updated[key]
+		switch {
+		case !hadOld:
+			changes = append(changes, fmt.Sprintf("%s: (none) -> %s", key, maskTelemetry(key, to)))
+		case !hasNew:
+			changes = append(changes, fmt.Sprintf("%s: %s -> (removed)", key, maskTelemetry(key, from)))
+		case from != to:
+			changes = append(changes, fmt.Sprintf("%s: %s -> %s", key, maskTelemetry(key, from), maskTelemetry(key, to)))
+		}
+	}
+	return changes
 }
 
 // maskTelemetry hides header values and header helper commands, which
 // usually hold secrets.
 func maskTelemetry(key, value string) string {
-	if strings.Contains(strings.ToUpper(key), "HELPER") {
+	upper := strings.ToUpper(key)
+	if strings.Contains(upper, "HELPER") || strings.Contains(upper, "HEADERS.") {
 		return "***"
 	}
-	if !strings.Contains(key, "HEADERS") {
+	if !strings.Contains(upper, "HEADERS") {
 		return value
 	}
 	parts := strings.Split(value, ",")
@@ -186,40 +228,27 @@ func codexSettings(data []byte, endpoint, token string) ([]byte, error) {
 	return out, nil
 }
 
-// codexTelemetryChanges lists what codexSettings replaces or removes. Telemetry
-// outside the Navigara block is a conflict.
-func codexTelemetryChanges(data []byte, endpoint string) ([]string, error) {
-	var changes []string
-	_, removed, _ := removeObsoleteCodexFeatures(data)
-	for _, key := range removed {
-		changes = append(changes, "[features] "+key+": (removed)")
-	}
+// codexTelemetryConflict reports telemetry outside the Navigara block.
+func codexTelemetryConflict(data []byte) error {
 	start, end, err := tomlManagedRange(data)
 	if err != nil || start != end || !hasOTELTOML(data) {
-		return changes, nil
+		return nil
 	}
 	var decoded struct {
 		Otel map[string]map[string]struct {
 			Endpoint string `toml:"endpoint"`
 		} `toml:"otel"`
 	}
-	first := "another destination"
+	endpoint := "another destination"
 	if toml.Unmarshal(data, &decoded) == nil {
-		for _, exporter := range []struct{ name, path string }{{"exporter", "/v1/logs"}, {"metrics_exporter", "/v1/metrics"}, {"trace_exporter", "/v1/traces"}} {
-			old := decoded.Otel[exporter.name]["otlp-http"].Endpoint
-			if old == "" {
-				continue
+		for _, name := range []string{"exporter", "metrics_exporter", "trace_exporter"} {
+			if old := decoded.Otel[name]["otlp-http"].Endpoint; old != "" {
+				endpoint = old
+				break
 			}
-			if first == "another destination" {
-				first = old
-			}
-			changes = append(changes, fmt.Sprintf("[otel.%s.otlp-http] endpoint: %s -> %s; headers: replaced", exporter.name, old, strings.TrimSuffix(endpoint, "/")+exporter.path))
 		}
 	}
-	if first == "another destination" {
-		changes = append(changes, "[otel]: (replaced)")
-	}
-	return changes, fmt.Errorf("Codex already sends telemetry to %s. Re-run with --replace, or use --source claude.", first)
+	return fmt.Errorf("Codex already sends telemetry to %s. Re-run with --replace, or use --source claude.", endpoint)
 }
 
 func shellSettings(data []byte, email string) ([]byte, error) {
@@ -304,9 +333,13 @@ func removeClaudeSettings(data []byte) ([]byte, error) {
 			kept = append(kept, attr)
 		}
 	}
+	if previous, ok := env[previousEnduserID]; ok {
+		kept = append(kept, "enduser.id="+previous)
+	}
 	for key := range want {
 		delete(env, key)
 	}
+	delete(env, previousEnduserID)
 	if len(kept) > 0 {
 		env["OTEL_RESOURCE_ATTRIBUTES"] = strings.Join(kept, ",")
 	}

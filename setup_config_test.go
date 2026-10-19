@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const testEndpoint = "https://app.navigara.com/api/otlp"
@@ -318,13 +320,18 @@ headers = { Authorization = "Bearer fixture-old" }
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := append(append(append([]byte(nil), prefix...), test.telemetry...), suffix...)
-			changes, conflict := codexTelemetryChanges(input, testEndpoint)
-			if conflict == nil || !strings.Contains(conflict.Error(), "Codex already sends telemetry to https://old.example/v1/") || !strings.Contains(conflict.Error(), "--replace") || len(changes) < 2 || !strings.Contains(changes[1], "[otel.metrics_exporter.otlp-http] endpoint: https://old.example/v1/metrics -> ") {
-				t.Fatalf("expected a replaceable conflict, got %v, %q", conflict, changes)
+			conflict := codexTelemetryConflict(input)
+			if conflict == nil || !strings.Contains(conflict.Error(), "Codex already sends telemetry to https://old.example/v1/") || !strings.Contains(conflict.Error(), "--replace") {
+				t.Fatalf("expected a replaceable conflict, got %v", conflict)
 			}
 			got, err := codexSettings(input, testEndpoint, "new")
 			if err != nil {
 				t.Fatal(err)
+			}
+			changes := strings.Join(settingsChanges(input, got, toml.Unmarshal), "\n")
+			if !strings.Contains(changes, "otel.metrics_exporter.otlp-http.endpoint: https://old.example/v1/metrics -> "+testEndpoint+"/v1/metrics") ||
+				!strings.Contains(changes, "otel.metrics_exporter.otlp-http.headers.Authorization: *** -> ***") || strings.Contains(changes, "fixture-old") || strings.Contains(changes, "model") {
+				t.Fatalf("changes = %s", changes)
 			}
 			if !bytes.HasPrefix(got, prefix) || !bytes.HasSuffix(got, suffix) || bytes.Contains(got, []byte("fixture-old")) || bytes.Count(got, []byte(telemetryBegin)) != 1 {
 				t.Fatal("replacement changed unrelated settings or retained the old exporters")
@@ -375,10 +382,32 @@ func TestShellSettingsRejectsAttributeInjectionAndBadMarkers(t *testing.T) {
 	}
 }
 
-func TestClaudeTelemetryChangesMasksSecrets(t *testing.T) {
-	changes, conflict := claudeTelemetryChanges([]byte(`{"otelHeadersHelper":"echo Authorization=Bearer helper-secret","env":{"OTEL_EXPORTER_OTLP_HEADERS":"a=one-secret,b=two-secret"}}`), testEndpoint, "new-secret")
-	if conflict == nil || strings.Contains(strings.Join(changes, "\n"), "secret") {
-		t.Fatalf("changes = %q, conflict = %v", changes, conflict)
+func TestClaudeSettingsChangesListEveryKeyAndMaskSecrets(t *testing.T) {
+	before := []byte(`{"otelHeadersHelper":"echo Authorization=Bearer helper-secret","env":{"OTEL_EXPORTER_OTLP_HEADERS":"a=one-secret,b=two-secret","OTEL_RESOURCE_ATTRIBUTES":"enduser.id=old@example.com"}}`)
+	after, err := claudeSettings(before, testEndpoint, "new-secret", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := strings.Join(settingsChanges(before, after, json.Unmarshal), "\n")
+	for _, want := range []string{
+		"otelHeadersHelper: *** -> (removed)",
+		"env.OTEL_EXPORTER_OTLP_HEADERS: a=***,b=*** -> Authorization=***",
+		"env.OTEL_RESOURCE_ATTRIBUTES: enduser.id=old@example.com -> enduser.id=dev@example.com",
+		"env.OTEL_EXPORTER_OTLP_ENDPOINT: (none) -> " + testEndpoint,
+		"env.CLAUDE_CODE_ENABLE_TELEMETRY: (none) -> 1",
+	} {
+		if !strings.Contains(changes, want) {
+			t.Errorf("changes lack %q:\n%s", want, changes)
+		}
+	}
+	if strings.Contains(changes, "secret") {
+		t.Fatalf("changes leak a secret:\n%s", changes)
+	}
+	if claudeTelemetryConflict(before, testEndpoint, "new-secret") == nil {
+		t.Fatal("foreign headers are not a conflict")
+	}
+	if got := settingsChanges(after, after, json.Unmarshal); len(got) != 0 {
+		t.Fatalf("same file lists changes: %q", got)
 	}
 }
 
