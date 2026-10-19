@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"io"
@@ -335,7 +336,7 @@ func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			backups, err := filepath.Glob(filepath.Join(codex, ".navigara-backup-*", "config.toml"))
+			backups, err := filepath.Glob(filepath.Join(home, "config", "navigara", "backups", "*", "config.toml"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -447,5 +448,37 @@ func TestWizardFormOffersSinceLastImport(t *testing.T) {
 	form.Update(tea.WindowSizeMsg{Width: 72, Height: 30})
 	if view := ansi.Strip(form.View()); !strings.Contains(view, "● Since last import (2026-10-01)") {
 		t.Fatalf("since option missing or not selected: %s", view)
+	}
+}
+
+func TestWizardPlansAsksBeforeReplacingClaudeTelemetry(t *testing.T) {
+	for _, test := range []struct {
+		name, settings, input string
+		connected             bool
+	}{
+		{name: "replace", settings: `{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://otel.corp.example"}}`, input: "y\n", connected: true},
+		{name: "keep then default skip", settings: `{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://otel.corp.example"}}`, input: "n\n\n"},
+		{name: "same values without prompt", settings: `{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://app.example/api/otlp","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Bearer old"}}`, connected: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			claude := filepath.Join(home, ".claude")
+			if err := os.Mkdir(claude, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(test.settings), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			p := &setupInput{r: bufio.NewReader(strings.NewReader(test.input)), out: &out}
+			opts := options{claudeHome: claude, url: "https://app.example/api", token: "new", email: "dev@example.com"}
+			files, connected, err := wizardPlans(&opts, home, []string{"claude"}, p)
+			if err != nil || (len(connected) == 1) != test.connected || (len(files) == 1) != test.connected {
+				t.Fatalf("connected=%v files=%d err=%v out=%s", connected, len(files), err, &out)
+			}
+			if test.input != "" && !strings.Contains(out.String(), "OTEL_EXPORTER_OTLP_ENDPOINT: https://otel.corp.example -> https://app.example/api/otlp") {
+				t.Fatalf("prompt does not list the change: %s", &out)
+			}
+		})
 	}
 }

@@ -91,14 +91,23 @@ func wizardHeaderValue(value string) string {
 	return quoted[1 : len(quoted)-1]
 }
 
-func (p *setupInput) confirmCodexReplacement() (bool, error) {
+func (p *setupInput) confirmReplacement(tool string, files []*setupFile) (bool, error) {
+	var changes []string
+	for _, f := range files {
+		if f.conflict != nil {
+			for _, note := range f.notes {
+				changes = append(changes, wizardHeaderValue(note))
+			}
+		}
+	}
 	if !p.interactive() {
-		return p.yes("Replace Codex's existing telemetry with Navigara and save a private backup")
+		fmt.Fprintf(p.out, "\n%s already sends telemetry. These settings change:\n  %s\n", setupToolName(tool), strings.Join(changes, "\n  "))
+		return p.yes("Replace " + setupToolName(tool) + "'s existing telemetry with Navigara and save a private backup")
 	}
 	value := false
 	err := p.form(huh.NewForm(huh.NewGroup(
-		huh.NewConfirm().Title("Replace Codex telemetry?").
-			Description("Stream new activity to Navigara.\nSave a private settings backup.").
+		huh.NewConfirm().Title("Replace " + setupToolName(tool) + " telemetry?").
+			Description("Stream new activity to Navigara.\nSave a private settings backup.\n\n" + strings.Join(changes, "\n")).
 			Affirmative("Replace").Negative("Keep existing").Value(&value).
 			WithButtonAlignment(lipgloss.Left),
 	)))
@@ -281,18 +290,17 @@ func wizardPlans(opts *options, home string, selected []string, p *setupInput) (
 		toolOpts := *opts
 		toolOpts.source = tool
 		planned, err := setupPlans(toolOpts, home)
-		if tool == "codex" && errors.Is(err, errCodexTelemetry) {
-			replace, inputErr := p.confirmCodexReplacement()
+		if conflict := planConflict(planned); err == nil && conflict != nil {
+			replace, inputErr := p.confirmReplacement(tool, planned)
 			if inputErr != nil {
 				return nil, nil, inputErr
 			}
-			if replace {
-				toolOpts.replaceCodexTelemetry = true
-				planned, err = setupPlans(toolOpts, home)
+			if !replace {
+				err = conflict
 			}
 		}
 		if err != nil {
-			var skip bool
+			skip := true
 			var inputErr error
 			if p.interactive() {
 				description := "Its settings have not changed. Skipping excludes both its history and new activity from this setup.\n\nDetails\n" + wizardHeaderValue(err.Error())
@@ -304,7 +312,16 @@ func wizardPlans(opts *options, home string, selected []string, p *setupInput) (
 				)))
 			} else {
 				fmt.Fprintf(p.out, "\n%s couldn't be connected safely. Its settings have not changed.\nDetails: %v\n", setupToolName(tool), err)
-				skip, inputErr = p.yes("Skip " + setupToolName(tool) + " for this setup (history and new activity)")
+				var answer string
+				if answer, inputErr = p.ask("Skip "+setupToolName(tool)+" for this setup (history and new activity) (y/n)", "y"); inputErr == nil {
+					switch strings.ToLower(answer) {
+					case "y", "yes":
+					case "n", "no":
+						skip = false
+					default:
+						inputErr = errors.New("enter y or n; run navigara wizard again")
+					}
+				}
 			}
 			if inputErr != nil {
 				return nil, nil, inputErr
@@ -314,11 +331,13 @@ func wizardPlans(opts *options, home string, selected []string, p *setupInput) (
 			}
 			continue
 		}
+		for _, f := range planned {
+			if f.warning != "" {
+				p.status("Codex identity not set", f.warning+"\n")
+			}
+		}
 		files = append(files, planned...)
 		connected = append(connected, tool)
-		if tool == "codex" {
-			opts.replaceCodexTelemetry = toolOpts.replaceCodexTelemetry
-		}
 	}
 	return files, connected, nil
 }

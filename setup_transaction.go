@@ -50,6 +50,7 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 		}
 		installed = append(installed, f)
 	}
+	collectBackups(installed)
 	return nil
 }
 

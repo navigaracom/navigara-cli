@@ -72,6 +72,9 @@ func TestLogoutRevokesAndClearsSavedAccount(t *testing.T) {
 	if !called {
 		t.Fatal("logout did not revoke the saved session")
 	}
+	if !strings.Contains(out.String(), "navigara sessions config remove --apply") {
+		t.Fatalf("logout does not name the remove command: %s", &out)
+	}
 	requireLoggedOut(t)
 	if code := run(context.Background(), []string{"logout"}, &out, &errs); code != 0 {
 		t.Fatalf("repeat logout = %d: %s", code, &errs)

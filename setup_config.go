@@ -6,15 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/url"
+	"sort"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
 	telemetryBegin = "# >>> navigara telemetry >>>"
 	telemetryEnd   = "# <<< navigara telemetry <<<"
 )
-
-var errCodexTelemetry = errors.New("Codex already has telemetry configured")
 
 func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) {
 	if err := validValue("endpoint", endpoint); err != nil {
@@ -47,7 +49,106 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	for key, value := range map[string]string{
+	// Keep the user's own enduser.id so config remove can restore it. An
+	// identity in a Navigara setup is Navigara's; its record carries over.
+	if _, recorded := env[previousEnduserID]; !recorded && !navigaraClaudeTelemetry(env, []string{defaultHost, urlOrigin(endpoint)}) {
+		for _, attr := range strings.Split(env["OTEL_RESOURCE_ATTRIBUTES"], ",") {
+			if key, value, _ := strings.Cut(strings.TrimSpace(attr), "="); strings.TrimSpace(key) == "enduser.id" {
+				env[previousEnduserID] = value
+			}
+		}
+	}
+	for key, value := range claudeTelemetryEnv(endpoint, token, attrs) {
+		env[key] = value
+	}
+	env[managedEndpoint], env[managedEmail] = endpoint, email
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return nil, err
+	}
+	settings["env"] = raw
+	return json.MarshalIndent(settings, "", "  ")
+}
+
+const previousEnduserID = "NAVIGARA_PREVIOUS_ENDUSER_ID"
+
+// The marker keys record the endpoint and email that Navigara wrote to
+// settings.json. They are not in claudeTelemetryEnv, so status checks ignore
+// them.
+const (
+	managedEndpoint = "NAVIGARA_MANAGED_ENDPOINT"
+	managedEmail    = "NAVIGARA_MANAGED_EMAIL"
+)
+
+// navigaraClaudeTelemetry reports whether Navigara wrote the telemetry in env.
+// The /api/otlp path and a Bearer header alone are not proof. A marked file
+// needs the endpoint that the marker recorded; an older file without markers
+// needs a known Navigara origin.
+func navigaraClaudeTelemetry(env map[string]string, known []string) bool {
+	if !looksLikeNavigaraClaude(env) {
+		return false
+	}
+	if marker, ok := env[managedEndpoint]; ok {
+		return env["OTEL_EXPORTER_OTLP_ENDPOINT"] == marker
+	}
+	return knownOrigin(env["OTEL_EXPORTER_OTLP_ENDPOINT"], known)
+}
+
+func knownOrigin(endpoint string, known []string) bool {
+	origin := urlOrigin(endpoint)
+	for _, host := range known {
+		if host != "" && origin == host {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeNavigaraClaude(env map[string]string) bool {
+	return strings.HasSuffix(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "/api/otlp") && strings.HasPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ")
+}
+
+func urlOrigin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// claudeUnknownOrigin returns the origin of Navigara-like telemetry that
+// navigaraClaudeTelemetry cannot prove, or "".
+func claudeUnknownOrigin(data []byte, known []string) string {
+	var settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if json.Unmarshal(data, &settings) != nil || !looksLikeNavigaraClaude(settings.Env) || navigaraClaudeTelemetry(settings.Env, known) {
+		return ""
+	}
+	if _, marked := settings.Env[managedEndpoint]; marked {
+		return ""
+	}
+	return urlOrigin(settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"])
+}
+
+// navigaraBearer reports whether value is exactly the header that Navigara
+// writes, with any token.
+func navigaraBearer(value string) bool {
+	token, ok := strings.CutPrefix(value, "Authorization=Bearer ")
+	return ok && token != "" && !strings.ContainsAny(token, ", \t")
+}
+
+// navigaraClaudeValue reports whether some Navigara version wrote value for
+// key. The endpoint and resource attributes are not covered.
+func navigaraClaudeValue(key, value string) bool {
+	if key == "OTEL_EXPORTER_OTLP_HEADERS" {
+		return navigaraBearer(value)
+	}
+	return value == claudeTelemetryEnv("", "", "")[key] || value == olderClaudeTelemetryValues[key]
+}
+
+func claudeTelemetryEnv(endpoint, token, attrs string) map[string]string {
+	return map[string]string{
 		"CLAUDE_CODE_ENABLE_TELEMETRY":        "1",
 		"OTEL_METRICS_EXPORTER":               "otlp",
 		"OTEL_LOGS_EXPORTER":                  "otlp",
@@ -64,18 +165,115 @@ func claudeSettings(data []byte, endpoint, token, email string) ([]byte, error) 
 		"OTEL_LOG_RAW_API_BODIES":             "0",
 		"OTEL_TRACES_EXPORTER":                "none",
 		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "0",
-	} {
-		env[key] = value
 	}
-	raw, err := json.Marshal(env)
-	if err != nil {
-		return nil, err
-	}
-	settings["env"] = raw
-	return json.MarshalIndent(settings, "", "  ")
 }
 
-func codexSettings(data []byte, endpoint, token string, replace bool) ([]byte, error) {
+// claudeTelemetryConflict reports existing settings.json telemetry that
+// Navigara did not write. In a setup with the same endpoint, only values that
+// a Navigara version wrote, with any token, may change without --replace.
+func claudeTelemetryConflict(data []byte, endpoint, token string) error {
+	var settings struct {
+		Env               map[string]string `json:"env"`
+		OtelHeadersHelper *string           `json:"otelHeadersHelper"`
+	}
+	if len(bytes.TrimSpace(data)) == 0 || json.Unmarshal(data, &settings) != nil {
+		return nil
+	}
+	foreign := settings.OtelHeadersHelper != nil
+	for _, key := range claudeFileTelemetryOverrides {
+		_, ok := settings.Env[key]
+		foreign = foreign || ok
+	}
+	current := settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"]
+	ours := current == endpoint && navigaraBearer(settings.Env["OTEL_EXPORTER_OTLP_HEADERS"])
+	if marker, ok := settings.Env[managedEndpoint]; ok {
+		ours = ours && current == marker
+		if id, ok := enduserIDOf(settings.Env["OTEL_RESOURCE_ATTRIBUTES"]); ok && id != settings.Env[managedEmail] {
+			foreign = true
+		}
+	}
+	for key, value := range claudeTelemetryEnv(endpoint, token, "") {
+		if old, ok := settings.Env[key]; ok && key != "OTEL_RESOURCE_ATTRIBUTES" && old != value && !(ours && navigaraClaudeValue(key, old)) {
+			foreign = true
+		}
+	}
+	switch {
+	case !foreign:
+		return nil
+	case current != "" && current != endpoint:
+		return fmt.Errorf("Claude Code already sends telemetry to %s. Re-run with --replace, or use --source codex.", current)
+	}
+	return errors.New("Claude Code already has telemetry settings. Re-run with --replace, or use --source codex.")
+}
+
+// settingsChanges lists every added, changed and removed setting between two
+// versions of a JSON or TOML file, with secrets masked.
+func settingsChanges(before, after []byte, unmarshal func([]byte, any) error) []string {
+	flatten := func(data []byte) map[string]string {
+		out := map[string]string{}
+		var doc map[string]any
+		if unmarshal(data, &doc) != nil {
+			return out
+		}
+		var walk func(prefix string, value any)
+		walk = func(prefix string, value any) {
+			if table, ok := value.(map[string]any); ok {
+				for key, child := range table {
+					walk(strings.TrimPrefix(prefix+"."+key, "."), child)
+				}
+				return
+			}
+			out[prefix] = fmt.Sprint(value)
+		}
+		walk("", doc)
+		return out
+	}
+	old, updated := flatten(before), flatten(after)
+	keys := make([]string, 0, len(old)+len(updated))
+	for key := range old {
+		keys = append(keys, key)
+	}
+	for key := range updated {
+		if _, ok := old[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	var changes []string
+	for _, key := range keys {
+		from, hadOld := old[key]
+		to, hasNew := updated[key]
+		switch {
+		case !hadOld:
+			changes = append(changes, fmt.Sprintf("%s: (none) -> %s", key, maskTelemetry(key, to)))
+		case !hasNew:
+			changes = append(changes, fmt.Sprintf("%s: %s -> (removed)", key, maskTelemetry(key, from)))
+		case from != to:
+			changes = append(changes, fmt.Sprintf("%s: %s -> %s", key, maskTelemetry(key, from), maskTelemetry(key, to)))
+		}
+	}
+	return changes
+}
+
+// maskTelemetry hides header values and header helper commands, which
+// usually hold secrets.
+func maskTelemetry(key, value string) string {
+	upper := strings.ToUpper(key)
+	if strings.Contains(upper, "HELPER") || strings.Contains(upper, "HEADERS.") {
+		return "***"
+	}
+	if !strings.Contains(upper, "HEADERS") {
+		return value
+	}
+	parts := strings.Split(value, ",")
+	for i, part := range parts {
+		name, _, _ := strings.Cut(part, "=")
+		parts[i] = strings.TrimSpace(name) + "=***"
+	}
+	return strings.Join(parts, ",")
+}
+
+func codexSettings(data []byte, endpoint, token string) ([]byte, error) {
 	if err := validValue("endpoint", endpoint); err != nil {
 		return nil, err
 	}
@@ -96,9 +294,6 @@ func codexSettings(data []byte, endpoint, token string, replace bool) ([]byte, e
 		if !supported {
 			return nil, errors.New("Codex settings use an unsupported or conflicting TOML layout; skip Codex or update its telemetry settings manually")
 		}
-		if !replace {
-			return nil, errCodexTelemetry
-		}
 	}
 	block := []byte(codexBlock(endpoint, token))
 	if start != end {
@@ -107,7 +302,7 @@ func codexSettings(data []byte, endpoint, token string, replace bool) ([]byte, e
 		}
 	}
 	out := spliceManaged(data, block, start, end)
-	out, err = removeObsoleteCodexFeatures(out)
+	out, _, err = removeObsoleteCodexFeatures(out)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +310,38 @@ func codexSettings(data []byte, endpoint, token string, replace bool) ([]byte, e
 		return nil, err
 	}
 	return out, nil
+}
+
+// codexTelemetryConflict reports Codex telemetry that Navigara did not write:
+// telemetry outside the Navigara block, or a block that differs from what a
+// Navigara version wrote for a known origin. A new token is not a conflict.
+func codexTelemetryConflict(data []byte, endpoint string) error {
+	start, end, err := tomlManagedRange(data)
+	if err != nil {
+		return nil
+	}
+	if start != end {
+		if old, identical := codexBlockEndpoint(data[start:end]); identical && knownOrigin(old, []string{defaultHost, urlOrigin(endpoint)}) {
+			return nil
+		}
+	} else if !hasOTELTOML(data) {
+		return nil
+	}
+	var decoded struct {
+		Otel map[string]map[string]struct {
+			Endpoint string `toml:"endpoint"`
+		} `toml:"otel"`
+	}
+	current := "another destination"
+	if toml.Unmarshal(data, &decoded) == nil {
+		for _, name := range []string{"exporter", "metrics_exporter", "trace_exporter"} {
+			if old := decoded.Otel[name]["otlp-http"].Endpoint; old != "" {
+				current = old
+				break
+			}
+		}
+	}
+	return fmt.Errorf("Codex already sends telemetry to %s. Re-run with --replace, or use --source claude.", current)
 }
 
 func shellSettings(data []byte, email string) ([]byte, error) {
@@ -137,24 +364,220 @@ unset navigara_attrs navigara_remaining navigara_attr
 	return spliceManaged(data, block, start, end), nil
 }
 
+func fishSettings(data []byte, email string) ([]byte, error) {
+	if err := validEmail(email); err != nil {
+		return nil, err
+	}
+	start, end, err := managedRange(data)
+	if err != nil {
+		return nil, err
+	}
+	block := []byte(telemetryBegin + `
+set -l navigara_attrs (string split , -- "$OTEL_RESOURCE_ATTRIBUTES" | string match -v -r '^(enduser\.id=.*)?$')
+set -gx OTEL_RESOURCE_ATTRIBUTES (string join , -- $navigara_attrs ` + fishQuote("enduser.id="+email) + `)
+` + telemetryEnd + "\n")
+	return spliceManaged(data, block, start, end), nil
+}
+
+func fishQuote(value string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, "'", `\'`).Replace(value) + "'"
+}
+
+// removeManagedBlock removes the Navigara block from a shell profile.
+func removeManagedBlock(data []byte) ([]byte, error) {
+	start, end, err := managedRange(data)
+	if err != nil || start == end {
+		return data, err
+	}
+	return append(append([]byte(nil), data[:start]...), data[end:]...), nil
+}
+
+// removeCodexSettings removes the Navigara block from config.toml. It keeps
+// the file and returns a warning when the block is not proven Navigara's or
+// when removing it would move or break other settings.
+func removeCodexSettings(data []byte, known []string) ([]byte, string, error) {
+	start, end, err := tomlManagedRange(data)
+	if err != nil || start == end {
+		return data, "", err
+	}
+	endpoint, identical := codexBlockEndpoint(data[start:end])
+	switch {
+	case !identical:
+		return data, "Kept (changed by you): the Navigara telemetry block in config.toml.", nil
+	case !knownOrigin(endpoint, known):
+		origin := urlOrigin(endpoint)
+		return data, "Codex sends telemetry to " + origin + ", which is not a known Navigara address; nothing removed. Use --host " + origin + " if it is your Navigara instance.", nil
+	case !managedSuffixSafe(data[end:]):
+		return data, "Kept: the Navigara block in config.toml is followed by settings that would move to another table. Move them above the block, then run again.", nil
+	}
+	out := append(append([]byte(nil), data[:start]...), data[end:]...)
+	if validateTOML(out) != nil {
+		return data, "Kept: removing the Navigara block would make config.toml invalid. Remove the block by hand.", nil
+	}
+	return out, "", nil
+}
+
+// olderClaudeTelemetryValues holds values that an earlier Navigara version
+// wrote and the current version does not.
+var olderClaudeTelemetryValues = map[string]string{"OTEL_LOG_USER_PROMPTS": "0"}
+
+// claudeKeptKeys lists the Navigara settings that removeClaudeSettings kept.
+func claudeKeptKeys(before, after []byte) []string {
+	var old, settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if json.Unmarshal(before, &old) != nil || json.Unmarshal(after, &settings) != nil {
+		return nil
+	}
+	var kept []string
+	for key := range claudeTelemetryEnv("", "", "") {
+		value, ok := settings.Env[key]
+		switch {
+		case !ok || key == "OTEL_RESOURCE_ATTRIBUTES":
+		case key == "OTEL_EXPORTER_OTLP_ENDPOINT" || !navigaraClaudeValue(key, value):
+			kept = append(kept, "Kept (changed by you): "+key)
+		default:
+			kept = append(kept, "Kept: "+key)
+		}
+	}
+	if marker, ok := old.Env[managedEmail]; ok {
+		if id, ok := enduserIDOf(old.Env["OTEL_RESOURCE_ATTRIBUTES"]); ok && id != marker {
+			kept = append(kept, "Kept (changed by you): enduser.id")
+		}
+	}
+	sort.Strings(kept)
+	return kept
+}
+
+// enduserIDOf returns the enduser.id entry of OTEL_RESOURCE_ATTRIBUTES.
+func enduserIDOf(attrs string) (string, bool) {
+	for _, attr := range strings.Split(attrs, ",") {
+		if key, value, _ := strings.Cut(strings.TrimSpace(attr), "="); strings.TrimSpace(key) == "enduser.id" {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+// removeClaudeSettings removes the env keys that claudeSettings wrote. It
+// changes nothing unless navigaraClaudeTelemetry proves that Navigara wrote them.
+func removeClaudeSettings(data []byte, known []string) ([]byte, error) {
+	var settings map[string]json.RawMessage
+	if len(bytes.TrimSpace(data)) == 0 {
+		return data, nil
+	}
+	if err := json.Unmarshal(data, &settings); err != nil || settings == nil {
+		return nil, errors.New("Claude settings must be a JSON object")
+	}
+	env := map[string]string{}
+	if raw, ok := settings["env"]; ok {
+		if err := json.Unmarshal(raw, &env); err != nil || env == nil {
+			return nil, errors.New("Claude settings env must be a JSON object of strings")
+		}
+	}
+	marker, marked := env[managedEndpoint]
+	email, emailMarked := env[managedEmail]
+	switch {
+	case marked && env["OTEL_EXPORTER_OTLP_ENDPOINT"] != marker:
+		// The user changed the endpoint: the telemetry is theirs now.
+		delete(env, managedEndpoint)
+		delete(env, managedEmail)
+		delete(env, previousEnduserID)
+		return marshalClaudeEnv(settings, env)
+	case !navigaraClaudeTelemetry(env, known):
+		return data, nil
+	}
+	var kept []string
+	id, hasID := enduserIDOf(env["OTEL_RESOURCE_ATTRIBUTES"])
+	ours := hasID && (!emailMarked || id == email)
+	for _, attr := range strings.Split(env["OTEL_RESOURCE_ATTRIBUTES"], ",") {
+		if name, _, _ := strings.Cut(attr, "="); attr != "" && (strings.TrimSpace(name) != "enduser.id" || !ours) {
+			kept = append(kept, attr)
+		}
+	}
+	if previous, ok := env[previousEnduserID]; ok && (ours || !hasID) {
+		kept = append(kept, "enduser.id="+previous)
+	}
+	// The current keys include every key that an older version wrote. A key
+	// with a value that no Navigara version wrote was changed by the user.
+	for key, value := range claudeTelemetryEnv(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "", "") {
+		switch key {
+		case "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES":
+			delete(env, key)
+		default:
+			if current, ok := env[key]; ok && (current == value || navigaraClaudeValue(key, current)) {
+				delete(env, key)
+			}
+		}
+	}
+	delete(env, previousEnduserID)
+	delete(env, managedEndpoint)
+	delete(env, managedEmail)
+	if len(kept) > 0 {
+		env["OTEL_RESOURCE_ATTRIBUTES"] = strings.Join(kept, ",")
+	}
+	return marshalClaudeEnv(settings, env)
+}
+
+func marshalClaudeEnv(settings map[string]json.RawMessage, env map[string]string) ([]byte, error) {
+	if len(env) == 0 {
+		delete(settings, "env")
+	} else {
+		raw, err := json.Marshal(env)
+		if err != nil {
+			return nil, err
+		}
+		settings["env"] = raw
+	}
+	return json.MarshalIndent(settings, "", "  ")
+}
+
 func codexBlock(endpoint, token string) string {
+	return codexBlockFor(endpoint, token, "metrics_exporter", "exporter", "trace_exporter")
+}
+
+// codexBlockFor writes the Navigara block for the given exporters. Versions
+// before ENG-4565 wrote only metrics_exporter and exporter.
+func codexBlockFor(endpoint, token string, exporters ...string) string {
 	q := func(value string) string { b, _ := json.Marshal(value); return string(b) }
-	return telemetryBegin + `
-[otel.metrics_exporter.otlp-http]
-endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/metrics") + `
-protocol = "binary"
-headers = { Authorization = ` + q("Bearer "+token) + ` }
+	paths := map[string]string{"metrics_exporter": "/v1/metrics", "exporter": "/v1/logs", "trace_exporter": "/v1/traces"}
+	sections := make([]string, 0, len(exporters))
+	for _, name := range exporters {
+		sections = append(sections, "[otel."+name+".otlp-http]\nendpoint = "+q(strings.TrimSuffix(endpoint, "/")+paths[name])+
+			"\nprotocol = \"binary\"\nheaders = { Authorization = "+q("Bearer "+token)+" }\n")
+	}
+	return telemetryBegin + "\n" + strings.Join(sections, "\n") + telemetryEnd + "\n"
+}
 
-[otel.exporter.otlp-http]
-endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/logs") + `
-protocol = "binary"
-headers = { Authorization = ` + q("Bearer "+token) + ` }
-
-[otel.trace_exporter.otlp-http]
-endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/traces") + `
-protocol = "binary"
-headers = { Authorization = ` + q("Bearer "+token) + ` }
-` + telemetryEnd + "\n"
+// codexBlockEndpoint returns the endpoint of a Navigara block and whether the
+// block is byte-identical to one that a Navigara version wrote, with any token.
+func codexBlockEndpoint(block []byte) (string, bool) {
+	block = bytes.ReplaceAll(block, []byte("\r\n"), []byte("\n"))
+	var decoded struct {
+		Otel struct {
+			Metrics struct {
+				HTTP struct {
+					Endpoint string            `toml:"endpoint"`
+					Headers  map[string]string `toml:"headers"`
+				} `toml:"otlp-http"`
+			} `toml:"metrics_exporter"`
+		} `toml:"otel"`
+	}
+	if toml.Unmarshal(block, &decoded) != nil {
+		return "", false
+	}
+	endpoint, ok := strings.CutSuffix(decoded.Otel.Metrics.HTTP.Endpoint, "/v1/metrics")
+	token, hasToken := strings.CutPrefix(decoded.Otel.Metrics.HTTP.Headers["Authorization"], "Bearer ")
+	if !ok || !hasToken {
+		return endpoint, false
+	}
+	got := strings.TrimSuffix(string(block), "\n")
+	for _, want := range []string{codexBlock(endpoint, token), codexBlockFor(endpoint, token, "metrics_exporter", "exporter")} {
+		if got == strings.TrimSuffix(want, "\n") {
+			return endpoint, true
+		}
+	}
+	return endpoint, false
 }
 
 func spliceManaged(data, block []byte, start, end int) []byte {
@@ -264,8 +687,11 @@ var claudeFileTelemetryOverrides = []string{
 }
 
 func validateClaudeEnv(env map[string]string, endpoint, token string) error {
+	conflict := func(key string) error {
+		return fmt.Errorf("%s is set in your shell environment (%s); unset it and retry.", key, maskTelemetry(key, env[key]))
+	}
 	if current := env["OTEL_EXPORTER_OTLP_ENDPOINT"]; current != "" && current != endpoint {
-		return errors.New("existing conflicting Claude telemetry setting: OTEL_EXPORTER_OTLP_ENDPOINT")
+		return conflict("OTEL_EXPORTER_OTLP_ENDPOINT")
 	}
 	base := strings.TrimSuffix(endpoint, "/")
 	want := map[string]string{
@@ -278,14 +704,14 @@ func validateClaudeEnv(env map[string]string, endpoint, token string) error {
 	}
 	for key, expected := range want {
 		if current, ok := env[key]; ok && current != expected {
-			return fmt.Errorf("existing conflicting Claude telemetry setting: %s", key)
+			return conflict(key)
 		}
 	}
 	if current := strings.ToLower(strings.TrimSpace(env["OTEL_LOG_USER_PROMPTS"])); activeTelemetryValue(current) && current != "1" && current != "true" {
-		return errors.New("existing unsupported Claude telemetry setting: OTEL_LOG_USER_PROMPTS")
+		return conflict("OTEL_LOG_USER_PROMPTS")
 	}
 	if current := strings.ToLower(strings.TrimSpace(env["OTEL_TRACES_EXPORTER"])); activeTelemetryValue(current) && current != "none" {
-		return errors.New("existing unsupported Claude telemetry setting: OTEL_TRACES_EXPORTER")
+		return conflict("OTEL_TRACES_EXPORTER")
 	}
 	for _, key := range []string{
 		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
@@ -294,7 +720,7 @@ func validateClaudeEnv(env map[string]string, endpoint, token string) error {
 		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA", "OTEL_LOG_ASSISTANT_RESPONSES", "OTEL_LOG_TOOL_CONTENT", "OTEL_LOG_RAW_API_BODIES",
 	} {
 		if activeTelemetryValue(env[key]) {
-			return fmt.Errorf("existing unsupported Claude telemetry setting: %s", key)
+			return conflict(key)
 		}
 	}
 	return nil

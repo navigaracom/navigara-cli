@@ -6,8 +6,11 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const testEndpoint = "https://app.navigara.com/api/otlp"
@@ -140,14 +143,14 @@ func TestValidateClaudeEnvRejectsConflictingProcessTelemetry(t *testing.T) {
 
 func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	input := []byte("model = \"o3\"\n\n# comment\n")
-	first, err := codexSettings(input, testEndpoint, "a\"b", false)
+	first, err := codexSettings(input, testEndpoint, "a\"b")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(first, []byte("model = \"o3\"\n\n# comment\n")) || !bytes.Contains(first, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/metrics"`)) || !bytes.Contains(first, []byte(`endpoint = "https://app.navigara.com/api/otlp/v1/traces"`)) || !bytes.Contains(first, []byte(`Authorization = "Bearer a\"b"`)) {
 		t.Fatalf("missing expected content:\n%s", first)
 	}
-	second, err := codexSettings(first, testEndpoint, "new", false)
+	second, err := codexSettings(first, testEndpoint, "new")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +159,7 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	}
 	suffix := []byte("\n# keep this separation\n[projects.keep]\ntrust_level = \"trusted\"\n")
 	withSuffix := append(append([]byte(nil), second...), suffix...)
-	updated, err := codexSettings(withSuffix, testEndpoint, "next", false)
+	updated, err := codexSettings(withSuffix, testEndpoint, "next")
 	if err != nil || !bytes.HasSuffix(updated, suffix) {
 		t.Fatalf("managed update changed its suffix: %q, %v", updated, err)
 	}
@@ -164,12 +167,12 @@ func TestCodexSettingsUpdatesManagedBlockAndPreservesInput(t *testing.T) {
 	crlfSuffix := []byte("\r\n# keep this CRLF separation\r\n[projects.keep]\r\ntrust_level = \"trusted\"\r\n")
 	crlfManaged := bytes.ReplaceAll(first, []byte("\n"), []byte("\r\n"))
 	crlfInput := append(append([]byte(nil), crlfManaged...), crlfSuffix...)
-	crlfUpdated, err := codexSettings(crlfInput, testEndpoint, "crlf-token", false)
+	crlfUpdated, err := codexSettings(crlfInput, testEndpoint, "crlf-token")
 	if err != nil || !bytes.HasPrefix(crlfUpdated, crlfPrefix) || !bytes.HasSuffix(crlfUpdated, crlfSuffix) || bytes.Count(crlfUpdated, []byte(telemetryBegin)) != 1 || !bytes.Contains(crlfUpdated, []byte("Bearer crlf-token")) {
 		t.Fatalf("CRLF managed update changed surrounding content: %q, %v", crlfUpdated, err)
 	}
 	withRootSuffix := append(append([]byte(nil), first...), []byte("model = \"other\"\n")...)
-	if _, err := codexSettings(withRootSuffix, testEndpoint, "new", false); err == nil {
+	if _, err := codexSettings(withRootSuffix, testEndpoint, "new"); err == nil {
 		t.Fatal("managed block followed by root keys succeeded")
 	}
 }
@@ -191,7 +194,7 @@ prevent_idle_sleep = true # keep
 rmcp_client = true
 `)
 
-	first, err := codexSettings(input, testEndpoint, "token", false)
+	first, err := codexSettings(input, testEndpoint, "token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +219,7 @@ rmcp_client = true
 		}
 	}
 
-	second, err := codexSettings(first, testEndpoint, "token", false)
+	second, err := codexSettings(first, testEndpoint, "token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +246,7 @@ features.prevent_idle_sleep = true
 features.future_flag = true
 `),
 	} {
-		got, err := codexSettings(input, testEndpoint, "token", false)
+		got, err := codexSettings(input, testEndpoint, "token")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -265,7 +268,7 @@ func TestCodexSettingsRejectsUnsupportedObsoleteFeatureShapes(t *testing.T) {
 		[]byte("features = { rmcp_client = false, goals = true }\n"),
 		[]byte("[features]\nrmcp_client = \"false\"\n"),
 	} {
-		got, err := codexSettings(input, testEndpoint, "token", false)
+		got, err := codexSettings(input, testEndpoint, "token")
 		if !errors.Is(err, errUnsupportedCodexFeatureLayout) || got != nil {
 			t.Fatalf("unsupported feature layout returned %q, %v", got, err)
 		}
@@ -284,7 +287,7 @@ func TestCodexSettingsRejectsOtherOTELAndMalformedMarkers(t *testing.T) {
 		[]byte("# >>> navigara telemetry >>>\n"),
 		[]byte("# <<< navigara telemetry <<<\n"),
 	} {
-		if _, err := codexSettings(input, testEndpoint, "token", false); err == nil {
+		if _, err := codexSettings(input, testEndpoint, "token"); err == nil {
 			t.Errorf("codexSettings(%q) succeeded", input)
 		}
 	}
@@ -292,7 +295,7 @@ func TestCodexSettingsRejectsOtherOTELAndMalformedMarkers(t *testing.T) {
 
 func TestCodexSettingsPreservesMarkerTextInValues(t *testing.T) {
 	input := []byte("note = \"# >>> navigara telemetry >>>\"\n")
-	got, err := codexSettings(input, testEndpoint, "token", false)
+	got, err := codexSettings(input, testEndpoint, "token")
 	if err != nil || !bytes.HasPrefix(got, input) {
 		t.Fatalf("marker text in a value was not preserved: %q, %v", got, err)
 	}
@@ -318,27 +321,33 @@ headers = { Authorization = "Bearer fixture-old" }
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := append(append(append([]byte(nil), prefix...), test.telemetry...), suffix...)
-			if _, err := codexSettings(input, testEndpoint, "new", false); !errors.Is(err, errCodexTelemetry) {
-				t.Fatalf("expected a replaceable conflict, got %v", err)
+			conflict := codexTelemetryConflict(input, testEndpoint)
+			if conflict == nil || !strings.Contains(conflict.Error(), "Codex already sends telemetry to https://old.example/v1/") || !strings.Contains(conflict.Error(), "--replace") {
+				t.Fatalf("expected a replaceable conflict, got %v", conflict)
 			}
-			got, err := codexSettings(input, testEndpoint, "new", true)
+			got, err := codexSettings(input, testEndpoint, "new")
 			if err != nil {
 				t.Fatal(err)
+			}
+			changes := strings.Join(settingsChanges(input, got, toml.Unmarshal), "\n")
+			if !strings.Contains(changes, "otel.metrics_exporter.otlp-http.endpoint: https://old.example/v1/metrics -> "+testEndpoint+"/v1/metrics") ||
+				!strings.Contains(changes, "otel.metrics_exporter.otlp-http.headers.Authorization: *** -> ***") || strings.Contains(changes, "fixture-old") || strings.Contains(changes, "model") {
+				t.Fatalf("changes = %s", changes)
 			}
 			if !bytes.HasPrefix(got, prefix) || !bytes.HasSuffix(got, suffix) || bytes.Contains(got, []byte("fixture-old")) || bytes.Count(got, []byte(telemetryBegin)) != 1 {
 				t.Fatal("replacement changed unrelated settings or retained the old exporters")
 			}
-			if _, err := codexSettings(append(got, test.telemetry...), testEndpoint, "next", true); err == nil {
+			if _, err := codexSettings(append(got, test.telemetry...), testEndpoint, "next"); err == nil {
 				t.Fatal("mixed managed and unmanaged telemetry was accepted")
 			}
 		})
 	}
 	noncontiguous := append(append(append(append([]byte(nil), prefix...), fixture...), suffix...), trace...)
-	if got, err := codexSettings(noncontiguous, testEndpoint, "new", true); err == nil || got != nil {
+	if got, err := codexSettings(noncontiguous, testEndpoint, "new"); err == nil || got != nil {
 		t.Fatalf("noncontiguous telemetry was accepted: %q, %v", got, err)
 	}
 	foreignRoot := append([]byte("otel.environment = \"dev\"\n"), fixture...)
-	if got, err := codexSettings(foreignRoot, testEndpoint, "new", true); err == nil || got != nil {
+	if got, err := codexSettings(foreignRoot, testEndpoint, "new"); err == nil || got != nil {
 		t.Fatalf("legacy exporters with root OTEL settings were accepted: %q, %v", got, err)
 	}
 }
@@ -371,5 +380,293 @@ func TestShellSettingsRejectsAttributeInjectionAndBadMarkers(t *testing.T) {
 	}
 	if _, err := shellSettings([]byte("# >>> navigara telemetry >>> x\n"), "dev@example.com"); err == nil {
 		t.Fatal("malformed marker succeeded")
+	}
+}
+
+func TestClaudeSettingsChangesListEveryKeyAndMaskSecrets(t *testing.T) {
+	before := []byte(`{"otelHeadersHelper":"echo Authorization=Bearer helper-secret","env":{"OTEL_EXPORTER_OTLP_HEADERS":"a=one-secret,b=two-secret","OTEL_RESOURCE_ATTRIBUTES":"enduser.id=old@example.com"}}`)
+	after, err := claudeSettings(before, testEndpoint, "new-secret", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := strings.Join(settingsChanges(before, after, json.Unmarshal), "\n")
+	for _, want := range []string{
+		"otelHeadersHelper: *** -> (removed)",
+		"env.OTEL_EXPORTER_OTLP_HEADERS: a=***,b=*** -> Authorization=***",
+		"env.OTEL_RESOURCE_ATTRIBUTES: enduser.id=old@example.com -> enduser.id=dev@example.com",
+		"env.OTEL_EXPORTER_OTLP_ENDPOINT: (none) -> " + testEndpoint,
+		"env.CLAUDE_CODE_ENABLE_TELEMETRY: (none) -> 1",
+	} {
+		if !strings.Contains(changes, want) {
+			t.Errorf("changes lack %q:\n%s", want, changes)
+		}
+	}
+	if strings.Contains(changes, "secret") {
+		t.Fatalf("changes leak a secret:\n%s", changes)
+	}
+	if claudeTelemetryConflict(before, testEndpoint, "new-secret") == nil {
+		t.Fatal("foreign headers are not a conflict")
+	}
+	if got := settingsChanges(after, after, json.Unmarshal); len(got) != 0 {
+		t.Fatalf("same file lists changes: %q", got)
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsOtherCollectors(t *testing.T) {
+	foreign := []byte(`{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://collector.example/api/otlp","OTEL_EXPORTER_OTLP_HEADERS":"x-api-key=corp","CLAUDE_CODE_ENABLE_TELEMETRY":"1"}}`)
+	if got, err := removeClaudeSettings(foreign, nil); err != nil || !bytes.Equal(got, foreign) {
+		t.Fatalf("removed a collector that Navigara did not write: %s, %v", got, err)
+	}
+	ours, err := claudeSettings([]byte(`{}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := removeClaudeSettings(ours, nil); err != nil || string(got) != "{}" {
+		t.Fatalf("remove = %s, %v", got, err)
+	}
+}
+
+// The 831b08e writer wrote nine keys, none of the later prompt, trace,
+// session and beta keys, and no marker.
+func TestRemoveClaudeSettingsHandlesOlderLayout(t *testing.T) {
+	older := []byte(`{"theme":"dark","env":{"KEEP":"yes",
+		"CLAUDE_CODE_ENABLE_TELEMETRY":"1","OTEL_METRICS_EXPORTER":"otlp","OTEL_LOGS_EXPORTER":"otlp",
+		"OTEL_METRICS_INCLUDE_REPOSITORY":"true","OTEL_LOG_TOOL_DETAILS":"1","OTEL_EXPORTER_OTLP_PROTOCOL":"http/protobuf",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":"https://app.navigara.com/api/otlp","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Bearer old",
+		"OTEL_RESOURCE_ATTRIBUTES":"team=a,enduser.id=dev@example.com"}}`)
+	if got, err := removeClaudeSettings(older, []string{"https://other.example"}); err != nil || !bytes.Equal(got, older) {
+		t.Fatalf("removed an older layout at an unknown origin: %s, %v", got, err)
+	}
+	got, err := removeClaudeSettings(older, []string{defaultHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(got, &settings); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"theme": "dark", "env": map[string]any{"KEEP": "yes", "OTEL_RESOURCE_ATTRIBUTES": "team=a"}}
+	if !reflect.DeepEqual(settings, want) {
+		t.Fatalf("remove = %s", got)
+	}
+}
+
+func TestClaudeSettingsSecondHostKeepsNoNavigaraIdentity(t *testing.T) {
+	first, err := claudeSettings([]byte(`{"env":{"KEEP":"yes"}}`), "https://a.example/api/otlp", "a", "a@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := claudeSettings(first, "https://b.example/api/otlp", "b", "b@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(second, []byte(previousEnduserID)) {
+		t.Fatalf("recorded a Navigara identity: %s", second)
+	}
+	got, err := removeClaudeSettings(second, nil)
+	if err != nil || string(got) != "{\n  \"env\": {\n    \"KEEP\": \"yes\"\n  }\n}" {
+		t.Fatalf("remove = %s, %v", got, err)
+	}
+
+	user, err := claudeSettings([]byte(`{"env":{"OTEL_RESOURCE_ATTRIBUTES":"enduser.id=me@corp.example"}}`), "https://a.example/api/otlp", "a", "a@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := claudeSettings(user, "https://b.example/api/otlp", "b", "b@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := removeClaudeSettings(moved, nil); err != nil || !bytes.Contains(got, []byte(`"OTEL_RESOURCE_ATTRIBUTES": "enduser.id=me@corp.example"`)) || bytes.Contains(got, []byte(previousEnduserID)) {
+		t.Fatalf("remove after a host change = %s, %v", got, err)
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsKeysChangedByUser(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{"env":{"KEEP":"yes"}}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := bytes.Replace(ours, []byte(`"OTEL_LOGS_EXPORTER": "otlp"`), []byte(`"OTEL_LOGS_EXPORTER": "none"`), 1)
+	got, err := removeClaudeSettings(changed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(got, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]any{"env": map[string]any{"KEEP": "yes", "OTEL_LOGS_EXPORTER": "none"}}; !reflect.DeepEqual(settings, want) {
+		t.Fatalf("remove = %s", got)
+	}
+	if notes := claudeKeptKeys(changed, got); !reflect.DeepEqual(notes, []string{"Kept (changed by you): OTEL_LOGS_EXPORTER"}) {
+		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestClaudeTelemetryConflictComparesNavigaraSetup(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{}`), testEndpoint, "old-token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := claudeTelemetryConflict(ours, testEndpoint, "new-token"); err != nil {
+		t.Fatalf("token rotation is a conflict: %v", err)
+	}
+	for _, edit := range [][2]string{
+		{`"OTEL_LOGS_EXPORTER": "otlp"`, `"OTEL_LOGS_EXPORTER": "none"`},
+		{`"Authorization=Bearer old-token"`, `"Authorization=Bearer old-token,X-Corp=custom"`},
+	} {
+		edited := bytes.Replace(ours, []byte(edit[0]), []byte(edit[1]), 1)
+		if err := claudeTelemetryConflict(edited, testEndpoint, "new-token"); err == nil || !strings.Contains(err.Error(), "--replace") {
+			t.Errorf("%s: user change is not a conflict", edit[1])
+		}
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsCustomHeader(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{}`), "https://app.example/api/otlp", "token-secret", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(ours, []byte(`"Authorization=Bearer token-secret"`), []byte(`"Authorization=Bearer token-secret,X-Corp=custom"`), 1)
+	got, err := removeClaudeSettings(edited, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := claudeKeptKeys(edited, got)
+	if !bytes.Contains(got, []byte("X-Corp=custom")) || !reflect.DeepEqual(notes, []string{"Kept (changed by you): OTEL_EXPORTER_OTLP_HEADERS"}) {
+		t.Fatalf("remove = %s, notes = %q", got, notes)
+	}
+}
+
+func TestRemoveClaudeSettingsNeedsProofOfNavigara(t *testing.T) {
+	foreign := []byte(`{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"https://collector.example/api/otlp","OTEL_EXPORTER_OTLP_HEADERS":"Authorization=Bearer corp","OTEL_LOGS_EXPORTER":"otlp"}}`)
+	known := []string{defaultHost}
+	if got, err := removeClaudeSettings(foreign, known); err != nil || !bytes.Equal(got, foreign) {
+		t.Fatalf("removed a foreign Bearer collector: %s, %v", got, err)
+	}
+	if origin := claudeUnknownOrigin(foreign, known); origin != "https://collector.example" {
+		t.Fatalf("unknown origin = %q", origin)
+	}
+	if got, err := removeClaudeSettings(foreign, []string{"https://collector.example"}); err != nil || bytes.Contains(got, []byte("collector.example")) {
+		t.Fatalf("--host origin did not prove Navigara: %s, %v", got, err)
+	}
+	marked, err := claudeSettings(nil, "https://self-hosted.example/api/otlp", "token", "dev@example.com")
+	if err != nil || !bytes.Contains(marked, []byte(`"NAVIGARA_MANAGED_ENDPOINT": "https://self-hosted.example/api/otlp"`)) || !bytes.Contains(marked, []byte(`"NAVIGARA_MANAGED_EMAIL": "dev@example.com"`)) {
+		t.Fatalf("patch wrote no marker: %s, %v", marked, err)
+	}
+	if got, err := removeClaudeSettings(marked, known); err != nil || string(got) != "{}" {
+		t.Fatalf("marked settings were not removed: %s, %v", got, err)
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsEditedEndpoint(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{"env":{"KEEP":"yes"}}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(ours, []byte(`"OTEL_EXPORTER_OTLP_ENDPOINT": "https://app.example/api/otlp"`), []byte(`"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.example/api/otlp"`), 1)
+	got, err := removeClaudeSettings(edited, []string{"https://app.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after struct{ Env map[string]string }
+	if json.Unmarshal(edited, &before) != nil || json.Unmarshal(got, &after) != nil {
+		t.Fatal("invalid JSON")
+	}
+	delete(before.Env, managedEndpoint)
+	delete(before.Env, managedEmail)
+	if !reflect.DeepEqual(before.Env, after.Env) {
+		t.Fatalf("remove deleted more than the markers: %s", got)
+	}
+	notes := claudeKeptKeys(edited, got)
+	if len(notes) == 0 || !strings.Contains(strings.Join(notes, "\n"), "Kept (changed by you): OTEL_EXPORTER_OTLP_ENDPOINT") {
+		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsEditedEnduserID(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{"env":{"OTEL_RESOURCE_ATTRIBUTES":"team=a,enduser.id=me@corp.example"}}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(ours, []byte("enduser.id=dev@example.com"), []byte("enduser.id=other@example.com"), 1)
+	if err := claudeTelemetryConflict(edited, "https://app.example/api/otlp", "token"); err == nil {
+		t.Fatal("patch would overwrite an edited enduser.id")
+	}
+	got, err := removeClaudeSettings(edited, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "{\n  \"env\": {\n    \"OTEL_RESOURCE_ATTRIBUTES\": \"team=a,enduser.id=other@example.com\"\n  }\n}" {
+		t.Fatalf("remove = %s", got)
+	}
+	if notes := claudeKeptKeys(edited, got); !reflect.DeepEqual(notes, []string{"Kept (changed by you): enduser.id"}) {
+		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestCodexTelemetryConflictChecksNavigaraBlock(t *testing.T) {
+	prefix := []byte("model = \"o3\"\n")
+	ours := append(append([]byte(nil), prefix...), codexBlock(testEndpoint, "old-token")...)
+	if err := codexTelemetryConflict(ours, testEndpoint); err != nil {
+		t.Fatalf("own block with an old token is a conflict: %v", err)
+	}
+	legacy := append(append([]byte(nil), prefix...), codexBlockFor(testEndpoint, "old-token", "metrics_exporter", "exporter")...)
+	if err := codexTelemetryConflict(legacy, testEndpoint); err != nil {
+		t.Fatalf("block from before ENG-4565 is a conflict: %v", err)
+	}
+	edited := bytes.Replace(ours, []byte("https://app.navigara.com/api/otlp/v1/logs"), []byte("https://collector.example/v1/logs"), 1)
+	if err := codexTelemetryConflict(edited, testEndpoint); err == nil || !strings.Contains(err.Error(), "https://collector.example/v1/logs") {
+		t.Fatalf("edited block: %v", err)
+	}
+	foreignHost := []byte(codexBlock("https://other.example/api/otlp", "token"))
+	if err := codexTelemetryConflict(foreignHost, testEndpoint); err == nil {
+		t.Fatal("block for an unknown origin is not a conflict")
+	}
+}
+
+func TestRemoveCodexSettings(t *testing.T) {
+	known := []string{defaultHost}
+	prefix := "model = \"o3\"\n\n"
+	block := codexBlock(testEndpoint, "token")
+	for _, test := range []struct {
+		name, data, warning string
+		removed             bool
+	}{
+		{name: "own block", data: prefix + block + "[projects.\"/work\"]\ntrust_level = \"trusted\"\n", removed: true},
+		{name: "edited block", data: prefix + strings.Replace(block, "app.navigara.com/api/otlp/v1/logs", "collector.example/v1/logs", 1), warning: "Kept (changed by you)"},
+		{name: "unknown origin", data: prefix + codexBlock("https://self.example/api/otlp", "token"), warning: "Use --host https://self.example"},
+		{name: "trailing assignment", data: prefix + block + "approval = \"never\"\n", warning: "followed by settings"},
+		{name: "duplicate key", data: prefix + block + "model = \"later\"\n", warning: "followed by settings"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, warning, err := removeCodexSettings([]byte(test.data), known)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.removed {
+				if warning != "" || strings.Contains(string(got), "navigara") || validateTOML(got) != nil || !strings.HasPrefix(string(got), prefix) {
+					t.Fatalf("remove = %q, warning %q", got, warning)
+				}
+				return
+			}
+			if string(got) != test.data || !strings.Contains(warning, test.warning) {
+				t.Fatalf("remove = %q, warning %q", got, warning)
+			}
+		})
+	}
+}
+
+func TestClaudeKeptKeysIgnoresRestoredIdentity(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{"env":{"OTEL_RESOURCE_ATTRIBUTES":"enduser.id=me@corp.example"}}`), "https://app.example/api/otlp", "token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := removeClaudeSettings(ours, nil)
+	if err != nil || !bytes.Contains(got, []byte(`"OTEL_RESOURCE_ATTRIBUTES": "enduser.id=me@corp.example"`)) {
+		t.Fatalf("remove = %s, %v", got, err)
+	}
+	if notes := claudeKeptKeys(ours, got); len(notes) != 0 {
+		t.Fatalf("notes = %q", notes)
 	}
 }

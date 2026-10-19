@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type setupFile struct {
@@ -13,6 +14,11 @@ type setupFile struct {
 	before, after []byte
 	existed       bool
 	installed     os.FileInfo
+	// notes lists changes the preview must show; conflict is set when the
+	// change replaces telemetry that Navigara did not write.
+	notes    []string
+	conflict error
+	warning  string
 }
 
 func readSetupFile(path string) ([]byte, bool, error) {
@@ -70,16 +76,19 @@ func (f *setupFile) prepare() (string, error) {
 	if err := f.check(); err != nil {
 		return "", err
 	}
-	if f.existed && bytes.Equal(f.before, f.after) {
-		info, err := os.Lstat(f.path)
-		if err != nil {
-			return "", err
-		}
-		if info.Mode().Perm() == 0600 {
-			return "", nil
-		}
+	if f.unchanged() {
+		return "", nil
 	}
 	return privateFile(filepath.Dir(f.path), ".navigara-new-*", f.after)
+}
+
+// unchanged reports whether applying f would leave the file as it is.
+func (f *setupFile) unchanged() bool {
+	if !f.existed || !bytes.Equal(f.before, f.after) {
+		return false
+	}
+	info, err := os.Lstat(f.path)
+	return err == nil && info.Mode().Perm() == 0600
 }
 
 // install never replaces a target. Existing files move atomically to a private backup, leaving a
@@ -187,6 +196,40 @@ func linkEntry(info os.FileInfo, backup, path string) error {
 		return err
 	}
 	return os.Symlink(target, path)
+}
+
+// collectBackups moves the private backups of one run into one folder,
+// $XDG_CONFIG_HOME/navigara/backups/<timestamp>-<random>. A backup that cannot
+// move stays where install put it, and f.backup keeps naming it.
+func collectBackups(files []*setupFile) {
+	var dir string
+	for _, f := range files {
+		if f.backup == "" {
+			continue
+		}
+		if dir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return
+			}
+			base := filepath.Join(firstNonEmpty(os.Getenv("XDG_CONFIG_HOME"), filepath.Join(home, ".config")), "navigara", "backups")
+			if os.MkdirAll(base, 0700) != nil {
+				return
+			}
+			if dir, err = os.MkdirTemp(base, time.Now().Format("20060102-150405-*")); err != nil {
+				return
+			}
+		}
+		target := filepath.Join(dir, filepath.Base(f.path))
+		if os.Rename(f.backup, target) != nil {
+			data, err := os.ReadFile(f.backup)
+			if err != nil || os.WriteFile(target, data, 0600) != nil || os.Remove(f.backup) != nil {
+				return
+			}
+		}
+		_ = os.Remove(filepath.Dir(f.backup))
+		f.backup = target
+	}
 }
 
 func privateFile(dir, pattern string, data []byte) (string, error) {
