@@ -426,6 +426,8 @@ func resumeUpload(ctx context.Context, opts options, stdout, stderr io.Writer, u
 		return 1
 	}
 	s := newSender(opts.url, opts.token)
+	s.retried = func(line string) { fmt.Fprintln(stderr, line) }
+	s.explicitKey = requested.url != "" || requested.token != "" || requested.tokenExplicit
 	if err := s.validate(); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 2
