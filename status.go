@@ -65,8 +65,17 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			ok = false
 			continue
 		}
-		if info, err := os.Stat(tool.home); err != nil || !info.IsDir() {
+		info, err := os.Stat(tool.home)
+		if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(stdout, "%s: not found\n", tool.name)
+			continue
+		}
+		if err == nil && !info.IsDir() {
+			err = fmt.Errorf("%s is not a directory", tool.home)
+		}
+		if err != nil {
+			fmt.Fprintf(stdout, "%s: cannot check its home: %v\n", tool.name, err)
+			ok = false
 			continue
 		}
 		found = true
@@ -74,6 +83,10 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			fmt.Fprintf(stdout, "%s: last import %s\n", tool.name, at.Local().Format(time.RFC3339))
 		}
 		link, err := tool.read(tool.home)
+		base, isOTLP := strings.CutSuffix(link.endpoint, "/otlp")
+		if err == nil && !isOTLP {
+			err = fmt.Errorf("endpoint %s does not end in /otlp; run navigara wizard", link.endpoint)
+		}
 		if err != nil {
 			fmt.Fprintf(stdout, "%s: not connected: %v\n", tool.name, err)
 			ok = false
@@ -84,7 +97,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			host = u.Host
 		}
 		fmt.Fprintf(stdout, "%s: connected to %s as %s\n", tool.name, host, firstNonEmpty(link.email, "unknown email"))
-		if err := newSender(strings.TrimSuffix(link.endpoint, "/otlp"), link.token).checkSetup(ctx); err != nil {
+		if err := newSender(base, link.token).checkSetup(ctx); err != nil {
 			fmt.Fprintf(stdout, "  Navigara does not accept the Analytics Ingestor key: %v\n", err)
 			ok = false
 		} else {

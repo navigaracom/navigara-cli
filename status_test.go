@@ -23,6 +23,7 @@ func TestSessionsStatus(t *testing.T) {
 		metricsOverride  string
 		codexProtocol    string
 		codexOutside     bool
+		codexEndpoint    string
 		code             int
 		want, avoid      []string
 	}{
@@ -56,6 +57,12 @@ func TestSessionsStatus(t *testing.T) {
 			want: []string{"Codex: not connected: no Navigara email block in", ".bash_profile"}},
 		{name: "codex telemetry outside block", codex: true, codexOutside: true, code: 1,
 			want: []string{"Codex: not connected: config.toml has telemetry settings outside the Navigara block"}},
+		{name: "claude endpoint without otlp", claude: "api endpoint", code: 1,
+			want: []string{"Claude Code: not connected: endpoint http://127.0.0.1:", "/api does not end in /otlp"}},
+		{name: "codex endpoint without otlp", codex: true, codexEndpoint: "/api", code: 1,
+			want: []string{"Codex: not connected: endpoint http://127.0.0.1:", "/api does not end in /otlp"}},
+		{name: "claude home unreadable", claude: "bad home", code: 1,
+			want: []string{"Claude Code: cannot check its home:"}, avoid: []string{"Claude Code: not found"}},
 		{name: "nothing found", code: 0,
 			want: []string{"Claude Code: not found", "Codex: not found", "No Claude Code or Codex home found"}, avoid: []string{"connected to"}},
 	} {
@@ -112,11 +119,21 @@ func TestSessionsStatus(t *testing.T) {
 				data, err := claudeSettings(nil, endpoint, "test-secret", "dev@example.com")
 				data = bytes.ReplaceAll(data, []byte(`"enduser.id=dev@example.com"`), []byte(`""`))
 				write(filepath.Join(claudeHome, "settings.json"), data, err)
+			case "api endpoint":
+				data, err := claudeSettings(nil, srv.URL+"/api", "test-secret", "dev@example.com")
+				write(filepath.Join(claudeHome, "settings.json"), data, err)
+			case "bad home":
+				write(filepath.Join(home, "file"), nil, nil)
+				t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "file", ".claude"))
 			case "plain":
 				write(filepath.Join(claudeHome, "settings.json"), []byte(`{"model":"x"}`), nil)
 			}
 			if tc.codex {
-				data, err := codexSettings(nil, endpoint, "test-secret")
+				codexEndpoint := endpoint
+				if tc.codexEndpoint != "" {
+					codexEndpoint = srv.URL + tc.codexEndpoint
+				}
+				data, err := codexSettings(nil, codexEndpoint, "test-secret")
 				if tc.codexProtocol != "" {
 					data = bytes.ReplaceAll(data, []byte(`protocol = "binary"`), []byte(`protocol = "`+tc.codexProtocol+`"`))
 				}
