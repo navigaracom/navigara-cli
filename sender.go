@@ -11,11 +11,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/navigaracom/navigara-cli/internal/telemetry"
 )
 
@@ -25,17 +28,31 @@ type sender struct {
 	sent          int
 	sentMu        sync.Mutex
 	codexReceipts map[[32]byte]int
+	// retried reports each failed attempt that will be retried. It can be called concurrently.
+	retried func(string)
+	// explicitKey marks a key from --token or NAVIGARA_TOKEN, which login does not replace.
+	explicitKey bool
 }
 
 // maxOTLPBody is the receiver's limit for a decoded request body.
 const maxOTLPBody = 16 << 20
 
-var errIngestionAuthRejected = errors.New("the API key needs the analytics ingestor role")
+const maxAttempts = 5
+
+var errIngestionAuthRejected = errors.New("Navigara rejected the key")
 
 func newSender(base, token string) *sender {
 	return &sender{client: &http.Client{Timeout: 60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		base: otlpBase(base), token: token}
+		base: otlpBase(base), token: token, retried: printRetry}
+}
+
+// printRetry clears a terminal line first, so an active spinner does not share the line.
+func printRetry(line string) {
+	if term.IsTerminal(os.Stderr.Fd()) {
+		line = "\r\033[2K" + line
+	}
+	fmt.Fprintln(os.Stderr, line)
 }
 
 func otlpBase(base string) string { return strings.TrimRight(base, "/") + "/otlp" }
@@ -71,9 +88,12 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 		return errors.New("unsupported OTLP signal")
 	}
 	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
+	reason := ""
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
-			backoff := time.NewTimer(time.Duration(1<<attempt) * time.Second)
+			delay := time.Duration(1<<attempt) * time.Second
+			s.retried(fmt.Sprintf("Upload failed (%s), retrying in %d s (attempt %d of %d)…", reason, delay/time.Second, attempt, maxAttempts))
+			backoff := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
 				backoff.Stop()
@@ -99,7 +119,11 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 			if ctx.Err() != nil {
 				return cancelled(ctx, lastErr)
 			}
+			if probe && errors.Is(err, syscall.ECONNREFUSED) {
+				return fmt.Errorf("Cannot reach %s. Check the address and your network.", req.URL.Host)
+			}
 			lastErr = fmt.Errorf("OTLP connection failed; check network and TLS settings: %w", err)
+			reason = "connection error"
 			continue
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 65537))
@@ -140,7 +164,7 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 			}
 			if probe {
 				if resp.Header.Get("X-Navigara-Backfill-Policy") != "session-live-wins-v1" {
-					return errors.New("server must support session backfill deduplication before setup can continue")
+					return errors.New("Your Navigara server is too old for this CLI. Ask your admin to update Navigara.")
 				}
 			} else {
 				s.sentMu.Lock()
@@ -154,10 +178,15 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 				s.sentMu.Unlock()
 			}
 			return nil
-		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return fmt.Errorf("%s: HTTP %d; %w", b.Path, resp.StatusCode, errIngestionAuthRejected)
+		case resp.StatusCode == http.StatusUnauthorized && s.explicitKey:
+			return fmt.Errorf("%w (expired or revoked). Create a new Analytics Ingestor key, or remove --url/--token/NAVIGARA_TOKEN to use your saved login.", errIngestionAuthRejected)
+		case resp.StatusCode == http.StatusUnauthorized:
+			return fmt.Errorf("%w (expired or revoked). Run navigara login, or create a new Analytics Ingestor key.", errIngestionAuthRejected)
+		case resp.StatusCode == http.StatusForbidden:
+			return fmt.Errorf("%w: it does not have the Analytics Ingestor role. Create a new Analytics Ingestor key.", errIngestionAuthRejected)
 		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 			lastErr = fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
+			reason = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		default:
 			return fmt.Errorf("%s: HTTP %d", b.Path, resp.StatusCode)
 		}

@@ -35,11 +35,14 @@ func exportSessions(ctx context.Context, opts options, stdout, stderr io.Writer)
 func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stderr io.Writer, progress func(done, total int)) int {
 	var sender *sender
 	if opts.send {
+		explicitKey := opts.url != "" || opts.token != "" || opts.tokenExplicit
 		if err := prepareUploadAccount(ctx, &opts); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 1
 		}
 		sender = newSender(opts.url, opts.token)
+		sender.retried = func(line string) { fmt.Fprintln(stderr, line) }
+		sender.explicitKey = explicitKey
 		if err := sender.validate(); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 2

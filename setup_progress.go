@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -13,16 +16,41 @@ import (
 // setupProgress reports only batches the receiver has accepted. Plain output is
 // deliberately line-oriented so redirected output never contains terminal codes.
 type setupProgress struct {
-	p       *setupInput
-	started bool
-	eta     setupProgressETACache
+	p           *setupInput
+	stderr      io.Writer
+	mu          sync.Mutex
+	started     bool
+	done, total int
+	eta         setupProgressETACache
 }
 
 func newSetupProgress(p *setupInput) *setupProgress {
-	return &setupProgress{p: p}
+	return &setupProgress{p: p, stderr: os.Stderr}
+}
+
+// retry prints a sender retry above the progress bar and draws the bar again.
+func (u *setupProgress) retry(line string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !u.started || !u.p.interactive() {
+		fmt.Fprintln(u.stderr, line)
+		return
+	}
+	fmt.Fprint(u.p.out, "\r\033[2K")
+	fmt.Fprintln(u.stderr, line)
+	fmt.Fprint(u.p.out, setupUploadLine(u.done, u.total, u.eta.value, u.width()))
+}
+
+func (u *setupProgress) width() int {
+	if columns, _, err := term.GetSize(u.p.terminal.Fd()); err == nil && columns > 0 {
+		return columns - 1 // Avoid a terminal's last-column autowrap.
+	}
+	return 0
 }
 
 func (u *setupProgress) upload(done, total int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	if total == 0 {
 		u.eta.reset()
 		if !u.started {
@@ -40,11 +68,8 @@ func (u *setupProgress) upload(done, total int) {
 	} else {
 		u.started = true
 	}
-	limit := 0
-	if columns, _, err := term.GetSize(u.p.terminal.Fd()); err == nil && columns > 0 {
-		limit = columns - 1 // Avoid a terminal's last-column autowrap.
-	}
-	fmt.Fprint(u.p.out, setupUploadLine(done, total, u.eta.update(time.Now(), done, total), limit))
+	u.done, u.total = done, total
+	fmt.Fprint(u.p.out, setupUploadLine(done, total, u.eta.update(time.Now(), done, total), u.width()))
 	if done == total {
 		fmt.Fprintln(u.p.out)
 		u.started = false
@@ -53,6 +78,8 @@ func (u *setupProgress) upload(done, total int) {
 }
 
 func (u *setupProgress) stop() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	if u.started && u.p.interactive() {
 		fmt.Fprintln(u.p.out)
 	}

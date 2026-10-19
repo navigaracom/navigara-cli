@@ -72,6 +72,7 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	if directToken {
 		opts.url = opts.host + "/api"
 		s = newSender(opts.url, opts.token)
+		s.explicitKey = true
 		if err := s.validate(); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)
 			return 1
