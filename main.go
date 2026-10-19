@@ -23,6 +23,7 @@ type options struct {
 	claudeHome, codexHome string
 	since, until          time.Time
 	sourceSince           map[string]time.Time
+	skippedTools          map[string]bool
 	sessions              []string
 	email                 string
 	allowAnonymous        bool

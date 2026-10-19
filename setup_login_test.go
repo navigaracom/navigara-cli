@@ -454,3 +454,42 @@ func TestSetupRerunImportsOnlySinceLastImport(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupKeepsCheckpointWhenFilesWereSkipped(t *testing.T) {
+	claude, codex := fixtureHomes(t)
+	home := filepath.Dir(claude)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	t.Setenv("CODEX_HOME", codex)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	broken := filepath.Join(claude, "projects", "broken", "broken.jsonl")
+	if err := os.MkdirAll(filepath.Dir(broken), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(broken, []byte(`{"type":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+		io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+	var out, errs bytes.Buffer
+	if code := runSetup(context.Background(), nil, strings.NewReader("y\ny\n\nall\ny\n"), &out, &errs); code != 0 {
+		t.Fatalf("wizard = %d: %s", code, &errs)
+	}
+	if !strings.Contains(errs.String(), "could not be read") || !strings.Contains(out.String(), "Imported 2 past sessions.") {
+		t.Fatalf("setup did not import the good files and report the bad one: %s\n%s", &out, &errs)
+	}
+	c, err := loadAccount("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Imports["org-1/claude"]; ok {
+		t.Fatalf("advanced the Claude checkpoint past a skipped file: %v", c.Imports)
+	}
+	if _, ok := c.Imports["org-1/codex"]; !ok {
+		t.Fatalf("Codex checkpoint missing: %v", c.Imports)
+	}
+}

@@ -174,6 +174,11 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	// Unreadable history is skipped and reported at the end. The run fails only when no session in
 	// the filters was exported: an unreadable file may hold the sessions the filters ask for.
 	var skipped []string
+	skippedTool := func(tool string) {
+		if opts.skippedTools != nil {
+			opts.skippedTools[tool] = true
+		}
+	}
 	// A missing default home has no history to read.
 	if _, err := os.Stat(claudeHome); wantClaude && opts.claudeHome == "" && errors.Is(err, fs.ErrNotExist) {
 		wantClaude = false
@@ -191,6 +196,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 		})
 		for _, err := range scan.Errors {
 			skipped = append(skipped, err.Error())
+			skippedTool("claude")
 		}
 		seen := map[string]bool{}
 		for _, r := range scan.Records {
@@ -212,8 +218,13 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	if wantCodex {
 		seen := map[string]bool{}
 		paths, err := telemetry.CodexRollouts(codexHome)
-		if joined, ok := err.(interface{ Unwrap() []error }); ok {
-			for _, err := range joined.Unwrap() {
+		if err != nil {
+			skippedTool("codex")
+			if joined, ok := err.(interface{ Unwrap() []error }); ok {
+				for _, err := range joined.Unwrap() {
+					skipped = append(skipped, err.Error())
+				}
+			} else {
 				skipped = append(skipped, err.Error())
 			}
 		}
@@ -224,6 +235,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			id, err := telemetry.CodexSessionID(path)
 			if err != nil {
 				skipped = append(skipped, err.Error())
+				skippedTool("codex")
 				continue
 			}
 			if seen[id] || !want(id) {
@@ -336,6 +348,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			s, err := prepared[pairIndex].s, prepared[pairIndex].err
 			if err != nil {
 				skipped = append(skipped, fmt.Sprintf("%q: %v", j.path, err))
+				skippedTool(strings.TrimSuffix(j.source, "_code"))
 				report(index + pairIndex + 1)
 				continue
 			}

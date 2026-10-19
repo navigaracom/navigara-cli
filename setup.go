@@ -180,6 +180,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	var historyOut, historyErr bytes.Buffer
 	if window != "skip" {
 		opts.humanSummary = true
+		opts.skippedTools = map[string]bool{}
 		history = newSetupHistoryProgress(p)
 		history.discovering()
 		historyCtx, stopHistory := interruptible(ctx)
@@ -273,7 +274,10 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 			updated.Imports = map[string]time.Time{}
 		}
 		for _, tool := range selected {
-			updated.Imports[c.OrganizationID+"/"+tool] = opts.until
+			// A file skipped now may be readable later; keep its history in the next import.
+			if !opts.skippedTools[tool] {
+				updated.Imports[c.OrganizationID+"/"+tool] = opts.until
+			}
 		}
 		if err = writeAccount(updated, &c); err != nil {
 			fmt.Fprintln(stderr, "navigara: could not save the import time:", err)
