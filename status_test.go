@@ -22,6 +22,7 @@ func TestSessionsStatus(t *testing.T) {
 		claude, identity string
 		metricsOverride  string
 		codexProtocol    string
+		codexOutside     bool
 		code             int
 		want, avoid      []string
 	}{
@@ -47,6 +48,14 @@ func TestSessionsStatus(t *testing.T) {
 			want: []string{"Codex: connected to 127.0.0.1:", "as o'neil@example.com"}},
 		{name: "claude shell override", claude: "connected", metricsOverride: "https://elsewhere.example/v1/metrics", code: 1,
 			want: []string{"Claude Code: not connected: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set in your shell environment"}},
+		{name: "claude without email", claude: "no email", code: 1,
+			want: []string{"Claude Code: not connected: OTEL_RESOURCE_ATTRIBUTES in settings.json has no valid enduser.id"}},
+		{name: "codex bash identity", codex: true, identity: "bash", code: 0,
+			want: []string{"Codex: connected to 127.0.0.1:", "as o'neil@example.com"}},
+		{name: "codex bash without login profile block", codex: true, identity: "bash no login", code: 1,
+			want: []string{"Codex: not connected: no Navigara email block in", ".bash_profile"}},
+		{name: "codex telemetry outside block", codex: true, codexOutside: true, code: 1,
+			want: []string{"Codex: not connected: config.toml has telemetry settings outside the Navigara block"}},
 		{name: "nothing found", code: 0,
 			want: []string{"Claude Code: not found", "Codex: not found", "No Claude Code or Codex home found"}, avoid: []string{"connected to"}},
 	} {
@@ -99,6 +108,10 @@ func TestSessionsStatus(t *testing.T) {
 				data, err := claudeSettings(nil, endpoint, "test-secret", "dev@example.com")
 				data = bytes.ReplaceAll(data, []byte(`"http/protobuf"`), []byte(`"grpc"`))
 				write(filepath.Join(claudeHome, "settings.json"), data, err)
+			case "no email":
+				data, err := claudeSettings(nil, endpoint, "test-secret", "dev@example.com")
+				data = bytes.ReplaceAll(data, []byte(`"enduser.id=dev@example.com"`), []byte(`""`))
+				write(filepath.Join(claudeHome, "settings.json"), data, err)
 			case "plain":
 				write(filepath.Join(claudeHome, "settings.json"), []byte(`{"model":"x"}`), nil)
 			}
@@ -106,6 +119,9 @@ func TestSessionsStatus(t *testing.T) {
 				data, err := codexSettings(nil, endpoint, "test-secret")
 				if tc.codexProtocol != "" {
 					data = bytes.ReplaceAll(data, []byte(`protocol = "binary"`), []byte(`protocol = "`+tc.codexProtocol+`"`))
+				}
+				if tc.codexOutside {
+					data = append([]byte("[otel]\nenvironment = \"dev\"\n"), data...)
 				}
 				if tc.codexLogsRemoved {
 					data = bytes.Replace(data, []byte("[otel.exporter.otlp-http]"), []byte("[otel.removed.otlp-http]"), 1)
@@ -115,6 +131,15 @@ func TestSessionsStatus(t *testing.T) {
 				case "":
 					data, err = shellSettings(nil, "o'neil@example.com")
 					write(filepath.Join(home, ".zshrc"), data, err)
+				case "bash", "bash no login":
+					t.Setenv("SHELL", "/bin/bash")
+					data, err = shellSettings(nil, "o'neil@example.com")
+					write(filepath.Join(home, ".bashrc"), data, err)
+					if tc.identity == "bash" {
+						write(filepath.Join(home, ".profile"), data, err)
+					} else {
+						write(filepath.Join(home, ".bash_profile"), []byte("# mine\n"), nil)
+					}
 				case "fish":
 					t.Setenv("SHELL", "/usr/bin/fish")
 					data, err = fishSettings(nil, "o'neil@example.com")
@@ -172,6 +197,17 @@ func TestStatusRejectsEachChangedManagedSetting(t *testing.T) {
 			if err == nil || !strings.HasPrefix(err.Error(), key+" ") && !strings.Contains(err.Error(), "not set up") {
 				t.Errorf("changed %s: %v", key, err)
 			}
+		}
+	}
+	for _, key := range claudeFileTelemetryOverrides {
+		env := claudeTelemetryEnv(endpoint, "secret", attrs)
+		env[key] = "x"
+		data, _ := json.Marshal(map[string]any{"env": env})
+		if err := os.WriteFile(filepath.Join(home, "settings.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := claudeLink(home); err == nil || !strings.HasPrefix(err.Error(), key+" ") {
+			t.Errorf("added %s: %v", key, err)
 		}
 	}
 	block := codexBlock(endpoint, "secret")

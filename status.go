@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -121,8 +122,11 @@ func claudeLink(home string) (toolLink, error) {
 	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || endpoint == "" || !hasToken {
 		return toolLink{}, errors.New("telemetry is not set up; run navigara wizard")
 	}
+	if validEmail(email) != nil {
+		return toolLink{}, errors.New("OTEL_RESOURCE_ATTRIBUTES in settings.json has no valid enduser.id; run navigara wizard")
+	}
 	attrs, err := resourceAttributes(env["OTEL_RESOURCE_ATTRIBUTES"], email)
-	if err != nil || email == "" {
+	if err != nil {
 		attrs = ""
 	}
 	expected := claudeTelemetryEnv(endpoint, token, attrs)
@@ -131,18 +135,28 @@ func claudeLink(home string) (toolLink, error) {
 			return toolLink{}, fmt.Errorf("%s in settings.json is not what setup writes; run navigara wizard", key)
 		}
 	}
+	for _, key := range claudeFileTelemetryOverrides {
+		if _, ok := env[key]; ok {
+			return toolLink{}, fmt.Errorf("%s in settings.json is not what setup writes; run navigara wizard", key)
+		}
+	}
 	if settings.HeadersHelper != nil {
 		return toolLink{}, errors.New("otelHeadersHelper in settings.json is not what setup writes; run navigara wizard")
+	}
+	managed := "/etc/claude-code/managed-settings.json"
+	if runtime.GOOS == "darwin" {
+		managed = "/Library/Application Support/ClaudeCode/managed-settings.json"
+	}
+	if _, err := os.Stat(managed); err == nil {
+		return toolLink{}, fmt.Errorf("Claude Code is managed by %s; ask your administrator to configure telemetry", managed)
 	}
 	shell := map[string]string{}
 	for _, entry := range os.Environ() {
 		key, value, _ := strings.Cut(entry, "=")
 		shell[key] = value
 	}
-	for _, env := range []map[string]string{env, shell} {
-		if err := validateClaudeEnv(env, endpoint, token); err != nil {
-			return toolLink{}, err
-		}
+	if err := validateClaudeEnv(shell, endpoint, token); err != nil {
+		return toolLink{}, err
 	}
 	return toolLink{endpoint: endpoint, token: token, email: email}, nil
 }
@@ -171,6 +185,9 @@ func codexLink(home, shell string) (toolLink, error) {
 	}
 	if start == end || toml.Unmarshal(data[start:end], &block) != nil {
 		return toolLink{}, errors.New("no Navigara block in config.toml; run navigara wizard")
+	}
+	if hasOTELTOML(append(append([]byte(nil), data[:start]...), data[end:]...)) {
+		return toolLink{}, errors.New("config.toml has telemetry settings outside the Navigara block; run navigara wizard")
 	}
 	endpoint := strings.TrimSuffix(block.OTEL.Metrics.OTLP.Endpoint, "/v1/metrics")
 	token := strings.TrimPrefix(block.OTEL.Metrics.OTLP.Headers["Authorization"], "Bearer ")
@@ -202,33 +219,45 @@ func codexEmail(shell string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	profile, prefix, suffix := filepath.Join(home, ".bashrc"), "enduser.id=\"'", "'\n"
+	var profiles []string
+	prefix, suffix := "enduser.id=\"'", "'\n"
 	unquote, write := strings.NewReplacer(`'"'"'`, "'"), shellSettings
 	switch shell {
 	case "zsh":
-		profile = filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc")
+		profiles = []string{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc")}
 	case "bash":
+		login := filepath.Join(home, ".bash_profile")
+		for _, name := range []string{".bash_profile", ".bash_login", ".profile"} {
+			if _, err := os.Stat(filepath.Join(home, name)); err == nil {
+				login = filepath.Join(home, name)
+				break
+			}
+		}
+		profiles = []string{filepath.Join(home, ".bashrc"), login}
 	case "fish":
-		profile, prefix, suffix = fishConfig(home), "'enduser.id=", "')\n"
+		profiles, prefix, suffix = []string{fishConfig(home)}, "'enduser.id=", "')\n"
 		unquote, write = strings.NewReplacer(`\\`, `\`, `\'`, "'"), fishSettings
 	default:
 		return "", errors.New("no Codex email: $SHELL is not bash, zsh, or fish; use --shell")
 	}
-	missing := fmt.Errorf("no Navigara email block in %s; run navigara wizard", profile)
-	data, err := os.ReadFile(profile)
-	if err != nil {
-		return "", missing
-	}
-	start, end, err := managedRange(data)
-	if err != nil || start == end {
-		return "", missing
-	}
-	block := string(data[start:end])
-	_, value, found := strings.Cut(block, prefix)
-	value, _, closed := strings.Cut(value, suffix)
-	email := unquote.Replace(value)
-	if expected, err := write(nil, email); !found || !closed || err != nil || string(expected) != block {
-		return "", fmt.Errorf("the Navigara email block in %s is changed; run navigara wizard", profile)
+	var email string
+	for _, profile := range profiles {
+		data, err := os.ReadFile(profile)
+		if err != nil {
+			return "", fmt.Errorf("no Navigara email block in %s; run navigara wizard", profile)
+		}
+		start, end, err := managedRange(data)
+		if err != nil || start == end {
+			return "", fmt.Errorf("no Navigara email block in %s; run navigara wizard", profile)
+		}
+		block := string(data[start:end])
+		_, value, found := strings.Cut(block, prefix)
+		value, _, closed := strings.Cut(value, suffix)
+		value = unquote.Replace(value)
+		if expected, err := write(nil, value); !found || !closed || err != nil || string(expected) != block || email != "" && value != email {
+			return "", fmt.Errorf("the Navigara email block in %s is changed; run navigara wizard", profile)
+		}
+		email = value
 	}
 	return email, nil
 }
