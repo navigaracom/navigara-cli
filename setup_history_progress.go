@@ -266,9 +266,7 @@ func (u *uploadProgress) prepared(done, total int) {
 		u.line("Prepared %d/%d sessions", done, total)
 		return
 	}
-	if done == 0 {
-		u.history.discovering()
-	}
+	u.history.discovering() // Restarts the bar after other output stopped it.
 	u.history.processed(done, total)
 }
 

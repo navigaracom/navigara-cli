@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,9 +17,11 @@ import (
 )
 
 // CodexRollouts lists the rollout files under a Codex home, child threads included:
-// Codex reports each thread as its own session. Missing roots are optional.
+// Codex reports each thread as its own session. Missing roots are optional. An unreadable
+// directory below a root is reported in the error, and the rollouts found elsewhere are still returned.
 func CodexRollouts(codexHome string) ([]string, error) {
 	var paths []string
+	var walkErrs []error
 	for _, dir := range []string{"sessions", "archived_sessions"} {
 		root, err := filepath.EvalSymlinks(filepath.Join(codexHome, dir))
 		if os.IsNotExist(err) {
@@ -39,7 +42,8 @@ func CodexRollouts(codexHome string) ([]string, error) {
 		}
 		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return fmt.Errorf("walk Codex %s at %q: %w", dir, path, err)
+				walkErrs = append(walkErrs, fmt.Errorf("walk Codex %s at %q: %w", dir, path, err))
+				return nil
 			}
 			if d.Type().IsRegular() && strings.HasPrefix(d.Name(), "rollout-") && strings.HasSuffix(d.Name(), ".jsonl") {
 				paths = append(paths, path)
@@ -50,7 +54,7 @@ func CodexRollouts(codexHome string) ([]string, error) {
 		}
 	}
 	sort.Strings(paths)
-	return paths, nil
+	return paths, errors.Join(walkErrs...)
 }
 
 // CodexSessionID reads a rollout's thread id from its session_meta header.

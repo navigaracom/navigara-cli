@@ -209,25 +209,24 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 		seen := map[string]bool{}
 		paths, err := telemetry.CodexRollouts(codexHome)
 		if err != nil {
-			skipped = append(skipped, err.Error())
-		} else {
-			for _, path := range paths {
-				if stale(opts.since, path) {
-					continue
-				}
-				id, err := telemetry.CodexSessionID(path)
-				if err != nil {
-					skipped = append(skipped, err.Error())
-					continue
-				}
-				if seen[id] || !want(id) {
-					continue
-				}
-				seen[id] = true
-				jobs = append(jobs, job{"codex", id, path, func() (*telemetry.Session, error) {
-					return telemetry.BuildCodex(path, ident, opts.until)
-				}})
+			skipped = append(skipped, strings.Split(err.Error(), "\n")...)
+		}
+		for _, path := range paths {
+			if stale(opts.since, path) {
+				continue
 			}
+			id, err := telemetry.CodexSessionID(path)
+			if err != nil {
+				skipped = append(skipped, err.Error())
+				continue
+			}
+			if seen[id] || !want(id) {
+				continue
+			}
+			seen[id] = true
+			jobs = append(jobs, job{"codex", id, path, func() (*telemetry.Session, error) {
+				return telemetry.BuildCodex(path, ident, opts.until)
+			}})
 		}
 	}
 	reportSkipped := func() {
@@ -254,7 +253,6 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			progress(done, len(jobs))
 		}
 	}
-	report(0)
 
 	automaticOutput := opts.output == ""
 	if automaticOutput {
@@ -269,6 +267,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	if automaticOutput && sender != nil {
 		fmt.Fprintln(stdout, "Output:", opts.output)
 	}
+	report(0)
 	// Prepare at most two sessions at a time, then encode and write their bodies
 	// serially in sorted session order.
 	counts := map[string]int{}
