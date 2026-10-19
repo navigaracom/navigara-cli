@@ -91,7 +91,11 @@ func navigaraClaudeTelemetry(env map[string]string, known []string) bool {
 	if marker, ok := env[managedEndpoint]; ok {
 		return env["OTEL_EXPORTER_OTLP_ENDPOINT"] == marker
 	}
-	origin := urlOrigin(env["OTEL_EXPORTER_OTLP_ENDPOINT"])
+	return knownOrigin(env["OTEL_EXPORTER_OTLP_ENDPOINT"], known)
+}
+
+func knownOrigin(endpoint string, known []string) bool {
+	origin := urlOrigin(endpoint)
 	for _, host := range known {
 		if host != "" && origin == host {
 			return true
@@ -308,10 +312,19 @@ func codexSettings(data []byte, endpoint, token string) ([]byte, error) {
 	return out, nil
 }
 
-// codexTelemetryConflict reports telemetry outside the Navigara block.
-func codexTelemetryConflict(data []byte) error {
+// codexTelemetryConflict reports Codex telemetry that Navigara did not write:
+// telemetry outside the Navigara block, or a block that differs from what a
+// Navigara version wrote for a known origin. A new token is not a conflict.
+func codexTelemetryConflict(data []byte, endpoint string) error {
 	start, end, err := tomlManagedRange(data)
-	if err != nil || start != end || !hasOTELTOML(data) {
+	if err != nil {
+		return nil
+	}
+	if start != end {
+		if old, identical := codexBlockEndpoint(data[start:end]); identical && knownOrigin(old, []string{defaultHost, urlOrigin(endpoint)}) {
+			return nil
+		}
+	} else if !hasOTELTOML(data) {
 		return nil
 	}
 	var decoded struct {
@@ -319,16 +332,16 @@ func codexTelemetryConflict(data []byte) error {
 			Endpoint string `toml:"endpoint"`
 		} `toml:"otel"`
 	}
-	endpoint := "another destination"
+	current := "another destination"
 	if toml.Unmarshal(data, &decoded) == nil {
 		for _, name := range []string{"exporter", "metrics_exporter", "trace_exporter"} {
 			if old := decoded.Otel[name]["otlp-http"].Endpoint; old != "" {
-				endpoint = old
+				current = old
 				break
 			}
 		}
 	}
-	return fmt.Errorf("Codex already sends telemetry to %s. Re-run with --replace, or use --source claude.", endpoint)
+	return fmt.Errorf("Codex already sends telemetry to %s. Re-run with --replace, or use --source claude.", current)
 }
 
 func shellSettings(data []byte, email string) ([]byte, error) {
@@ -370,14 +383,38 @@ func fishQuote(value string) string {
 	return "'" + strings.NewReplacer(`\`, `\\`, "'", `\'`).Replace(value) + "'"
 }
 
-// removeManagedBlock removes the Navigara block from a shell profile or, with
-// tomlManagedRange, from Codex config.toml.
-func removeManagedBlock(data []byte, managed func([]byte) (int, int, error)) ([]byte, error) {
-	start, end, err := managed(data)
+// removeManagedBlock removes the Navigara block from a shell profile.
+func removeManagedBlock(data []byte) ([]byte, error) {
+	start, end, err := managedRange(data)
 	if err != nil || start == end {
 		return data, err
 	}
 	return append(append([]byte(nil), data[:start]...), data[end:]...), nil
+}
+
+// removeCodexSettings removes the Navigara block from config.toml. It keeps
+// the file and returns a warning when the block is not proven Navigara's or
+// when removing it would move or break other settings.
+func removeCodexSettings(data []byte, known []string) ([]byte, string, error) {
+	start, end, err := tomlManagedRange(data)
+	if err != nil || start == end {
+		return data, "", err
+	}
+	endpoint, identical := codexBlockEndpoint(data[start:end])
+	switch {
+	case !identical:
+		return data, "Kept (changed by you): the Navigara telemetry block in config.toml.", nil
+	case !knownOrigin(endpoint, known):
+		origin := urlOrigin(endpoint)
+		return data, "Codex sends telemetry to " + origin + ", which is not a known Navigara address; nothing removed. Use --host " + origin + " if it is your Navigara instance.", nil
+	case !managedSuffixSafe(data[end:]):
+		return data, "Kept: the Navigara block in config.toml is followed by settings that would move to another table. Move them above the block, then run again.", nil
+	}
+	out := append(append([]byte(nil), data[:start]...), data[end:]...)
+	if validateTOML(out) != nil {
+		return data, "Kept: removing the Navigara block would make config.toml invalid. Remove the block by hand.", nil
+	}
+	return out, "", nil
 }
 
 // olderClaudeTelemetryValues holds values that an earlier Navigara version
@@ -404,7 +441,7 @@ func claudeKeptKeys(before, after []byte) []string {
 		}
 	}
 	if marker, ok := old.Env[managedEmail]; ok {
-		if id, ok := enduserIDOf(settings.Env["OTEL_RESOURCE_ATTRIBUTES"]); ok && id != marker {
+		if id, ok := enduserIDOf(old.Env["OTEL_RESOURCE_ATTRIBUTES"]); ok && id != marker {
 			kept = append(kept, "Kept (changed by you): enduser.id")
 		}
 	}
@@ -496,23 +533,51 @@ func marshalClaudeEnv(settings map[string]json.RawMessage, env map[string]string
 }
 
 func codexBlock(endpoint, token string) string {
+	return codexBlockFor(endpoint, token, "metrics_exporter", "exporter", "trace_exporter")
+}
+
+// codexBlockFor writes the Navigara block for the given exporters. Versions
+// before ENG-4565 wrote only metrics_exporter and exporter.
+func codexBlockFor(endpoint, token string, exporters ...string) string {
 	q := func(value string) string { b, _ := json.Marshal(value); return string(b) }
-	return telemetryBegin + `
-[otel.metrics_exporter.otlp-http]
-endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/metrics") + `
-protocol = "binary"
-headers = { Authorization = ` + q("Bearer "+token) + ` }
+	paths := map[string]string{"metrics_exporter": "/v1/metrics", "exporter": "/v1/logs", "trace_exporter": "/v1/traces"}
+	sections := make([]string, 0, len(exporters))
+	for _, name := range exporters {
+		sections = append(sections, "[otel."+name+".otlp-http]\nendpoint = "+q(strings.TrimSuffix(endpoint, "/")+paths[name])+
+			"\nprotocol = \"binary\"\nheaders = { Authorization = "+q("Bearer "+token)+" }\n")
+	}
+	return telemetryBegin + "\n" + strings.Join(sections, "\n") + telemetryEnd + "\n"
+}
 
-[otel.exporter.otlp-http]
-endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/logs") + `
-protocol = "binary"
-headers = { Authorization = ` + q("Bearer "+token) + ` }
-
-[otel.trace_exporter.otlp-http]
-endpoint = ` + q(strings.TrimSuffix(endpoint, "/")+"/v1/traces") + `
-protocol = "binary"
-headers = { Authorization = ` + q("Bearer "+token) + ` }
-` + telemetryEnd + "\n"
+// codexBlockEndpoint returns the endpoint of a Navigara block and whether the
+// block is byte-identical to one that a Navigara version wrote, with any token.
+func codexBlockEndpoint(block []byte) (string, bool) {
+	block = bytes.ReplaceAll(block, []byte("\r\n"), []byte("\n"))
+	var decoded struct {
+		Otel struct {
+			Metrics struct {
+				HTTP struct {
+					Endpoint string            `toml:"endpoint"`
+					Headers  map[string]string `toml:"headers"`
+				} `toml:"otlp-http"`
+			} `toml:"metrics_exporter"`
+		} `toml:"otel"`
+	}
+	if toml.Unmarshal(block, &decoded) != nil {
+		return "", false
+	}
+	endpoint, ok := strings.CutSuffix(decoded.Otel.Metrics.HTTP.Endpoint, "/v1/metrics")
+	token, hasToken := strings.CutPrefix(decoded.Otel.Metrics.HTTP.Headers["Authorization"], "Bearer ")
+	if !ok || !hasToken {
+		return endpoint, false
+	}
+	got := strings.TrimSuffix(string(block), "\n")
+	for _, want := range []string{codexBlock(endpoint, token), codexBlockFor(endpoint, token, "metrics_exporter", "exporter")} {
+		if got == strings.TrimSuffix(want, "\n") {
+			return endpoint, true
+		}
+	}
+	return endpoint, false
 }
 
 func spliceManaged(data, block []byte, start, end int) []byte {

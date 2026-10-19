@@ -51,7 +51,7 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 			return nil, err
 		}
 		codex := files[len(files)-1]
-		codex.notes, codex.conflict = settingsChanges(codex.before, codex.after, toml.Unmarshal), codexTelemetryConflict(codex.before)
+		codex.notes, codex.conflict = settingsChanges(codex.before, codex.after, toml.Unmarshal), codexTelemetryConflict(codex.before, endpoint)
 		var profiles []string
 		profile := shellSettings
 		switch firstNonEmpty(opts.shell, filepath.Base(os.Getenv("SHELL"))) {
@@ -135,13 +135,17 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 		}
 		return err
 	}
-	shell := func(b []byte) ([]byte, error) { return removeManagedBlock(b, managedRange) }
+	shell := removeManagedBlock
+	var codexWarning string
 	targets := []struct {
 		path      string
 		transform func([]byte) ([]byte, error)
 	}{
 		{filepath.Join(opts.claudeHome, "settings.json"), func(b []byte) ([]byte, error) { return removeClaudeSettings(b, known) }},
-		{filepath.Join(opts.codexHome, "config.toml"), func(b []byte) ([]byte, error) { return removeManagedBlock(b, tomlManagedRange) }},
+		{filepath.Join(opts.codexHome, "config.toml"), func(b []byte) (out []byte, err error) {
+			out, codexWarning, err = removeCodexSettings(b, known)
+			return out, err
+		}},
 		{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc"), shell},
 		{filepath.Join(home, ".bashrc"), shell},
 		{filepath.Join(home, ".bash_profile"), shell},
@@ -153,8 +157,12 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 		if (i == 0 && opts.source == "codex") || (i > 0 && opts.source == "claude") {
 			continue
 		}
+		before := len(files)
 		if err := add(target.path, target.transform); err != nil {
 			return nil, err
+		}
+		if i == 1 && len(files) > before {
+			files[before].warning = codexWarning
 		}
 		if i == 0 && len(files) == 1 {
 			if !bytes.Equal(files[0].before, files[0].after) {

@@ -551,7 +551,7 @@ func TestConfigRemoveRestoresOriginalSettings(t *testing.T) {
 
 	remove := func(args ...string) (int, string, string) {
 		var out, errOut bytes.Buffer
-		code := run(context.Background(), append([]string{"sessions", "config", "remove", "--claude-home", claude, "--codex-home", codex}, args...), &out, &errOut)
+		code := run(context.Background(), append([]string{"sessions", "config", "remove", "--host", host, "--claude-home", claude, "--codex-home", codex}, args...), &out, &errOut)
 		return code, out.String(), errOut.String()
 	}
 	patched, _ := os.ReadFile(codexPath)

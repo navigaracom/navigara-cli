@@ -321,7 +321,7 @@ headers = { Authorization = "Bearer fixture-old" }
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := append(append(append([]byte(nil), prefix...), test.telemetry...), suffix...)
-			conflict := codexTelemetryConflict(input)
+			conflict := codexTelemetryConflict(input, testEndpoint)
 			if conflict == nil || !strings.Contains(conflict.Error(), "Codex already sends telemetry to https://old.example/v1/") || !strings.Contains(conflict.Error(), "--replace") {
 				t.Fatalf("expected a replaceable conflict, got %v", conflict)
 			}
@@ -602,5 +602,57 @@ func TestRemoveClaudeSettingsKeepsEditedEnduserID(t *testing.T) {
 	}
 	if notes := claudeKeptKeys(edited, got); !reflect.DeepEqual(notes, []string{"Kept (changed by you): enduser.id"}) {
 		t.Fatalf("notes = %q", notes)
+	}
+}
+
+func TestCodexTelemetryConflictChecksNavigaraBlock(t *testing.T) {
+	prefix := []byte("model = \"o3\"\n")
+	ours := append(append([]byte(nil), prefix...), codexBlock(testEndpoint, "old-token")...)
+	if err := codexTelemetryConflict(ours, testEndpoint); err != nil {
+		t.Fatalf("own block with an old token is a conflict: %v", err)
+	}
+	legacy := append(append([]byte(nil), prefix...), codexBlockFor(testEndpoint, "old-token", "metrics_exporter", "exporter")...)
+	if err := codexTelemetryConflict(legacy, testEndpoint); err != nil {
+		t.Fatalf("block from before ENG-4565 is a conflict: %v", err)
+	}
+	edited := bytes.Replace(ours, []byte("https://app.navigara.com/api/otlp/v1/logs"), []byte("https://collector.example/v1/logs"), 1)
+	if err := codexTelemetryConflict(edited, testEndpoint); err == nil || !strings.Contains(err.Error(), "https://collector.example/v1/logs") {
+		t.Fatalf("edited block: %v", err)
+	}
+	foreignHost := []byte(codexBlock("https://other.example/api/otlp", "token"))
+	if err := codexTelemetryConflict(foreignHost, testEndpoint); err == nil {
+		t.Fatal("block for an unknown origin is not a conflict")
+	}
+}
+
+func TestRemoveCodexSettings(t *testing.T) {
+	known := []string{defaultHost}
+	prefix := "model = \"o3\"\n\n"
+	block := codexBlock(testEndpoint, "token")
+	for _, test := range []struct {
+		name, data, warning string
+		removed             bool
+	}{
+		{name: "own block", data: prefix + block + "[projects.\"/work\"]\ntrust_level = \"trusted\"\n", removed: true},
+		{name: "edited block", data: prefix + strings.Replace(block, "app.navigara.com/api/otlp/v1/logs", "collector.example/v1/logs", 1), warning: "Kept (changed by you)"},
+		{name: "unknown origin", data: prefix + codexBlock("https://self.example/api/otlp", "token"), warning: "Use --host https://self.example"},
+		{name: "trailing assignment", data: prefix + block + "approval = \"never\"\n", warning: "followed by settings"},
+		{name: "duplicate key", data: prefix + block + "model = \"later\"\n", warning: "followed by settings"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, warning, err := removeCodexSettings([]byte(test.data), known)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.removed {
+				if warning != "" || strings.Contains(string(got), "navigara") || validateTOML(got) != nil || !strings.HasPrefix(string(got), prefix) {
+					t.Fatalf("remove = %q, warning %q", got, warning)
+				}
+				return
+			}
+			if string(got) != test.data || !strings.Contains(warning, test.warning) {
+				t.Fatalf("remove = %q, warning %q", got, warning)
+			}
+		})
 	}
 }
