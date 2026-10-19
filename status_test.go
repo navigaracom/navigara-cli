@@ -18,6 +18,7 @@ func TestSessionsStatus(t *testing.T) {
 		reject, codex    bool
 		codexLogsRemoved bool
 		claude, identity string
+		metricsOverride  string
 		code             int
 		want, avoid      []string
 	}{
@@ -39,6 +40,8 @@ func TestSessionsStatus(t *testing.T) {
 			want: []string{"Codex: not connected: no Navigara email block in"}},
 		{name: "codex fish identity", codex: true, identity: "fish", code: 0,
 			want: []string{"Codex: connected to 127.0.0.1:", "as o'neil@example.com"}},
+		{name: "claude shell override", claude: "connected", metricsOverride: "https://elsewhere.example/v1/metrics", code: 1,
+			want: []string{"Claude Code: not connected: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set in your shell environment"}},
 		{name: "nothing found", code: 0,
 			want: []string{"Claude Code: not found", "Codex: not found", "No Claude Code or Codex home found"}, avoid: []string{"connected to"}},
 	} {
@@ -50,6 +53,9 @@ func TestSessionsStatus(t *testing.T) {
 			t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 			t.Setenv("CODEX_HOME", codexHome)
 			t.Setenv("SHELL", "/bin/zsh")
+			if tc.metricsOverride != "" {
+				t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", tc.metricsOverride)
+			}
 			t.Setenv("ZDOTDIR", home)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.reject || r.URL.Path != "/api/otlp/v1/metrics" || r.Header.Get("Authorization") != "Bearer test-secret" {

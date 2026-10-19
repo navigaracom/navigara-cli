@@ -116,8 +116,15 @@ func claudeLink(home string) (toolLink, error) {
 	if env["CLAUDE_CODE_ENABLE_TELEMETRY"] != "1" || env["OTEL_METRICS_EXPORTER"] != "otlp" || env["OTEL_LOGS_EXPORTER"] != "otlp" || env["OTEL_EXPORTER_OTLP_PROTOCOL"] != "http/protobuf" || env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "" || !hasToken {
 		return toolLink{}, errors.New("telemetry is not set up; run navigara wizard")
 	}
-	if err := validateClaudeEnv(env, env["OTEL_EXPORTER_OTLP_ENDPOINT"], token); err != nil {
-		return toolLink{}, err
+	shell := map[string]string{}
+	for _, entry := range os.Environ() {
+		key, value, _ := strings.Cut(entry, "=")
+		shell[key] = value
+	}
+	for _, env := range []map[string]string{env, shell} {
+		if err := validateClaudeEnv(env, settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"], token); err != nil {
+			return toolLink{}, err
+		}
 	}
 	return toolLink{endpoint: env["OTEL_EXPORTER_OTLP_ENDPOINT"], token: token, email: enduserID(env["OTEL_RESOURCE_ATTRIBUTES"])}, nil
 }
