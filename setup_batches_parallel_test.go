@@ -183,7 +183,7 @@ func TestSetupBatchesFatalAuthCancelsOtherRequests(t *testing.T) {
 		}
 	})
 	err = sendSetupBatches(context.Background(), d, s, nil)
-	if err == nil || !strings.Contains(err.Error(), "analytics ingestor role") {
+	if err == nil || !strings.Contains(err.Error(), "Analytics Ingestor role") {
 		t.Fatalf("error=%v; want original auth rejection", err)
 	}
 	if !got429.Load() || !got403.Load() || !canceled.Load() {

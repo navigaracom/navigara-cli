@@ -191,7 +191,7 @@ func TestUploadStopsOnRejectedKey(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{"sessions", "upload", "--claude-home", claudeHome, "--codex-home", codexHome,
 		"--output", filepath.Join(t.TempDir(), "out"), "--send", "--url", server.URL, "--token", "bad"}, &stdout, &stderr)
-	if code != 1 || !strings.Contains(stderr.String(), "analytics ingestor") {
+	if code != 1 || !strings.Contains(stderr.String(), "Analytics Ingestor role") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 }

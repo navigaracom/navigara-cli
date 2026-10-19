@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func TestUploadRequiresPolicyBeforeCreatingOutput(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "out")
 	var out, errs bytes.Buffer
 	code := run(context.Background(), []string{"sessions", "upload", "--send", "--url", srv.URL, "--token", "secret", "--output", dir}, &out, &errs)
-	if code != 1 || !strings.Contains(errs.String(), "deduplication") {
+	if code != 1 || !strings.Contains(errs.String(), "Your Navigara server is too old for this CLI. Ask your admin to update Navigara.") {
 		t.Fatalf("exit=%d: %s", code, errs.String())
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -249,5 +250,67 @@ func TestSenderParallelReceiptsReplaceResentBatch(t *testing.T) {
 	s.codexReceipts[[32]byte{}] = -1
 	if !strings.Contains(s.codexSummary(), "unavailable") {
 		t.Fatal("missing receipt became zero")
+	}
+}
+
+func TestSenderReportsEachRetry(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+	s := newSender(srv.URL, "secret")
+	var lines []string
+	s.retried = func(line string) { lines = append(lines, line) }
+	if err := s.post(context.Background(), telemetry.Body{Path: "/v1/metrics", Data: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Upload failed (HTTP 500), retrying in 2 s (attempt 1 of 5)…"}
+	if fmt.Sprint(lines) != fmt.Sprint(want) {
+		t.Fatalf("retry lines=%q, want %q", lines, want)
+	}
+}
+
+func TestSenderExplainsRejectedKeys(t *testing.T) {
+	for status, want := range map[int]string{
+		http.StatusUnauthorized: "Navigara rejected the key (expired or revoked). Run navigara login, or create a new Analytics Ingestor key.",
+		http.StatusForbidden:    "Navigara rejected the key: it does not have the Analytics Ingestor role. Create a new Analytics Ingestor key.",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
+		err := newSender(srv.URL, "secret").checkSetup(context.Background())
+		srv.Close()
+		if err == nil || err.Error() != want || !errors.Is(err, errIngestionAuthRejected) {
+			t.Fatalf("HTTP %d: err=%v, want %q", status, err, want)
+		}
+	}
+}
+
+func TestSetupProbeFailsFastWhenConnectionIsRefused(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := ln.Addr().String()
+	ln.Close()
+	s := newSender("http://"+host, "secret")
+	s.retried = func(line string) { t.Errorf("unexpected retry: %s", line) }
+	start := time.Now()
+	err = s.checkSetup(context.Background())
+	want := "Cannot reach " + host + ". Check the address and your network."
+	if err == nil || err.Error() != want || time.Since(start) > time.Second {
+		t.Fatalf("err=%v after %v, want %q", err, time.Since(start), want)
+	}
+}
+
+func TestSetupProgressPrintsRetryOutsidePlainOutput(t *testing.T) {
+	var out, errs bytes.Buffer
+	u := newSetupProgress(newSetupInput(strings.NewReader(""), &out))
+	u.stderr = &errs
+	u.upload(0, 2)
+	u.retry("Upload failed (HTTP 500), retrying in 2 s (attempt 1 of 5)…")
+	if errs.String() != "Upload failed (HTTP 500), retrying in 2 s (attempt 1 of 5)…\n" || strings.Contains(out.String(), "retrying") {
+		t.Fatalf("stdout=%q stderr=%q", out.String(), errs.String())
 	}
 }
