@@ -241,7 +241,7 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 	}
 }
 
-func TestSetupStopsOnIncompleteHistory(t *testing.T) {
+func TestSetupSkipsUnreadableHistory(t *testing.T) {
 	for _, source := range []string{"claude", "codex"} {
 		t.Run(source, func(t *testing.T) {
 			claudeHome, codexHome := fixtureHomes(t)
@@ -265,7 +265,10 @@ func TestSetupStopsOnIncompleteHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			requests := 0
-			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++ }))
+			srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("X-Navigara-Backfill-Policy", "session-live-wins-v1")
+			}))
 			defer srv.Close()
 			var out, errs bytes.Buffer
 			selectClaude, selectCodex := "y", "n"
@@ -273,19 +276,30 @@ func TestSetupStopsOnIncompleteHistory(t *testing.T) {
 				selectClaude, selectCodex = "n", "y"
 			}
 			input := selectClaude + "\n" + selectCodex + "\n" + "dev@example.com\nall\ny\ny\n"
-			if runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs) == 0 {
-				t.Fatal("incomplete history accepted")
+			code := runSetup(context.Background(), nil, strings.NewReader(input), &out, &errs)
+			if !strings.Contains(errs.String(), "Skipped 1 session files that could not be read:\n  ") || !strings.Contains(errs.String(), broken) {
+				t.Fatalf("missing skip report: %s", errs.String())
+			}
+			if source == "claude" {
+				// The two readable fixture sessions are still imported.
+				if code != 0 || requests == 0 {
+					t.Fatalf("exit=%d requests=%d stderr=%s", code, requests, errs.String())
+				}
+				return
+			}
+			if code == 0 || !strings.Contains(errs.String(), "could not read session history") || strings.Contains(out.String()+errs.String(), "backfill") {
+				t.Fatalf("history with no readable session accepted: exit=%d stdout=%s stderr=%s", code, out.String(), errs.String())
 			}
 			if requests != 0 {
 				t.Fatalf("requested before incomplete history stopped setup: %d", requests)
 			}
 			if _, err := os.Stat(filepath.Join(claudeHome, "settings.json")); !os.IsNotExist(err) {
-				t.Fatal("changed settings after incomplete preview")
+				t.Fatal("changed settings after unreadable history")
 			}
 			if _, err := os.Stat(filepath.Join(codexHome, "config.toml")); !os.IsNotExist(err) {
-				t.Fatal("changed Codex settings after incomplete preview")
+				t.Fatal("changed Codex settings after unreadable history")
 			}
-			if source == "codex" && !strings.Contains(errs.String(), "Codex rollout header") {
+			if !strings.Contains(errs.String(), "Codex rollout header") {
 				t.Fatalf("missing Codex diagnostic: %s", errs.String())
 			}
 		})

@@ -171,7 +171,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 			history.stop()
 			fmt.Fprint(p.out, historyOut.String())
 			fmt.Fprint(stderr, historyErr.String())
-			return errors.New("could not prepare backfill; no configuration changed")
+			return errors.New("could not read session history; no configuration changed")
 		}
 	} else if err = os.Mkdir(opts.output, 0700); err != nil {
 		return err
@@ -241,7 +241,7 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 	progress.stderr = stderr
 	s.retried = progress.retry
 	uploadCtx, stopUpload := interruptible(ctx)
-	err = sendSetupBatches(uploadCtx, opts.output, s, progress.upload)
+	err = sendSetupBatches(uploadCtx, opts.output, s, progress.upload, false)
 	stopUpload()
 	if err != nil {
 		progress.stop()
@@ -310,7 +310,7 @@ func resumeSetup(ctx context.Context, dir, host string, p *setupInput, open func
 	progress := newSetupProgress(p)
 	s.retried = progress.retry
 	uploadCtx, stopUpload := interruptible(ctx)
-	err = sendSetupBatches(uploadCtx, dir, s, progress.upload)
+	err = sendSetupBatches(uploadCtx, dir, s, progress.upload, false)
 	stopUpload()
 	if err != nil {
 		progress.stop()
