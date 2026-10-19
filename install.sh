@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # Navigara CLI installer
 #
@@ -6,14 +6,13 @@
 # Releases, checks its SHA-256 digest against the value written below, and only
 # then installs it. Nothing downloaded runs before the digest matches.
 #
-# Read this file before you run it. Then run it from disk:
+#   curl -fsSL https://navigara.com/cli | sh                   # into ~/.local/bin, then navigara wizard
+#   curl -fsSL https://navigara.com/cli | sh -s -- --prefix DIR
+#   sh install.sh --system        # into /opt/navigara/bin; run as root (MDM), no wizard
+#   sh install.sh --no-wizard     # install only
+#   sh install.sh --help
 #
-#   bash install.sh                 # install for the current user into ~/.local/bin
-#   bash install.sh --prefix DIR    # install into DIR
-#   bash install.sh --system        # install into /opt/navigara/bin; run as root (MDM)
-#   bash install.sh --help
-#
-# Piping this script into a shell (curl ... | bash) is refused on purpose.
+# Everything runs from main at the last line, so a truncated download runs nothing.
 #
 # Enterprises: download this file from the GitHub release, review it, and host it
 # yourselves or embed it in your MDM policy. Only the release block below changes
@@ -29,7 +28,7 @@ SHA256_LINUX_ARM64=""
 SHA256_LINUX_AMD64=""
 # ---- end release block --------------------------------------------------------
 
-set -euo pipefail
+set -eu
 
 REPO="navigaracom/navigara-cli"
 BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
@@ -43,14 +42,16 @@ die() {
 
 usage() {
   cat <<EOF
-Usage: bash install.sh [--prefix DIR | --system] [--help]
+Usage: sh install.sh [--prefix DIR | --system] [--no-wizard] [--help]
 
 Installs navigara ${VERSION} from
   ${BASE_URL}
-after verifying the SHA-256 digest embedded in this script.
+after verifying the SHA-256 digest embedded in this script,
+then runs navigara wizard when a terminal is available.
 
   --prefix DIR  install into DIR (default: ${USER_PREFIX})
-  --system      install into ${SYSTEM_PREFIX}; must run as root
+  --system      install into ${SYSTEM_PREFIX}; must run as root; no wizard
+  --no-wizard   do not run navigara wizard after the install
   -h, --help    show this help
 EOF
 }
@@ -61,16 +62,7 @@ usage_error() {
   exit 2
 }
 
-refuse_pipe() {
-  # BASH_SOURCE[0] is empty when the script arrives on stdin (curl ... | bash)
-  # and is not a regular file for bash <(curl ...).
-  if [ -z "${BASH_SOURCE[0]:-}" ] || [ ! -f "${BASH_SOURCE[0]}" ]; then
-    die "refusing to run from a pipe; download this script, read it, then run: bash install.sh"
-  fi
-}
-
 platform() {
-  local os arch
   os="$(uname -s)"
   arch="$(uname -m)"
   case "$os" in
@@ -119,7 +111,7 @@ fetch() {
 }
 
 main() {
-  local prefix="$USER_PREFIX" system="no"
+  prefix="$USER_PREFIX" system="no" wizard="yes"
   while [ $# -gt 0 ]; do
     case "$1" in
       --prefix)
@@ -134,6 +126,10 @@ main() {
       --system)
         system="yes"
         prefix="$SYSTEM_PREFIX"
+        shift
+        ;;
+      --no-wizard)
+        wizard="no"
         shift
         ;;
       -h | --help)
@@ -155,7 +151,6 @@ main() {
     die "--system must run as root"
   fi
 
-  local target expected
   target="$(platform)"
   expected="$(pinned_digest "$target")"
   case "$expected" in
@@ -165,7 +160,7 @@ main() {
   esac
   [ "${#expected}" -eq 64 ] || die "pinned digest for ${target} is not 64 hex characters; refusing to install"
 
-  local asset url tmpdir file actual staged=""
+  staged=""
   asset="navigara-${VERSION}-${target}"
   url="${BASE_URL}/${asset}"
   umask 022
@@ -194,7 +189,6 @@ The download was discarded. Nothing was installed."
   fi
 
   mkdir -p "$prefix"
-  local dest
   dest="${prefix}/navigara"
   staged="${prefix}/.navigara.${VERSION}.$$"
   cp "$file" "$staged"
@@ -209,8 +203,11 @@ The download was discarded. Nothing was installed."
       *":${prefix}:"*) ;;
       *) printf 'Add %s to your PATH to run navigara by name.\n' "$prefix" ;;
     esac
+    # Under curl | sh, stdin is the script itself; the wizard reads the terminal.
+    if [ "$wizard" = "yes" ] && (: </dev/tty) 2>/dev/null; then
+      "$dest" wizard </dev/tty
+    fi
   fi
 }
 
-refuse_pipe
 main "$@"
