@@ -108,8 +108,24 @@ func fishConfig(home string) string {
 // files that exist.
 func removePlans(opts options, home string) ([]*setupFile, error) {
 	var files []*setupFile
+	// A file without Navigara settings is only reported. It may be a symlink,
+	// for example a dotfile manager's profile, which setup never writes.
 	add := func(path string, transform func([]byte) ([]byte, error)) error {
-		if _, err := os.Lstat(path); os.IsNotExist(err) {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var data []byte
+		if info.Mode().IsRegular() && info.Size() <= 4<<20 {
+			if data, err = os.ReadFile(path); err != nil {
+				return err
+			}
+		}
+		if out, err := transform(data); data != nil && err == nil && bytes.Equal(out, data) {
+			files = append(files, &setupFile{path: path, before: data, after: data, existed: true})
 			return nil
 		}
 		f, err := planFile(path, transform)

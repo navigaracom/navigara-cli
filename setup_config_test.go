@@ -499,3 +499,38 @@ func TestRemoveClaudeSettingsKeepsKeysChangedByUser(t *testing.T) {
 		t.Fatalf("notes = %q", notes)
 	}
 }
+
+func TestClaudeTelemetryConflictComparesNavigaraSetup(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{}`), testEndpoint, "old-token", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := claudeTelemetryConflict(ours, testEndpoint, "new-token"); err != nil {
+		t.Fatalf("token rotation is a conflict: %v", err)
+	}
+	for _, edit := range [][2]string{
+		{`"OTEL_LOGS_EXPORTER": "otlp"`, `"OTEL_LOGS_EXPORTER": "none"`},
+		{`"Authorization=Bearer old-token"`, `"Authorization=Bearer old-token,X-Corp=custom"`},
+	} {
+		edited := bytes.Replace(ours, []byte(edit[0]), []byte(edit[1]), 1)
+		if err := claudeTelemetryConflict(edited, testEndpoint, "new-token"); err == nil || !strings.Contains(err.Error(), "--replace") {
+			t.Errorf("%s: user change is not a conflict", edit[1])
+		}
+	}
+}
+
+func TestRemoveClaudeSettingsKeepsCustomHeader(t *testing.T) {
+	ours, err := claudeSettings([]byte(`{}`), "https://app.example/api/otlp", "token-secret", "dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(ours, []byte(`"Authorization=Bearer token-secret"`), []byte(`"Authorization=Bearer token-secret,X-Corp=custom"`), 1)
+	got, err := removeClaudeSettings(edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := claudeKeptKeys(got)
+	if !bytes.Contains(got, []byte("X-Corp=custom")) || !reflect.DeepEqual(notes, []string{"Kept (changed by you): OTEL_EXPORTER_OTLP_HEADERS"}) {
+		t.Fatalf("remove = %s, notes = %q", got, notes)
+	}
+}

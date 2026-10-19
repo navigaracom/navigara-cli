@@ -75,6 +75,22 @@ func navigaraClaudeTelemetry(env map[string]string) bool {
 	return strings.HasSuffix(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "/api/otlp") && strings.HasPrefix(env["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer ")
 }
 
+// navigaraBearer reports whether value is exactly the header that Navigara
+// writes, with any token.
+func navigaraBearer(value string) bool {
+	token, ok := strings.CutPrefix(value, "Authorization=Bearer ")
+	return ok && token != "" && !strings.ContainsAny(token, ", \t")
+}
+
+// navigaraClaudeValue reports whether some Navigara version wrote value for
+// key. The endpoint and resource attributes are not covered.
+func navigaraClaudeValue(key, value string) bool {
+	if key == "OTEL_EXPORTER_OTLP_HEADERS" {
+		return navigaraBearer(value)
+	}
+	return value == claudeTelemetryEnv("", "", "")[key] || value == olderClaudeTelemetryValues[key]
+}
+
 func claudeTelemetryEnv(endpoint, token, attrs string) map[string]string {
 	return map[string]string{
 		"CLAUDE_CODE_ENABLE_TELEMETRY":        "1",
@@ -97,7 +113,8 @@ func claudeTelemetryEnv(endpoint, token, attrs string) map[string]string {
 }
 
 // claudeTelemetryConflict reports existing settings.json telemetry that
-// Navigara did not write. Values with the same endpoint are Navigara's own.
+// Navigara did not write. In a setup with the same endpoint, only values that
+// a Navigara version wrote, with any token, may change without --replace.
 func claudeTelemetryConflict(data []byte, endpoint, token string) error {
 	var settings struct {
 		Env               map[string]string `json:"env"`
@@ -112,11 +129,10 @@ func claudeTelemetryConflict(data []byte, endpoint, token string) error {
 		foreign = foreign || ok
 	}
 	current := settings.Env["OTEL_EXPORTER_OTLP_ENDPOINT"]
-	if current != endpoint {
-		for key, value := range claudeTelemetryEnv(endpoint, token, "") {
-			if old, ok := settings.Env[key]; ok && key != "OTEL_RESOURCE_ATTRIBUTES" && old != value {
-				foreign = true
-			}
+	ours := current == endpoint && navigaraBearer(settings.Env["OTEL_EXPORTER_OTLP_HEADERS"])
+	for key, value := range claudeTelemetryEnv(endpoint, token, "") {
+		if old, ok := settings.Env[key]; ok && key != "OTEL_RESOURCE_ATTRIBUTES" && old != value && !(ours && navigaraClaudeValue(key, old)) {
+			foreign = true
 		}
 	}
 	switch {
@@ -361,10 +377,10 @@ func removeClaudeSettings(data []byte) ([]byte, error) {
 	// with a value that no Navigara version wrote was changed by the user.
 	for key, value := range claudeTelemetryEnv(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "", "") {
 		switch key {
-		case "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_RESOURCE_ATTRIBUTES":
+		case "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES":
 			delete(env, key)
 		default:
-			if current, ok := env[key]; ok && (current == value || current == olderClaudeTelemetryValues[key]) {
+			if current, ok := env[key]; ok && (current == value || navigaraClaudeValue(key, current)) {
 				delete(env, key)
 			}
 		}

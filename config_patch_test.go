@@ -597,3 +597,28 @@ func TestConfigRemovePreviewListsKeysChangedByUser(t *testing.T) {
 		t.Fatalf("code=%d out=%s err=%s", code, &out, &errOut)
 	}
 }
+
+func TestConfigRemoveSkipsSymlinkedProfileWithoutBlock(t *testing.T) {
+	root, claude, codex, _ := patchFixture(t)
+	dotfile := filepath.Join(root, "dotfiles-zshrc")
+	if err := os.WriteFile(dotfile, []byte("export PATH=/bin\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfile, filepath.Join(root, ".zshrc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bashrc"), []byte("# >>> navigara telemetry >>>\nexport X=1\n# <<< navigara telemetry <<<\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"sessions", "config", "remove", "--apply", "--claude-home", claude, "--codex-home", codex}, &out, &errOut)
+	if code != 0 || !strings.Contains(out.String(), "Unchanged: "+filepath.Join(root, ".zshrc")) {
+		t.Fatalf("code=%d out=%s err=%s", code, &out, &errOut)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, ".bashrc")); len(got) != 0 {
+		t.Fatalf(".bashrc = %q", got)
+	}
+	if info, err := os.Lstat(filepath.Join(root, ".zshrc")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlinked profile was replaced")
+	}
+}
