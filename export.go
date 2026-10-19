@@ -45,7 +45,7 @@ func exportSessionsWithProgress(ctx context.Context, opts options, stdout, stder
 
 func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer, progress, uploaded func(done, total int)) int {
 	requested := opts
-	if err := prepareUploadAccount(ctx, &opts); err != nil {
+	if err := prepareUploadAccount(ctx, &opts, stderr); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
@@ -412,7 +412,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 func resumeUpload(ctx context.Context, opts options, stdout, stderr io.Writer, uploaded func(done, total int)) int {
 	requested := opts
 	opts.send = true
-	if err := prepareUploadAccount(ctx, &opts); err != nil {
+	if err := prepareUploadAccount(ctx, &opts, stderr); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}

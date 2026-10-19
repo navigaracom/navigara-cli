@@ -808,3 +808,34 @@ func TestExportReportsInterruptAfterLastSession(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%q, want an interrupted export", code, stderr.String())
 	}
 }
+
+func TestUploadDryRunNeedsNoUsableLogin(t *testing.T) {
+	offline := httptest.NewServer(http.NotFoundHandler())
+	offline.Close()
+	for _, mode := range []string{"env token", "expired session", "auth server offline"} {
+		t.Run(mode, func(t *testing.T) {
+			claudeHome, codexHome := fixtureHomes(t)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(filepath.Dir(claudeHome), "config"))
+			t.Setenv("NAVIGARA_TOKEN", "env-secret")
+			if mode != "env token" {
+				expires := time.Now().Add(time.Hour)
+				if mode == "expired session" {
+					expires = time.Now().Add(-time.Hour)
+				}
+				if err := saveAccount(accountConfig{Host: offline.URL, SessionToken: "session-secret", SessionExpiresAt: expires,
+					UserID: "user-1", Email: "login@example.com", OrganizationID: "org-1"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--claude-home", claudeHome,
+				"--codex-home", codexHome, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr)
+			if code != 0 || !strings.HasPrefix(stdout.String(), "Sessions will be attributed to dev@example.com.\n") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if note := strings.Contains(stderr.String(), "Saved login could not be checked"); note != (mode != "env token") {
+				t.Fatalf("stderr=%q", stderr.String())
+			}
+		})
+	}
+}
