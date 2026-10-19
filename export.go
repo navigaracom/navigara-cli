@@ -67,6 +67,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	}
 	wantClaude := opts.source == "all" || opts.source == "claude"
 	wantCodex := opts.source == "all" || opts.source == "codex"
+	claudeSince, codexSince := opts.sinceFor("claude"), opts.sinceFor("codex")
 	claudeHome, codexHome, err := toolHomes(opts.claudeHome, opts.codexHome)
 	if (wantClaude && claudeHome == "") || (wantCodex && codexHome == "") {
 		fmt.Fprintln(stderr, "navigara:", err)
@@ -173,23 +174,29 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	// Unreadable history is skipped and reported at the end. The run fails only when no session in
 	// the filters was exported: an unreadable file may hold the sessions the filters ask for.
 	var skipped []string
+	skippedTool := func(tool string) {
+		if opts.skippedTools != nil {
+			opts.skippedTools[tool] = true
+		}
+	}
 	// A missing default home has no history to read.
 	if _, err := os.Stat(claudeHome); wantClaude && opts.claudeHome == "" && errors.Is(err, fs.ErrNotExist) {
 		wantClaude = false
 	}
 	if wantClaude {
 		scan := session.Scan("claude", claudeHome, codexHome, func(path string) bool {
-			if opts.since.IsZero() {
+			if claudeSince.IsZero() {
 				return false
 			}
 			subs, err := telemetry.ClaudeSubagents(path)
 			if err != nil {
 				return false
 			}
-			return stale(opts.since, append([]string{path}, subs...)...)
+			return stale(claudeSince, append([]string{path}, subs...)...)
 		})
 		for _, err := range scan.Errors {
 			skipped = append(skipped, err.Error())
+			skippedTool("claude")
 		}
 		seen := map[string]bool{}
 		for _, r := range scan.Records {
@@ -211,18 +218,24 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	if wantCodex {
 		seen := map[string]bool{}
 		paths, err := telemetry.CodexRollouts(codexHome)
-		if joined, ok := err.(interface{ Unwrap() []error }); ok {
-			for _, err := range joined.Unwrap() {
+		if err != nil {
+			skippedTool("codex")
+			if joined, ok := err.(interface{ Unwrap() []error }); ok {
+				for _, err := range joined.Unwrap() {
+					skipped = append(skipped, err.Error())
+				}
+			} else {
 				skipped = append(skipped, err.Error())
 			}
 		}
 		for _, path := range paths {
-			if stale(opts.since, path) {
+			if stale(codexSince, path) {
 				continue
 			}
 			id, err := telemetry.CodexSessionID(path)
 			if err != nil {
 				skipped = append(skipped, err.Error())
+				skippedTool("codex")
 				continue
 			}
 			if seen[id] || !want(id) {
@@ -335,10 +348,19 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			s, err := prepared[pairIndex].s, prepared[pairIndex].err
 			if err != nil {
 				skipped = append(skipped, fmt.Sprintf("%q: %v", j.path, err))
+				skippedTool(strings.TrimSuffix(j.source, "_code"))
 				report(index + pairIndex + 1)
 				continue
 			}
-			s.Within(opts.since, opts.until)
+			if n := s.Missing[telemetry.MissingUnreadable]; n > 0 {
+				skipped = append(skipped, fmt.Sprintf("%q: %d unreadable subagent transcripts", j.path, n))
+				skippedTool(strings.TrimSuffix(j.source, "_code"))
+			}
+			since := claudeSince
+			if j.source == "codex" {
+				since = codexSince
+			}
+			s.Within(since, opts.until)
 			if len(s.Events) == 0 && len(s.Points) == 0 {
 				report(index + pairIndex + 1)
 				continue

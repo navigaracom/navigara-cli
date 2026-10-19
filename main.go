@@ -22,6 +22,8 @@ type options struct {
 	source, output        string
 	claudeHome, codexHome string
 	since, until          time.Time
+	sourceSince           map[string]time.Time
+	skippedTools          map[string]bool
 	sessions              []string
 	email                 string
 	allowAnonymous        bool
@@ -32,6 +34,14 @@ type options struct {
 	host, url, token      string
 	tokenExplicit         bool
 	organizationID        string
+}
+
+// sinceFor lets the wizard resume each tool from its own last import.
+func (o options) sinceFor(tool string) time.Time {
+	if since, ok := o.sourceSince[tool]; ok {
+		return since
+	}
+	return o.since
 }
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }

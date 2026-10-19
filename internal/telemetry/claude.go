@@ -247,7 +247,7 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 	for _, path := range in.Subagents {
 		subRows, err := readClaudeRows(path)
 		if err != nil {
-			s.miss("unreadable subagent transcript")
+			s.miss(MissingUnreadable)
 			continue
 		}
 		if !in.Until.IsZero() {
