@@ -92,7 +92,7 @@ func ensureAccount(ctx context.Context, host string, p *setupInput, forceSelecti
 		}
 	}
 	if login {
-		session, err := client.browserLogin(ctx, p.out, open)
+		session, err := client.browserLogin(ctx, firstNonEmpty(p.command, "navigara login"), p.out, open)
 		if err != nil {
 			return c, err
 		}
@@ -110,6 +110,10 @@ func ensureAccount(ctx context.Context, host string, p *setupInput, forceSelecti
 	if accountChanged {
 		if err = saveAccount(c); err != nil {
 			return c, err
+		}
+		if c.signedInHost != "" {
+			fmt.Fprintf(p.out, "Replaced the saved login for %s.\n", c.signedInHost)
+			c.signedInHost = ""
 		}
 	}
 	orgs, err := client.organizations(ctx, c.SessionToken)

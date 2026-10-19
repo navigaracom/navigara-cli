@@ -65,7 +65,7 @@ func TestBrowserLogin(t *testing.T) {
 		return nil
 	}
 	var out bytes.Buffer
-	got, err := newAuthClient(srv.URL).browserLogin(context.Background(), &out, open)
+	got, err := newAuthClient(srv.URL).browserLogin(context.Background(), "navigara login", &out, open)
 	if err != nil || got.SessionToken != "private-session" {
 		t.Fatalf("login failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestBrowserLogin(t *testing.T) {
 
 func TestBrowserLoginCancelledWithFallback(t *testing.T) {
 	var out bytes.Buffer
-	_, err := newAuthClient(defaultHost).browserLogin(context.Background(), &out, func(string) error {
+	_, err := newAuthClient(defaultHost).browserLogin(context.Background(), "navigara login", &out, func(string) error {
 		process, findErr := os.FindProcess(os.Getpid())
 		if findErr != nil {
 			return findErr
@@ -124,7 +124,7 @@ func TestBrowserLoginRejectedCodeGuidance(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
 			defer srv.Close()
 			var out bytes.Buffer
-			_, err := newAuthClient(srv.URL).browserLogin(context.Background(), &out, func(raw string) error {
+			_, err := newAuthClient(srv.URL).browserLogin(context.Background(), "navigara login", &out, func(raw string) error {
 				u, e := url.Parse(raw)
 				if e != nil {
 					return e

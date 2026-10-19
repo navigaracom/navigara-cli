@@ -29,7 +29,11 @@ type accountConfig struct {
 	IngestExpiresAt  time.Time `json:"ingestExpiresAt,omitempty"`
 	// Imports maps "<organization ID>/<tool>" to the end of the last wizard import.
 	Imports map[string]time.Time `json:"imports,omitempty"`
+	// signedInHost is the saved login's host when another host was requested.
+	signedInHost string
 }
+
+var errHostFormat = errors.New("--host must look like https://navigara.example.com (no path, HTTPS only).")
 
 func canonicalHost(raw string) (string, error) {
 	if raw == "" || strings.TrimSpace(raw) != raw || strings.ContainsAny(raw, "\x00\t\r\n ") {
@@ -95,7 +99,7 @@ func loadAccount(host string) (accountConfig, error) {
 		var err error
 		wanted, err = canonicalHost(host)
 		if err != nil {
-			return accountConfig{}, err
+			return accountConfig{}, errHostFormat
 		}
 	}
 	dir, path, err := accountPath()
@@ -134,7 +138,11 @@ func loadAccount(host string) (accountConfig, error) {
 		return accountConfig{}, errors.New("account config has an invalid host")
 	}
 	if host != "" && saved.Host != wanted {
-		return accountConfig{Version: 1, Host: wanted}, nil
+		c := accountConfig{Version: 1, Host: wanted}
+		if saved.SessionToken != "" {
+			c.signedInHost = saved.Host
+		}
+		return c, nil
 	}
 	return saved, nil
 }

@@ -4,11 +4,38 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/charmbracelet/x/term"
 )
+
+var errLoginNeeded = errors.New("saved Navigara account is missing a usable session or organization; run navigara login")
+
+// Tests replace these to drive the browser login without a terminal.
+var (
+	stdinIsTerminal = func() bool { return term.IsTerminal(os.Stdin.Fd()) }
+	loginBrowser    = openBrowser
+)
+
+// signedInAccount is verifiedAccount that, on a terminal, starts the browser
+// login when the saved session is missing or expired.
+func signedInAccount(ctx context.Context, host, command string, out io.Writer) (accountConfig, error) {
+	c, err := verifiedAccount(ctx, host)
+	if !errors.Is(err, errLoginNeeded) && !errors.Is(err, authHTTPError(401)) || !stdinIsTerminal() {
+		return c, err
+	}
+	p := newSetupInput(os.Stdin, out)
+	p.command = command
+	if _, err = ensureAccount(ctx, host, p, false, loginBrowser); err != nil {
+		return c, err
+	}
+	return verifiedAccount(ctx, host)
+}
 
 // verifiedAccount checks the saved account against the server and returns a
 // refreshed copy. It deliberately does not persist anything: callers can use
@@ -18,8 +45,11 @@ func verifiedAccount(ctx context.Context, host string) (accountConfig, error) {
 	if err != nil {
 		return c, err
 	}
+	if c.signedInHost != "" {
+		return c, fmt.Errorf("No saved login for %s (signed in to %s). Run navigara login --host %s.", c.Host, c.signedInHost, c.Host)
+	}
 	if c.SessionToken == "" || !c.SessionExpiresAt.After(time.Now()) || c.UserID == "" || c.OrganizationID == "" {
-		return c, errors.New("saved Navigara account is missing a usable session or organization; run navigara login")
+		return c, errLoginNeeded
 	}
 
 	client := newAuthClient(c.Host)
