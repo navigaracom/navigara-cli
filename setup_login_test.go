@@ -420,6 +420,8 @@ func TestSetupRerunImportsOnlySinceLastImport(t *testing.T) {
 		input, want string
 		imports     int
 	}{
+		// Skipping history keeps no checkpoint, so later runs still offer all of it.
+		{"y\nn\n\nskip\ny\n", "restart Claude Code in a new terminal.", 0},
 		// Codex first: the fixture's two Claude sessions stay unimported.
 		{"n\ny\n\nall\ny\n", "Imported 0 past sessions.", 1},
 		// Claude is new, so "since last import" still imports all of its history.

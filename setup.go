@@ -266,16 +266,18 @@ func setupAttempt(ctx context.Context, c accountConfig, opts options, home strin
 		progress.stop()
 		return fmt.Errorf("%w; settings are configured; retry with navigara wizard --resume %q", err, opts.output)
 	}
-	updated := c
-	updated.Imports = maps.Clone(c.Imports)
-	if updated.Imports == nil {
-		updated.Imports = map[string]time.Time{}
-	}
-	for _, tool := range selected {
-		updated.Imports[c.OrganizationID+"/"+tool] = opts.until
-	}
-	if err = writeAccount(updated, &c); err != nil {
-		fmt.Fprintln(stderr, "navigara: could not save the import time:", err)
+	if window != "skip" {
+		updated := c
+		updated.Imports = maps.Clone(c.Imports)
+		if updated.Imports == nil {
+			updated.Imports = map[string]time.Time{}
+		}
+		for _, tool := range selected {
+			updated.Imports[c.OrganizationID+"/"+tool] = opts.until
+		}
+		if err = writeAccount(updated, &c); err != nil {
+			fmt.Fprintln(stderr, "navigara: could not save the import time:", err)
+		}
 	}
 	sessions := -1
 	if window != "skip" {
