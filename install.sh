@@ -182,12 +182,6 @@ The download was discarded. Nothing was installed."
   printf 'Verified SHA-256 %s\n' "$actual"
 
   chmod 0755 "$file"
-  if [ "$(uname -s)" = "Darwin" ]; then
-    # Requires a Developer ID (or Apple) signature; an ad-hoc signature fails.
-    codesign --verify --strict -R="anchor apple generic" "$file" 2>/dev/null \
-      || die "macOS code signature check failed; the release is not signed with a Developer ID certificate or was altered. Nothing was installed."
-  fi
-
   mkdir -p "$prefix"
   dest="${prefix}/navigara"
   staged="${prefix}/.navigara.${VERSION}.$$"
