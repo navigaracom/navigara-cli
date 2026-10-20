@@ -110,6 +110,23 @@ fetch() {
   fi
 }
 
+add_to_path() {
+  case "${SHELL:-}" in
+    */zsh) rc="${HOME}/.zshrc" ;;
+    */bash) [ "$(uname -s)" = "Darwin" ] && rc="${HOME}/.bash_profile" || rc="${HOME}/.bashrc" ;;
+    *)
+      printf 'Add %s to your PATH to run navigara by name.\n' "$1"
+      return
+      ;;
+  esac
+  line="export PATH=\"$1:\$PATH\""
+  if ! grep -qsxF "$line" "$rc"; then
+    printf '\n# Added by the Navigara CLI installer\n%s\n' "$line" >>"$rc"
+    printf 'Added %s to your PATH in %s\n' "$1" "$rc"
+  fi
+  printf 'Open a new terminal to run navigara by name.\n'
+}
+
 main() {
   prefix="$USER_PREFIX" system="no" wizard="yes"
   while [ $# -gt 0 ]; do
@@ -195,7 +212,7 @@ The download was discarded. Nothing was installed."
     "$dest" --version || die "installed binary did not start"
     case ":${PATH}:" in
       *":${prefix}:"*) ;;
-      *) printf 'Add %s to your PATH to run navigara by name.\n' "$prefix" ;;
+      *) add_to_path "$prefix" ;;
     esac
     # Under curl | sh, stdin is the script itself; the wizard reads the terminal.
     if [ "$wizard" = "yes" ] && (: </dev/tty) 2>/dev/null; then
