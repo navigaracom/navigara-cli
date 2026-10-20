@@ -5,8 +5,7 @@ Connect Claude Code and Codex to Navigara on macOS and Linux.
 ## 🚀 Install and connect
 
 ```sh
-curl -fsSL https://navigara.com/cli | bash
-navigara wizard
+curl -fsSL https://navigara.com/cli | sh
 ```
 
 | To… | Run… |
@@ -42,7 +41,7 @@ Download the installer through MDM and run it as root:
 
 ```sh
 curl -fsSL https://navigara.com/cli -o navigara-install.sh
-bash navigara-install.sh --system
+sh navigara-install.sh --system
 ```
 
 Run in each employee’s account, without `sudo`, using their email:
