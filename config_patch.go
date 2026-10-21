@@ -21,7 +21,9 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	var apply, replace, help bool
 	fs := flag.NewFlagSet("sessions config patch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: navigara sessions config patch [options]") }
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage: navigara sessions config patch [options]\nExit 3: a token is set but no signed-in Claude Code or Codex email was found.")
+	}
 	fs.StringVar(&opts.host, "host", "", "Navigara origin")
 	fs.StringVar(&opts.token, "token", "", "analytics ingestor token (or $NAVIGARA_TOKEN)")
 	fs.StringVar(&opts.source, "source", "all", "tool source: all, claude, codex")
@@ -130,7 +132,7 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		if opts.email == "" {
 			fmt.Fprintln(stderr, "navigara: no signed-in Claude Code or Codex email found; pass --email.")
-			return 1
+			return exitNoEmail
 		}
 		if err := validEmail(opts.email); err != nil {
 			fmt.Fprintln(stderr, "navigara:", err)

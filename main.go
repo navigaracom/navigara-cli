@@ -80,11 +80,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if len(args) > 1 {
 			return invalid("unexpected argument: " + args[1])
 		}
-		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]\n       navigara sessions config patch [options]\n       navigara sessions config remove [options]\n       navigara sessions status")
+		fmt.Fprintln(stdout, "Usage: navigara sessions upload [options]\n       navigara sessions config patch [options]\n       navigara sessions config remove [options]\n       navigara sessions status\n       navigara sessions mdm [options]")
 		return 0
 	}
 	if args[0] == "status" {
 		return runStatus(ctx, args[1:], stdout, stderr)
+	}
+	if args[0] == "mdm" {
+		return runMDM(ctx, args[1:], stdout, stderr)
 	}
 	if args[0] == "config" {
 		switch {

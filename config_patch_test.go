@@ -312,7 +312,7 @@ func TestConfigPatchTokenDefaultsEmailToToolAccount(t *testing.T) {
 	args := []string{"--token", "mdm-secret", "--source", "claude", "--claude-home", claude}
 
 	var out, errOut bytes.Buffer
-	if code := runConfigPatch(context.Background(), args, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "pass --email") {
+	if code := runConfigPatch(context.Background(), args, &out, &errOut); code != exitNoEmail || !strings.Contains(errOut.String(), "pass --email") {
 		t.Fatalf("no tool account: code=%d out=%s err=%s", code, out.String(), errOut.String())
 	}
 

@@ -35,7 +35,7 @@ Run `navigara sessions --help` for more commands.
 
 ## 🖥️ MDM
 
-Create an **Analytics Ingestor** key in Navigara. Set `NAVIGARA_TOKEN` only for the per-user setup command below.
+Create an **Analytics Ingestor** key in Navigara. Set `NAVIGARA_TOKEN` only for the setup command below.
 
 Download the installer through MDM and run it as root:
 
@@ -44,16 +44,20 @@ curl -fsSL https://navigara.com/cli -o navigara-install.sh
 sh navigara-install.sh --system
 ```
 
-Run in each employee’s account, without `sudo`:
+Then run one command as root:
 
 ```sh
-/opt/navigara/bin/navigara sessions config patch --apply
+NAVIGARA_TOKEN=<key> /opt/navigara/bin/navigara sessions mdm --host https://app.navigara.com
 ```
 
-The email comes from the Claude Code account signed in on that computer, then the Codex account.
-If your MDM knows each user's email, pass it with `--email employee@example.com`.
+The command finds every user on the computer who has Claude Code or Codex data.
+It configures telemetry and uploads session history for each of them.
+The email comes from the Claude Code account signed in for that user, then the Codex account.
+A failure for one user does not stop the others. The command exits with 1 if any user failed.
+Users who never opened Claude Code or Codex are configured on the next MDM run.
+You can run the command again at any time.
 
-If Claude is already managed by MDM, add `--source codex` to this command.
+If Claude is already managed by MDM, add `--source codex` to the command.
 
 ## 🔐 Account
 
