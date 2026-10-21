@@ -143,7 +143,8 @@ func filterMDMUsers(users []mdmUser, goos, source string) []mdmUser {
 	}
 	var kept []mdmUser
 	for _, u := range users {
-		if u.UID == 0 || u.UID < minUID || u.Name == "nobody" || u.Home == "" {
+		// GID 0 is also what a missing or malformed dscl PrimaryGroupID parses to; never hand out wheel.
+		if u.UID == 0 || u.GID == 0 || u.UID < minUID || u.Name == "nobody" || u.Home == "" {
 			continue
 		}
 		if strings.HasSuffix(u.Shell, "nologin") || strings.HasSuffix(u.Shell, "/false") {

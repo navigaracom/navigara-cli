@@ -29,6 +29,7 @@ func runAsUser(ctx context.Context, exe string, u mdmUser, args, env []string, s
 	}
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Env, cmd.Dir, cmd.Stdout, cmd.Stderr = env, u.Home, stdout, stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: u.UID, Gid: u.GID, Groups: capGroups(groups, runtime.GOOS)}}
+	// Setsid drops the operator's controlling terminal, so user code cannot open /dev/tty.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{Uid: u.UID, Gid: u.GID, Groups: capGroups(groups, runtime.GOOS)}}
 	return cmd.Run()
 }

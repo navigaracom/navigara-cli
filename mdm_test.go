@@ -32,6 +32,7 @@ func TestFilterMDMUsers(t *testing.T) {
 		{"ftp", claude, "/usr/bin/false", 1003, 1003},
 		{"carol", empty, "/bin/zsh", 1004, 1004},
 		{"daemon", claude, "/bin/zsh", 1, 1},
+		{"eve", claude, "/bin/zsh", 1005, 0},
 	}
 	names := func(us []mdmUser) string {
 		var n []string
