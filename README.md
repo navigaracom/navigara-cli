@@ -47,7 +47,7 @@ sh navigara-install.sh --system
 Then run one command as root:
 
 ```sh
-NAVIGARA_TOKEN=<key> /opt/navigara/bin/navigara sessions mdm --host https://app.navigara.com
+NAVIGARA_TOKEN=<key> /opt/navigara/bin/navigara mdm --host https://app.navigara.com
 ```
 
 The command finds every user on the computer who has Claude Code or Codex data.

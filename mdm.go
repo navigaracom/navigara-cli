@@ -38,9 +38,9 @@ const mdmChildPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 func runMDM(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var host, source string
 	var help bool
-	fs := flag.NewFlagSet("sessions mdm", flag.ContinueOnError)
+	fs := flag.NewFlagSet("mdm", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: NAVIGARA_TOKEN=KEY navigara sessions mdm [options]") }
+	fs.Usage = func() { fmt.Fprintln(fs.Output(), "Usage: NAVIGARA_TOKEN=KEY navigara mdm [options]") }
 	fs.StringVar(&host, "host", defaultHost, "Navigara origin")
 	fs.StringVar(&source, "source", "all", "tool source: all, claude, codex")
 	fs.BoolVar(&help, "help", false, "show mdm help")
@@ -65,7 +65,7 @@ func runMDM(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return invalid("--source must be all, claude, or codex")
 	}
 	if !mdmSupported || mdmGeteuid() != 0 {
-		return invalid("sessions mdm must run as root; for one user run sessions config patch --apply")
+		return invalid("mdm must run as root; for one user run sessions config patch --apply")
 	}
 	token := os.Getenv("NAVIGARA_TOKEN")
 	if token == "" {
