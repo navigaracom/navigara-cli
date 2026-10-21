@@ -300,6 +300,38 @@ func TestConfigPatchTokenPreviewUsesDefaultHostWithoutSavedAccount(t *testing.T)
 	}
 }
 
+func TestConfigPatchTokenDefaultsEmailToToolAccount(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	t.Setenv("NAVIGARA_TOKEN", "")
+	claude := filepath.Join(root, "claude")
+	if err := os.MkdirAll(claude, 0700); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--token", "mdm-secret", "--source", "claude", "--claude-home", claude}
+
+	var out, errOut bytes.Buffer
+	if code := runConfigPatch(context.Background(), args, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "pass --email") {
+		t.Fatalf("no tool account: code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+
+	if err := os.WriteFile(filepath.Join(claude, ".claude.json"), []byte(`{"oauthAccount":{"emailAddress":"Dev@Example.com"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := runConfigPatch(context.Background(), args, &out, &errOut); code != 0 || !strings.Contains(out.String(), "email dev@example.com") {
+		t.Fatalf("tool account: code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := runConfigPatch(context.Background(), append(args, "--email", "mdm@example.com"), &out, &errOut); code != 0 || !strings.Contains(out.String(), "email mdm@example.com") {
+		t.Fatalf("--email override: code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+}
+
 func TestConfigPatchTokenRejectsInvalidDirectCredentialsWithoutOAuthFallback(t *testing.T) {
 	for _, test := range []struct {
 		name, env, want string
@@ -307,8 +339,6 @@ func TestConfigPatchTokenRejectsInvalidDirectCredentialsWithoutOAuthFallback(t *
 	}{
 		{name: "empty flag overrides environment", env: "env-secret", args: []string{"--token", "", "--email", "dev@example.com"}, want: "nonempty analytics ingestor token"},
 		{name: "empty environment", env: "", args: []string{"--email", "dev@example.com"}, want: "nonempty analytics ingestor token"},
-		{name: "missing email", args: []string{"--token", "flag-secret"}, want: "--email is required with --token."},
-		{name: "missing email with environment token", env: "env-secret", want: "NAVIGARA_TOKEN is set; --email is required with a token."},
 		{name: "invalid host", args: []string{"--token", "flag-secret", "--email", "dev@example.com", "--host", "https://bad host"}, want: "--host must look like https://navigara.example.com (no path, HTTPS only)."},
 	} {
 		t.Run(test.name, func(t *testing.T) {
