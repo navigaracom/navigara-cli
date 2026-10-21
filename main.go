@@ -52,7 +52,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "Usage: navigara wizard [options]\n       navigara login [--host ORIGIN]\n       navigara logout [--host ORIGIN]\n       navigara sessions upload [options]\n       navigara --version")
+		fmt.Fprintln(stdout, "Usage: navigara wizard [options]\n       navigara mdm [options]\n       navigara login [--host ORIGIN]\n       navigara logout [--host ORIGIN]\n       navigara sessions upload [options]\n       navigara --version")
 		return 0
 	}
 	switch args[0] {
@@ -60,6 +60,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runLogin(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "logout":
 		return runLogout(ctx, args[1:], stdout, stderr)
+	case "mdm":
+		return runMDM(ctx, args[1:], stdout, stderr)
 	case "wizard", "setup":
 		return runSetup(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "--help", "-h", "--version":
