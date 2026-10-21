@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/navigaracom/navigara-cli/internal/telemetry"
 )
 
 const previewIngestToken = "preview-token-redacted"
@@ -25,7 +27,7 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.StringVar(&opts.source, "source", "all", "tool source: all, claude, codex")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home (default $CODEX_HOME or ~/.codex)")
-	fs.StringVar(&opts.email, "email", "", "contributor email (required with a token; default signed-in account)")
+	fs.StringVar(&opts.email, "email", "", "contributor email (default: the Navigara account, or with a token the Claude Code or Codex account)")
 	fs.StringVar(&opts.shell, "shell", "", "shell profile for the Codex identity: bash, zsh, fish (default $SHELL)")
 	fs.BoolVar(&apply, "apply", false, "apply the prepared settings")
 	fs.BoolVar(&replace, "replace", false, "replace existing Claude Code or Codex telemetry settings")
@@ -56,14 +58,6 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 		if !tokenFlag {
 			opts.token = envToken
 		}
-		if opts.email == "" {
-			message := "--email is required with --token."
-			if !tokenFlag {
-				message = "NAVIGARA_TOKEN is set; --email is required with a token."
-			}
-			fmt.Fprintln(stderr, "navigara:", message)
-			return 1
-		}
 		var err error
 		if opts.host == "" {
 			opts.host = defaultHost
@@ -73,10 +67,6 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 			}
 		} else if opts.host, err = canonicalHost(opts.host); err != nil {
 			fmt.Fprintln(stderr, "navigara:", errHostFormat)
-			return 1
-		}
-		if err := validEmail(opts.email); err != nil {
-			fmt.Fprintln(stderr, "navigara:", err)
 			return 1
 		}
 	}
@@ -128,6 +118,24 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	if err := checkPatchHomes(&opts, claudeFlag, codexFlag); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
+	}
+	if directToken {
+		// MDM rollouts share one command, so default to the account signed in to the tools.
+		if opts.email == "" {
+			ident := telemetry.ReadIdentity(opts.claudeHome, opts.codexHome)
+			opts.email = firstNonEmpty(ident.Email, ident.CodexEmail)
+			if opts.source == "codex" {
+				opts.email = ident.CodexEmail
+			}
+		}
+		if opts.email == "" {
+			fmt.Fprintln(stderr, "navigara: no signed-in Claude Code or Codex email found; pass --email.")
+			return 1
+		}
+		if err := validEmail(opts.email); err != nil {
+			fmt.Fprintln(stderr, "navigara:", err)
+			return 1
+		}
 	}
 
 	var c accountConfig

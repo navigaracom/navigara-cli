@@ -44,11 +44,14 @@ curl -fsSL https://navigara.com/cli -o navigara-install.sh
 sh navigara-install.sh --system
 ```
 
-Run in each employee’s account, without `sudo`, using their email:
+Run in each employee’s account, without `sudo`:
 
 ```sh
-/opt/navigara/bin/navigara sessions config patch --email employee@example.com --apply
+/opt/navigara/bin/navigara sessions config patch --apply
 ```
+
+The email comes from the Claude Code account signed in on that computer, then the Codex account.
+If your MDM knows each user's email, pass it with `--email employee@example.com`.
 
 If Claude is already managed by MDM, add `--source codex` to this command.
 
