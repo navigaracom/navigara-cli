@@ -5,9 +5,36 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// isolatePlatform moves platform state that tests change away from the real
+// user. It returns the cleanup.
+var isolatePlatform = func(string) func() { return func() {} }
+
+// setHome sets the home directory that os.UserHomeDir returns on every platform.
+func setHome(t *testing.T, dir string) {
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
+// setConfigHome sets XDG_CONFIG_HOME and the directory that os.UserConfigDir
+// returns on Windows.
+func setConfigHome(t *testing.T, dir string) {
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("APPDATA", dir)
+}
+
+func isWindows() bool { return runtime.GOOS == "windows" }
+
+func skipOnWindows(t *testing.T, why string) {
+	t.Helper()
+	if isWindows() {
+		t.Skip(why)
+	}
+}
 
 // TestMain keeps setup backups of tests that do not set XDG_CONFIG_HOME out of
 // the real home.
@@ -17,7 +44,9 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("XDG_CONFIG_HOME", dir)
+	cleanup := isolatePlatform(dir)
 	code := m.Run()
+	cleanup()
 	os.RemoveAll(dir)
 	os.Exit(code)
 }

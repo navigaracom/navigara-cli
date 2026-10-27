@@ -70,8 +70,8 @@ func TestConfigPatchPreviewReadsAccountWithoutWritingOrPosting(t *testing.T) {
 	}))
 	defer srv.Close()
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	t.Setenv("SHELL", "/bin/bash")
 	claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
 	if err := os.MkdirAll(claude, 0700); err != nil {
@@ -162,8 +162,8 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	t.Setenv("SHELL", "/bin/bash")
 	claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
 	if err := os.MkdirAll(claude, 0700); err != nil {
@@ -238,8 +238,8 @@ func TestConfigPatchInvalidSettingsDoesNotMintIngestionKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	claude := filepath.Join(root, "claude")
 	if err := os.MkdirAll(claude, 0700); err != nil {
 		t.Fatal(err)
@@ -261,8 +261,8 @@ func TestConfigPatchInvalidSettingsDoesNotMintIngestionKey(t *testing.T) {
 
 func TestConfigPatchTokenPreviewUsesDefaultHostWithoutSavedAccount(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	claude := filepath.Join(root, "claude")
 	if err := os.MkdirAll(claude, 0700); err != nil {
 		t.Fatal(err)
@@ -302,8 +302,8 @@ func TestConfigPatchTokenPreviewUsesDefaultHostWithoutSavedAccount(t *testing.T)
 
 func TestConfigPatchTokenDefaultsEmailToToolAccount(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	t.Setenv("NAVIGARA_TOKEN", "")
 	claude := filepath.Join(root, "claude")
 	if err := os.MkdirAll(claude, 0700); err != nil {
@@ -314,6 +314,13 @@ func TestConfigPatchTokenDefaultsEmailToToolAccount(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := runConfigPatch(context.Background(), args, &out, &errOut); code != exitNoEmail || !strings.Contains(errOut.String(), "pass --email") {
 		t.Fatalf("no tool account: code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+
+	t.Setenv("CODEX_HOME", "")
+	out.Reset()
+	errOut.Reset()
+	if code := runConfigPatch(context.Background(), []string{"--token", "mdm-secret", "--source", "codex"}, &out, &errOut); code != exitNoEmail || !strings.Contains(errOut.String(), "run Codex once") {
+		t.Fatalf("tool never ran: code=%d out=%s err=%s", code, out.String(), errOut.String())
 	}
 
 	if err := os.WriteFile(filepath.Join(claude, ".claude.json"), []byte(`{"oauthAccount":{"emailAddress":"Dev@Example.com"}}`), 0600); err != nil {
@@ -382,8 +389,8 @@ func TestConfigPatchTokenApplyPreflightsBeforeWriting(t *testing.T) {
 			defer srv.Close()
 
 			root := t.TempDir()
-			t.Setenv("HOME", root)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+			setHome(t, root)
+			setConfigHome(t, filepath.Join(root, "state"))
 			t.Setenv("SHELL", "/bin/zsh")
 			t.Setenv("ZDOTDIR", root)
 			claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
@@ -422,6 +429,9 @@ func TestConfigPatchTokenApplyPreflightsBeforeWriting(t *testing.T) {
 				if !bytes.Contains(afterClaude, []byte(test.token)) || !bytes.Contains(afterCodex, []byte(test.token)) || !bytes.Contains(afterClaude, []byte("Bash(git status)")) || !bytes.Contains(afterCodex, []byte("gpt-5.4")) {
 					t.Fatalf("direct-token patch lost existing settings or did not apply: %s", out.String())
 				}
+				if isWindows() {
+					return
+				}
 				command := exec.Command("sh", "-c", string(afterZshrc)+"\nprintf '%s\\n%s' \"$PATH\" \"$OTEL_RESOURCE_ATTRIBUTES\"")
 				command.Env = append(os.Environ(), "PATH=/bin", "OTEL_RESOURCE_ATTRIBUTES=service.name=work,enduser.id=old@example.com")
 				if got, err := command.Output(); err != nil || string(got) != root+"/bin:/bin\nservice.name=work,enduser.id=dev@example.com" {
@@ -452,8 +462,8 @@ func patchFixture(t *testing.T) (root, claude, codex, host string) {
 	}))
 	t.Cleanup(srv.Close)
 	root = t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("ZDOTDIR", root)
 	t.Setenv("NAVIGARA_TOKEN", "")
@@ -539,6 +549,7 @@ func TestConfigPatchExistingCodexTelemetryNeedsReplace(t *testing.T) {
 }
 
 func TestConfigPatchWithoutKnownShellStillPatches(t *testing.T) {
+	skipOnWindows(t, "Windows saves the Codex email in the user environment, not in shell profiles")
 	root, claude, codex, host := patchFixture(t)
 	t.Setenv("SHELL", "")
 	code, out, errOut := runPatch("all", claude, codex, host, "--apply")
@@ -556,6 +567,7 @@ func TestConfigPatchWithoutKnownShellStillPatches(t *testing.T) {
 }
 
 func TestConfigRemoveRestoresOriginalSettings(t *testing.T) {
+	skipOnWindows(t, "Windows saves the Codex email in the user environment, not in shell profiles")
 	root, claude, codex, host := patchFixture(t)
 	claudePath, codexPath, zshrc := filepath.Join(claude, "settings.json"), filepath.Join(codex, "config.toml"), filepath.Join(root, ".zshrc")
 	originals := map[string]string{

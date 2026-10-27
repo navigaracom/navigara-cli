@@ -56,6 +56,9 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	} else {
 		fmt.Fprintf(stdout, "Login: %s as %s, organization %s\n", c.Host, firstNonEmpty(c.Email, "unknown"), firstNonEmpty(c.OrganizationName, c.OrganizationID, "unknown"))
 	}
+	if shellSet && runtime.GOOS == "windows" {
+		fmt.Fprintln(stderr, "navigara: --shell is ignored on Windows: the Codex email is in the user environment variable OTEL_RESOURCE_ATTRIBUTES")
+	}
 	shell = firstNonEmpty(shell, filepath.Base(os.Getenv("SHELL")))
 	claudeHome, codexHome, homeErr := toolHomes("", "")
 	ok, found := true, false
@@ -164,11 +167,7 @@ func claudeLink(home string) (toolLink, error) {
 	if settings.HeadersHelper != nil {
 		return toolLink{}, errors.New("otelHeadersHelper in settings.json is not what setup writes; run navigara wizard")
 	}
-	managed := "/etc/claude-code/managed-settings.json"
-	if runtime.GOOS == "darwin" {
-		managed = "/Library/Application Support/ClaudeCode/managed-settings.json"
-	}
-	if _, err := os.Stat(managed); err == nil {
+	if managed := claudeManagedBy(); managed != "" {
 		return toolLink{}, fmt.Errorf("Claude Code is managed by %s; ask your administrator to configure telemetry", managed)
 	}
 	shell := map[string]string{}
@@ -236,6 +235,20 @@ func codexLink(home, shell string) (toolLink, error) {
 // codexEmail reads the email that setup exports to Codex from the profile of the user's shell.
 // The block must be exactly what setup writes for that email.
 func codexEmail(shell string) (string, error) {
+	if runtime.GOOS == "windows" {
+		attrs, _, err := getUserEnv("OTEL_RESOURCE_ATTRIBUTES")
+		if err != nil {
+			return "", err
+		}
+		email := enduserID(attrs)
+		if email == "" {
+			return "", errors.New(`no enduser.id in HKCU\Environment\OTEL_RESOURCE_ATTRIBUTES; run navigara wizard`)
+		}
+		if email != getEnvOwner("OTEL_RESOURCE_ATTRIBUTES") {
+			return "", errors.New(`the enduser.id in HKCU\Environment\OTEL_RESOURCE_ATTRIBUTES is not what setup writes; run navigara wizard`)
+		}
+		return email, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

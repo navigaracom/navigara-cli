@@ -8,18 +8,27 @@ import (
 	"path/filepath"
 )
 
+// The records of a user variable that setup changes: the enduser.id that setup wrote (no suffix),
+// the user's own one that it replaced, and the machine value that setup copied when it created
+// the variable.
+const (
+	previousSuffix = "_PREVIOUS"
+	createdSuffix  = "_CREATED"
+)
+
 // Prepare every replacement before checking the receiver or changing any target.
 func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 	prepared := make([]string, len(files))
 	var installed []*setupFile
 	defer func() {
+		// Roll back first: on Windows, os.SameFile reads the file ID of a prepared path.
+		if err != nil {
+			err = errors.Join(err, rollbackSetupFiles(installed))
+		}
 		for _, path := range prepared {
 			if path != "" {
 				_ = os.Remove(path)
 			}
-		}
-		if err != nil {
-			err = errors.Join(err, rollbackSetupFiles(installed))
 		}
 	}()
 	for i, f := range files {
@@ -35,12 +44,15 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 		if err = f.check(); err != nil {
 			return err
 		}
+		if f.env != "" {
+			continue
+		}
 		if prepared[i] == "" {
 			info, e := os.Lstat(f.path)
 			if e != nil {
 				return e
 			}
-			if info.Mode().Perm() == 0600 {
+			if privateMode(info, 0600) {
 				continue
 			}
 			return fmt.Errorf("%s changed during setup; run setup again", f.path)
@@ -49,6 +61,13 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 			return err
 		}
 		installed = append(installed, f)
+	}
+	for _, f := range files {
+		if f.env != "" {
+			if err = applyEnv(f); err != nil {
+				return err
+			}
+		}
 	}
 	collectBackups(installed)
 	return nil
@@ -92,4 +111,65 @@ func (f *setupFile) rollback() error {
 		}
 	}
 	return os.RemoveAll(dir)
+}
+
+// applyEnv saves the user variable of f and its records. Setup records the email before the value
+// and remove drops the records after it, so remove and status never treat an email without a
+// record as ours. On failure it restores the value and the records.
+func applyEnv(f *setupFile) (err error) {
+	names := []string{f.env, f.env + previousSuffix, f.env + createdSuffix}
+	saved := make([]string, len(names))
+	for i, name := range names {
+		saved[i] = getEnvOwner(name)
+	}
+	valueSet := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		if valueSet {
+			err = errors.Join(err, setUserEnv(f.env, string(f.before)))
+		}
+		for i, name := range names {
+			err = errors.Join(err, setEnvOwner(name, saved[i]))
+		}
+	}()
+	if f.owner != "" {
+		// When the value is not ours yet, its enduser.id, also the same email, belongs to the user.
+		previous := saved[1]
+		if id := enduserID(string(f.before)); id == "" || id != saved[0] {
+			previous = id
+		}
+		if err = setEnvOwner(names[1], previous); err != nil {
+			return err
+		}
+		// A variable that the user owns now was not created by setup, whatever an old record says.
+		created := saved[2]
+		if !f.existed {
+			// Keep the copy of the machine value, so remove can tell it from user additions.
+			created, _ = resourceAttributes(getMachineEnv(f.env), "")
+		} else if enduserID(string(f.before)) != saved[0] {
+			created = ""
+		}
+		if err = setEnvOwner(names[2], created); err != nil {
+			return err
+		}
+		if err = setEnvOwner(names[0], f.owner); err != nil {
+			return err
+		}
+	}
+	if !f.unchanged() {
+		if err = setUserEnv(f.env, string(f.after)); err != nil {
+			return err
+		}
+		valueSet = true
+	}
+	if f.owner == "" {
+		for _, name := range names {
+			if err = setEnvOwner(name, ""); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

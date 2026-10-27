@@ -119,6 +119,11 @@ func runConfigPatch(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	if err := checkPatchHomes(&opts, claudeFlag, codexFlag); err != nil {
 		fmt.Fprintln(stderr, "navigara:", err)
+		// MDM runs before the user opens a tool; like a missing email, that is a retry, not a failure.
+		var notRun errToolNotRun
+		if directToken && errors.As(err, &notRun) {
+			return exitNoEmail
+		}
 		return 1
 	}
 	if directToken {
@@ -293,7 +298,7 @@ func runConfigRemove(args []string, stdout, stderr io.Writer) int {
 	}
 	var changed []*setupFile
 	for _, f := range files {
-		if bytes.Equal(f.before, f.after) {
+		if bytes.Equal(f.before, f.after) && !f.dropRecords {
 			fmt.Fprintln(stdout, "Unchanged:", f.path)
 			continue
 		}
@@ -323,6 +328,11 @@ func runConfigRemove(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "Navigara settings removed. Restart Claude Code, Codex, and your shell.")
 	return 0
 }
+
+// errToolNotRun marks a tool home that is missing because the tool never ran for this user.
+type errToolNotRun string
+
+func (e errToolNotRun) Error() string { return string(e) }
 
 func checkPatchHomes(opts *options, claudeFlag, codexFlag string) error {
 	claudeExplicit, codexExplicit := claudeFlag != "", codexFlag != ""
@@ -359,13 +369,13 @@ func checkPatchHomes(opts *options, claudeFlag, codexFlag string) error {
 	claudeMissing := fmt.Sprintf("Claude home %s%s was not found", opts.claudeHome, homeSource(claudeFlag, "CLAUDE_CONFIG_DIR"))
 	codexMissing := fmt.Sprintf("Codex home %s%s was not found", opts.codexHome, homeSource(codexFlag, "CODEX_HOME"))
 	if opts.source == "claude" && !claude {
-		return errors.New(claudeMissing + "; run Claude Code once or pass --claude-home")
+		return errToolNotRun(claudeMissing + "; run Claude Code once or pass --claude-home")
 	}
 	if opts.source == "codex" && !codex {
-		return errors.New(codexMissing + "; run Codex once or pass --codex-home")
+		return errToolNotRun(codexMissing + "; run Codex once or pass --codex-home")
 	}
 	if opts.source == "all" && !claude && !codex {
-		return errors.New(claudeMissing + " and " + codexMissing + "; run Claude Code or Codex once, then retry")
+		return errToolNotRun(claudeMissing + " and " + codexMissing + "; run Claude Code or Codex once, then retry")
 	}
 	if opts.source == "all" {
 		switch {

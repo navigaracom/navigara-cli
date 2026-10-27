@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -997,6 +998,9 @@ func moveDir(base, to string) string {
 		return base
 	case filepath.IsAbs(to):
 		return filepath.Clean(to)
+	case runtime.GOOS == "windows" && len(to) >= 2 && to[0] == '/' && ('a' <= to[1]|0x20 && to[1]|0x20 <= 'z') && (len(to) == 2 || to[2] == '/'):
+		// Git Bash, which runs Claude Code's commands on Windows, writes C:\ as /c/.
+		return filepath.Clean(strings.ToUpper(to[1:2]) + `:\` + to[2:])
 	}
 	return filepath.Join(base, to)
 }

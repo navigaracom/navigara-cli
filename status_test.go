@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -81,8 +82,8 @@ func TestSessionsStatus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			claudeHome, codexHome := filepath.Join(home, ".claude"), filepath.Join(home, ".codex")
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 			t.Setenv("CODEX_HOME", codexHome)
 			t.Setenv("SHELL", "/bin/zsh")
@@ -142,6 +143,7 @@ func TestSessionsStatus(t *testing.T) {
 				data = bytes.ReplaceAll(data, []byte(`"enduser.id=dev@example.com"`), []byte(`""`))
 				write(filepath.Join(claudeHome, "settings.json"), data, err)
 			case "bad home":
+				skipOnWindows(t, "Windows reports a path under a file as missing")
 				write(filepath.Join(home, "file"), nil, nil)
 				t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "file", ".claude"))
 			case "plain":
@@ -163,6 +165,17 @@ func TestSessionsStatus(t *testing.T) {
 					data = bytes.Replace(data, []byte("[otel.exporter.otlp-http]"), []byte("[otel.removed.otlp-http]"), 1)
 				}
 				write(filepath.Join(codexHome, "config.toml"), data, err)
+				if isWindows() {
+					if tc.identity == "none" || tc.identity == "bash no login" {
+						t.Skip("Windows saves the Codex email in the user environment")
+					}
+					if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "enduser.id=o'neil@example.com"); err != nil {
+						t.Fatal(err)
+					}
+					if err := setEnvOwner("OTEL_RESOURCE_ATTRIBUTES", "o'neil@example.com"); err != nil {
+						t.Fatal(err)
+					}
+				}
 				switch tc.identity {
 				case "":
 					data, err = shellSettings(nil, "o'neil@example.com")
@@ -206,7 +219,7 @@ func TestSessionsStatus(t *testing.T) {
 
 func TestStatusRejectsEachChangedManagedSetting(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("ZDOTDIR", home)
 	profile, err := shellSettings(nil, "dev@example.com")
@@ -215,6 +228,11 @@ func TestStatusRejectsEachChangedManagedSetting(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(home, ".zshrc"), profile, 0600); err != nil {
 		t.Fatal(err)
+	}
+	if isWindows() {
+		if err := errors.Join(setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "enduser.id=dev@example.com"), setEnvOwner("OTEL_RESOURCE_ATTRIBUTES", "dev@example.com")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	endpoint := "https://app.navigara.com/api/otlp"
 	attrs := "enduser.id=dev@example.com"

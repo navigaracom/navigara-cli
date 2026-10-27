@@ -102,7 +102,7 @@ func TestSetupWithoutToolsStopsBeforeLogin(t *testing.T) {
 		t.Error("opened the browser without a tool")
 		return nil
 	})
-	want := "navigara: Claude Code and Codex were not found on this computer (looked in ~/.claude and ~/.codex). Install one, run it once, then run navigara wizard again.\n"
+	want := "navigara: Claude Code and Codex were not found on this computer (looked in " + filepath.FromSlash("~/.claude") + " and " + filepath.FromSlash("~/.codex") + "). Install one, run it once, then run navigara wizard again.\n"
 	if code != 1 || errs.String() != want || out.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, &out, &errs)
 	}
@@ -180,8 +180,8 @@ func TestSetupResumeRejectsDifferentTenantBeforeSending(t *testing.T) {
 func TestSetupDeclineDoesNotMintIngestionKey(t *testing.T) {
 	claude, codex := fixtureHomes(t)
 	home := filepath.Dir(claude)
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	setHome(t, home)
+	setConfigHome(t, filepath.Join(home, "config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CODEX_HOME", codex)
 	t.Setenv("SHELL", "/bin/zsh")
@@ -220,8 +220,8 @@ func TestSetupReplacesRejectedCachedIngestionKey(t *testing.T) {
 			} else {
 				home = t.TempDir()
 			}
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("SHELL", "/bin/zsh")
 			t.Setenv("ZDOTDIR", home)
 			var keyRequests, probes int
@@ -323,8 +323,8 @@ func TestSetupResumeLegacyTokenErrorDoesNotAskForConsent(t *testing.T) {
 func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
 	claude, codex := fixtureHomes(t)
 	home := filepath.Dir(claude)
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	setHome(t, home)
+	setConfigHome(t, filepath.Join(home, "config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CODEX_HOME", codex)
 	t.Setenv("SHELL", "/bin/zsh")
@@ -374,7 +374,7 @@ func TestSetupRejectsSettingsChangedWhileAwaitingFinalConsent(t *testing.T) {
 func TestSetupPermissionErrorComesBeforeHistoryScan(t *testing.T) {
 	claude, codex := fixtureHomes(t)
 	home := filepath.Dir(claude)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	setConfigHome(t, filepath.Join(home, "config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CODEX_HOME", codex)
 	t.Setenv("SHELL", "/bin/zsh")
@@ -408,7 +408,7 @@ func TestSetupPermissionErrorComesBeforeHistoryScan(t *testing.T) {
 func TestSetupRerunImportsOnlySinceLastImport(t *testing.T) {
 	claude, codex := fixtureHomes(t)
 	home := filepath.Dir(claude)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	setConfigHome(t, filepath.Join(home, "config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CODEX_HOME", codex)
 	t.Setenv("SHELL", "/bin/zsh")
@@ -461,7 +461,7 @@ func TestSetupRerunImportsOnlySinceLastImport(t *testing.T) {
 func TestSetupKeepsCheckpointWhenFilesWereSkipped(t *testing.T) {
 	claude, codex := fixtureHomes(t)
 	home := filepath.Dir(claude)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	setConfigHome(t, filepath.Join(home, "config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CODEX_HOME", codex)
 	t.Setenv("SHELL", "/bin/zsh")
@@ -498,9 +498,10 @@ func TestSetupKeepsCheckpointWhenFilesWereSkipped(t *testing.T) {
 }
 
 func TestSetupKeepsCheckpointForUnreadableSubagent(t *testing.T) {
+	skipOnWindows(t, "Windows cannot make a file unreadable with chmod")
 	claude, codex := fixtureHomes(t)
 	home := filepath.Dir(claude)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	setConfigHome(t, filepath.Join(home, "config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	t.Setenv("CODEX_HOME", codex)
 	t.Setenv("SHELL", "/bin/zsh")

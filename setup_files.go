@@ -10,7 +10,13 @@ import (
 )
 
 type setupFile struct {
-	path, backup  string
+	path, backup string
+	// env names a Windows user environment variable whose value before and
+	// after hold. Setup saves it after it installs every file. owner is the
+	// enduser.id that the plan writes as Navigara's; it is empty for remove.
+	env, owner string
+	// dropRecords makes remove clear the records of env even when its value stays.
+	dropRecords   bool
 	before, after []byte
 	existed       bool
 	installed     os.FileInfo
@@ -51,7 +57,30 @@ func planFile(path string, transform func([]byte) ([]byte, error)) (*setupFile, 
 	return &setupFile{path: path, before: before, after: after, existed: exists}, nil
 }
 
+// planEnv plans a change to a Windows user environment variable.
+func planEnv(name string, transform func(string) (string, error)) (*setupFile, error) {
+	before, exists, err := getUserEnv(name)
+	if err != nil {
+		return nil, err
+	}
+	after, err := transform(before)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	return &setupFile{path: `HKCU\Environment\` + name, env: name, before: []byte(before), after: []byte(after), existed: exists}, nil
+}
+
 func (f *setupFile) check() error {
+	if f.env != "" {
+		value, exists, err := getUserEnv(f.env)
+		if err != nil {
+			return err
+		}
+		if exists != f.existed || value != string(f.before) {
+			return fmt.Errorf("%s changed during setup; run setup again", f.path)
+		}
+		return nil
+	}
 	data, exists, err := readSetupFile(f.path)
 	if err != nil {
 		return err
@@ -76,7 +105,7 @@ func (f *setupFile) prepare() (string, error) {
 	if err := f.check(); err != nil {
 		return "", err
 	}
-	if f.unchanged() {
+	if f.unchanged() || f.env != "" {
 		return "", nil
 	}
 	return privateFile(filepath.Dir(f.path), ".navigara-new-*", f.after)
@@ -84,11 +113,14 @@ func (f *setupFile) prepare() (string, error) {
 
 // unchanged reports whether applying f would leave the file as it is.
 func (f *setupFile) unchanged() bool {
+	if f.env != "" {
+		return bytes.Equal(f.before, f.after)
+	}
 	if !f.existed || !bytes.Equal(f.before, f.after) {
 		return false
 	}
 	info, err := os.Lstat(f.path)
-	return err == nil && info.Mode().Perm() == 0600
+	return err == nil && privateMode(info, 0600)
 }
 
 // install never replaces a target. Existing files move atomically to a private backup, leaving a

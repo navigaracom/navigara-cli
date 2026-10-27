@@ -652,7 +652,10 @@ func resourceAttributes(existing, email string) (string, error) {
 			kept = append(kept, attr)
 		}
 	}
-	return strings.Join(append(kept, "enduser.id="+email), ","), nil
+	if email != "" {
+		kept = append(kept, "enduser.id="+email)
+	}
+	return strings.Join(kept, ","), nil
 }
 
 func validValue(name, value string) error {

@@ -31,11 +31,7 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		if err := validateClaudeEnv(env, endpoint, opts.token); err != nil {
 			return nil, err
 		}
-		managed := "/etc/claude-code/managed-settings.json"
-		if runtime.GOOS == "darwin" {
-			managed = "/Library/Application Support/ClaudeCode/managed-settings.json"
-		}
-		if _, err := os.Stat(managed); err == nil {
+		if managed := claudeManagedBy(); managed != "" {
 			return nil, fmt.Errorf("Claude Code is managed by %s; ask your administrator to configure telemetry", managed)
 		}
 		if err := add(filepath.Join(opts.claudeHome, "settings.json"), func(b []byte) ([]byte, error) { return claudeSettings(b, endpoint, opts.token, opts.email) }); err != nil {
@@ -54,7 +50,37 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		codex.notes, codex.conflict = settingsChanges(codex.before, codex.after, toml.Unmarshal), codexTelemetryConflict(codex.before, endpoint)
 		var profiles []string
 		profile := shellSettings
-		switch firstNonEmpty(opts.shell, filepath.Base(os.Getenv("SHELL"))) {
+		shell := firstNonEmpty(opts.shell, filepath.Base(os.Getenv("SHELL")))
+		if runtime.GOOS == "windows" {
+			shell = "windows"
+		}
+		switch shell {
+		case "windows":
+			machine := getMachineEnv("OTEL_RESOURCE_ATTRIBUTES")
+			f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) {
+				if v == "" {
+					// Start from the machine value, which the new user value hides.
+					v = machine
+				}
+				return resourceAttributes(v, opts.email)
+			})
+			if err != nil {
+				return nil, err
+			}
+			f.owner = opts.email
+			if prev := enduserID(string(f.before)); prev != "" && prev != getEnvOwner(f.env) {
+				f.notes = append(f.notes, "Replaces your enduser.id="+prev+"; config remove restores it")
+			}
+			if !f.existed && machine != "" {
+				f.notes = append(f.notes, "Copies the machine OTEL_RESOURCE_ATTRIBUTES; later machine changes apply after config remove")
+				if id := enduserID(machine); id != "" {
+					f.notes = append(f.notes, "Hides the machine enduser.id="+id)
+				}
+			}
+			if opts.shell != "" {
+				f.warning = "--shell is ignored on Windows: the Codex email goes to the user environment variable OTEL_RESOURCE_ATTRIBUTES."
+			}
+			files = append(files, f)
 		case "zsh":
 			profiles = []string{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc")}
 		case "bash":
@@ -98,6 +124,31 @@ func planConflict(files []*setupFile) error {
 		}
 	}
 	return nil
+}
+
+// claudeManagedSettings is the path where an administrator manages Claude Code.
+func claudeManagedSettings() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "/Library/Application Support/ClaudeCode/managed-settings.json"
+	case "windows":
+		// ProgramW6432 is the 64-bit folder also under a 32-bit parent, such as Intune's default host.
+		return filepath.Join(firstNonEmpty(os.Getenv("ProgramW6432"), os.Getenv("ProgramFiles"), `C:\Program Files`), "ClaudeCode", "managed-settings.json")
+	}
+	return "/etc/claude-code/managed-settings.json"
+}
+
+// claudeManagedBy names the managed settings that override Claude Code's user settings, or is
+// "" when there are none: the managed file, its managed-settings.d drop-ins, or a registry policy.
+func claudeManagedBy() string {
+	managed := claudeManagedSettings()
+	if _, err := os.Stat(managed); err == nil {
+		return managed
+	}
+	if dropIns, _ := filepath.Glob(filepath.Join(filepath.Dir(managed), "managed-settings.d", "*.json")); len(dropIns) > 0 {
+		return dropIns[0]
+	}
+	return claudePolicy()
 }
 
 func fishConfig(home string) string {
@@ -171,6 +222,36 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 			if origin := claudeUnknownOrigin(files[0].before, known); origin != "" {
 				files[0].warning = "Claude Code sends telemetry to " + origin + ", which is not a known Navigara address; nothing removed. Use --host " + origin + " if it is your Navigara instance."
 			}
+		}
+	}
+	if runtime.GOOS == "windows" && opts.source != "claude" {
+		f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) {
+			// Remove only the email that setup wrote; a changed one belongs to the user.
+			if id := enduserID(v); id == "" || id != getEnvOwner("OTEL_RESOURCE_ATTRIBUTES") {
+				return v, nil
+			}
+			out, err := resourceAttributes(v, "")
+			if err != nil {
+				return v, nil // a value the CLI cannot parse stays as the user left it
+			}
+			// Setup created the variable from this copy of the machine value. Unless the user
+			// added to it, deleting it shows the current machine value again.
+			if copied := getEnvOwner("OTEL_RESOURCE_ATTRIBUTES" + createdSuffix); copied != "" && out == copied {
+				return "", nil
+			}
+			return resourceAttributes(out, getEnvOwner("OTEL_RESOURCE_ATTRIBUTES"+previousSuffix))
+		})
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case !f.unchanged():
+			files = append(files, f)
+		case getEnvOwner(f.env) != "":
+			// The email is gone or changed; only the records of the old setup are left.
+			f.dropRecords = true
+			f.notes = append(f.notes, `Clears the Navigara records in HKCU\Software\Navigara`)
+			files = append(files, f)
 		}
 	}
 	return files, nil

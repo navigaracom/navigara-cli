@@ -29,7 +29,8 @@ var (
 	mdmRunChild = runAsUser
 )
 
-// exitNoEmail is the exit code of config patch when a token is set but no signed-in email exists.
+// exitNoEmail is the exit code of config patch when a token is set but the tools have not run or
+// have no signed-in email yet.
 const exitNoEmail = 3
 
 const mdmChildPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"

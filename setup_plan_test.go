@@ -10,6 +10,7 @@ import (
 )
 
 func TestSetupPlansBothShellStartupModes(t *testing.T) {
+	skipOnWindows(t, "Windows saves the Codex email in the user environment, not in shell profiles")
 	home := t.TempDir()
 	codex := filepath.Join(home, ".codex")
 	os.Mkdir(codex, 0700)
@@ -32,6 +33,7 @@ func TestSetupPlansBothShellStartupModes(t *testing.T) {
 }
 
 func TestSetupPlansShellSelection(t *testing.T) {
+	skipOnWindows(t, "Windows saves the Codex email in the user environment, not in shell profiles")
 	for _, test := range []struct {
 		name, shell, flag, profile string
 	}{
@@ -53,7 +55,7 @@ func TestSetupPlansShellSelection(t *testing.T) {
 			if err := os.Mkdir(codex, 0700); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			setConfigHome(t, filepath.Join(home, ".config"))
 			t.Setenv("ZDOTDIR", home)
 			t.Setenv("SHELL", test.shell)
 			files, err := setupPlans(options{source: "codex", codexHome: codex, shell: test.flag, url: "https://app.example/api", token: "secret", email: "dev@example.com"}, home)

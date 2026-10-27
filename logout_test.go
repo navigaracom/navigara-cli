@@ -30,8 +30,8 @@ func logoutAccount(host string) accountConfig {
 func setLogoutConfigHome(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "config"))
 }
 
 func requireLoggedOut(t *testing.T) {

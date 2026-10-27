@@ -29,15 +29,15 @@ func TestSetupFileBackupAndConcurrentEdit(t *testing.T) {
 		t.Fatal("replacement or backup changed")
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
+	if !privateMode(info, 0600) {
 		t.Fatal("replacement is not private")
 	}
 	backupInfo, _ := os.Stat(f.backup)
-	if backupInfo.Mode().Perm() != 0644 {
+	if !privateMode(backupInfo, 0644) {
 		t.Fatal("backup mode changed")
 	}
 	backupDir, _ := os.Stat(filepath.Dir(f.backup))
-	if backupDir.Mode().Perm() != 0700 {
+	if !privateMode(backupDir, 0700) {
 		t.Fatal("backup directory is not private")
 	}
 	files, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".navigara-backup-*"))
@@ -102,15 +102,15 @@ func TestSetupFileConcurrentFinalInstallPreservesEdit(t *testing.T) {
 		t.Fatal("concurrent edit was not preserved")
 	}
 	info, _ := os.Stat(f.backup)
-	if info.Mode().Perm() != 0644 {
+	if !privateMode(info, 0644) {
 		t.Fatal("backup mode changed concurrent edit")
 	}
 	targetInfo, _ := os.Stat(path)
-	if targetInfo.Mode().Perm() != 0644 {
+	if !privateMode(targetInfo, 0644) {
 		t.Fatal("restore changed concurrent edit mode")
 	}
 	backupDir, _ := os.Stat(filepath.Dir(f.backup))
-	if backupDir.Mode().Perm() != 0700 {
+	if !privateMode(backupDir, 0700) {
 		t.Fatal("backup directory is not private")
 	}
 }
@@ -134,7 +134,7 @@ func TestSetupFileCreatesAbsentWithExclusiveInstall(t *testing.T) {
 		t.Fatal("absent target was not created")
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
+	if !privateMode(info, 0600) {
 		t.Fatal("new file is not private")
 	}
 }
@@ -164,7 +164,7 @@ func TestSetupFileRejectsSymlinkSwappedAfterPreparation(t *testing.T) {
 		t.Fatal("did not preserve swapped symlink capture")
 	}
 	backupDir, _ := os.Stat(filepath.Dir(f.backup))
-	if backupDir.Mode().Perm() != 0700 {
+	if !privateMode(backupDir, 0700) {
 		t.Fatal("symlink backup directory is not private")
 	}
 	got, _ := os.ReadFile(target)
@@ -201,11 +201,11 @@ func TestSetupFileRestoresOversizedCapture(t *testing.T) {
 		t.Fatal("did not restore oversized capture")
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0644 {
+	if !privateMode(info, 0644) {
 		t.Fatal("restore changed original mode")
 	}
 	backup, _ := os.Stat(f.backup)
-	if backup.Mode().Perm() != 0644 {
+	if !privateMode(backup, 0644) {
 		t.Fatal("backup mode changed")
 	}
 }

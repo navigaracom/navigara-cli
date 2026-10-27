@@ -1,12 +1,20 @@
 # Navigara CLI
 
-Connect Claude Code and Codex to Navigara on macOS and Linux.
+Connect Claude Code and Codex to Navigara on macOS, Linux, and Windows.
 
 ## 🚀 Install and connect
 
 ```sh
 curl -fsSL https://navigara.com/cli | sh
 ```
+
+On Windows, run this in PowerShell:
+
+```powershell
+irm https://github.com/navigaracom/navigara-cli/releases/latest/download/install.ps1 | iex
+```
+
+On Windows, setup saves the Codex email in the user environment variable `OTEL_RESOURCE_ATTRIBUTES`, not in a shell profile.
 
 | To… | Run… |
 | --- | --- |
@@ -34,6 +42,23 @@ Each run saves the previous files in one folder: `~/.config/navigara/backups/<ti
 Run `navigara sessions --help` for more commands.
 
 ## 🖥️ MDM
+
+### Windows (Intune)
+
+Add a PowerShell script in Intune. Set **Run this script using the logged on credentials** and **Run script in 64 bit PowerShell Host** to **Yes**.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$env:NAVIGARA_TOKEN = '<key>'
+& ([scriptblock]::Create((irm https://github.com/navigaracom/navigara-cli/releases/latest/download/install.ps1))) -NavigaraHost https://app.navigara.com
+```
+
+The script installs the CLI for the signed-in user, configures telemetry, and uploads session history.
+It exits with 3 when Claude Code or Codex has not run or has no signed-in account for that user yet.
+Intune retries a failed script only a few times. To configure such users later, assign the script again or run it as a remediation.
+
+### macOS and Linux
 
 Create an **Analytics Ingestor** key in Navigara. Set `NAVIGARA_TOKEN` only for the setup command below.
 

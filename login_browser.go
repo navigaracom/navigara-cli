@@ -154,11 +154,14 @@ func oauthAuthorizationError(code string) error {
 }
 
 func openBrowser(raw string) error {
-	program := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		program = "open"
+	args := []string{"xdg-open", raw}
+	switch runtime.GOOS {
+	case "darwin":
+		args = []string{"open", raw}
+	case "windows":
+		args = []string{"rundll32", "url.dll,FileProtocolHandler", raw}
 	}
-	cmd := exec.Command(program, raw)
+	cmd := exec.Command(args[0], args[1:]...)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

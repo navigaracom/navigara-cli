@@ -22,8 +22,8 @@ func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 		t.Run(map[bool]string{false: "decline", true: "apply"}[apply], func(t *testing.T) {
 			claudeHome, codexHome := fixtureHomes(t)
 			home := filepath.Dir(claudeHome)
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 			t.Setenv("CODEX_HOME", codexHome)
 			t.Setenv("SHELL", "/bin/zsh")
@@ -75,7 +75,11 @@ func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 			if !strings.Contains(out.String(), "Connecting your tools...") {
 				t.Fatal("Continue did not begin direct setup")
 			}
-			for _, path := range []string{filepath.Join(codexHome, "config.toml"), filepath.Join(home, ".zshrc")} {
+			paths := []string{filepath.Join(codexHome, "config.toml"), filepath.Join(home, ".zshrc")}
+			if isWindows() {
+				paths = paths[:1]
+			}
+			for _, path := range paths {
 				data, err := os.ReadFile(path)
 				if err != nil || !strings.Contains(string(data), telemetryBegin) {
 					t.Fatalf("missing managed settings: %s %v", path, err)
@@ -91,8 +95,8 @@ func TestSetupContinueConfiguresAndStreams(t *testing.T) {
 func TestSetupRollsBackFirstFileWhenLaterTargetChanges(t *testing.T) {
 	claudeHome, codexHome := fixtureHomes(t)
 	home := filepath.Dir(claudeHome)
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	setHome(t, home)
+	setConfigHome(t, filepath.Join(home, "config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 	t.Setenv("CODEX_HOME", codexHome)
 	t.Setenv("SHELL", "/bin/zsh")
@@ -131,8 +135,8 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			claudeHome, codexHome := fixtureHomes(t)
 			home := filepath.Dir(claudeHome)
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 			t.Setenv("CODEX_HOME", codexHome)
 			t.Setenv("SHELL", "/bin/zsh")
@@ -251,12 +255,13 @@ func TestSetupRejectedPreflightAndResumableUpload(t *testing.T) {
 }
 
 func TestSetupSkipsUnreadableHistory(t *testing.T) {
+	skipOnWindows(t, "Windows cannot make a file unreadable with chmod")
 	for _, source := range []string{"claude", "codex"} {
 		t.Run(source, func(t *testing.T) {
 			claudeHome, codexHome := fixtureHomes(t)
 			home := filepath.Dir(claudeHome)
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 			t.Setenv("CODEX_HOME", codexHome)
 			t.Setenv("SHELL", "/bin/zsh")

@@ -70,8 +70,8 @@ func TestSaveAccountRejectsConcurrentWriter(t *testing.T) {
 func withConfigHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	setHome(t, dir)
+	setConfigHome(t, filepath.Join(dir, "config"))
 	base, err := os.UserConfigDir()
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestAccountPersistenceValidationAndAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if !privateMode(info, 0600) {
 		t.Fatalf("config mode = %o", info.Mode().Perm())
 	}
 	got, err := loadAccount("")
@@ -151,6 +151,7 @@ func TestLoadAccountDoesNotEchoMalformedSecrets(t *testing.T) {
 }
 
 func TestAccountRejectsInsecureModesAndSymlinks(t *testing.T) {
+	skipOnWindows(t, "Windows has no Unix file modes")
 	dir := withConfigHome(t)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)

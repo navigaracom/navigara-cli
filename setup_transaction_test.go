@@ -63,7 +63,7 @@ func TestApplySetupFilesRollsBackFirstTarget(t *testing.T) {
 			if existed {
 				info, statErr := os.Stat(first)
 				got, readErr := os.ReadFile(first)
-				if statErr != nil || readErr != nil || !bytes.Equal(got, []byte("before")) || info.Mode().Perm() != 0640 {
+				if statErr != nil || readErr != nil || !bytes.Equal(got, []byte("before")) || !privateMode(info, 0640) {
 					t.Fatalf("original not restored: %q, %v, %v", got, info, errors.Join(statErr, readErr))
 				}
 				backup, backupErr := os.ReadFile(firstFile.backup)
@@ -126,12 +126,13 @@ func TestApplySetupFilesTightensUnchangedTargetMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if !privateMode(info, 0600) {
 		t.Fatalf("target mode = %v, want 0600", info.Mode())
 	}
 }
 
 func TestApplySetupFilesRejectsModeChangeForSkippedTarget(t *testing.T) {
+	skipOnWindows(t, "Windows has no Unix file modes")
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte("same"), 0600); err != nil {
 		t.Fatal(err)
@@ -144,7 +145,7 @@ func TestApplySetupFilesRejectsModeChangeForSkippedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0644 || f.backup != "" {
+	if !privateMode(info, 0644) || f.backup != "" {
 		t.Fatalf("mode change was not preserved: mode=%v backup=%q", info.Mode(), f.backup)
 	}
 }

@@ -41,8 +41,8 @@ func runSetupWithBrowser(ctx context.Context, args []string, input io.Reader, st
 		fmt.Fprintln(stderr, "navigara: unexpected wizard argument")
 		return 2
 	}
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		fmt.Fprintln(stderr, "navigara: wizard supports macOS and Linux")
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		fmt.Fprintln(stderr, "navigara: wizard supports macOS, Linux, and Windows")
 		return 2
 	}
 	p := newSetupInput(input, stdout)

@@ -227,8 +227,8 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 			apply := action == "connect"
 			claude, codex := fixtureHomes(t)
 			home := filepath.Dir(claude)
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claude)
 			t.Setenv("CODEX_HOME", codex)
 			t.Setenv("SHELL", "/bin/zsh")
@@ -299,8 +299,8 @@ func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			claude, codex := fixtureHomes(t)
 			home := filepath.Dir(claude)
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claude)
 			t.Setenv("CODEX_HOME", codex)
 			t.Setenv("SHELL", "/bin/zsh")
@@ -354,7 +354,7 @@ func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 				t.Fatal("backup did not retain the original settings")
 			}
 			info, err := os.Stat(filepath.Dir(backups[0]))
-			if err != nil || info.Mode().Perm() != 0700 {
+			if err != nil || !privateMode(info, 0700) {
 				t.Fatal("backup directory is not private")
 			}
 		})
