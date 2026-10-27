@@ -12,12 +12,22 @@
 # -LocalFile installs an .exe that you built or downloaded yourself, for example
 # a CI artifact. It skips the pinned digest, because you vouch for that file.
 #
-# Exit codes: 0 installed, 1 verification or installation failure.
+# MDM (Intune): run as the signed-in user, with an Analytics Ingestor key in
+# NAVIGARA_TOKEN. Instead of the wizard, the script configures telemetry and
+# uploads history for that user, like navigara mdm does on macOS and Linux:
+#
+#   $env:NAVIGARA_TOKEN = '<key>'
+#   & ([scriptblock]::Create((irm https://github.com/navigaracom/navigara-cli/releases/latest/download/install.ps1))) -NavigaraHost https://app.navigara.com
+#
+# Exit codes: 0 installed, 1 verification, installation or setup failure,
+# 3 no signed-in Claude Code or Codex account yet (MDM; run again later).
 
 param(
     [string]$Prefix = (Join-Path $env:LOCALAPPDATA 'Programs\navigara'),
     [string]$LocalFile = '',
     [switch]$NoWizard,
+    [string]$NavigaraHost = 'https://app.navigara.com',
+    [ValidateSet('all', 'claude', 'codex')][string]$Source = 'all',
     [switch]$Help
 )
 
@@ -50,7 +60,7 @@ function Add-UserPath([string]$Dir) {
 
 function Install-Navigara {
     if ($Help) {
-        Write-Output "Usage: install.ps1 [-Prefix DIR] [-LocalFile FILE] [-NoWizard] [-Help]
+        Write-Output "Usage: install.ps1 [-Prefix DIR] [-LocalFile FILE] [-NoWizard] [-NavigaraHost ORIGIN] [-Source SOURCE] [-Help]
 
 Installs navigara $VERSION from https://github.com/navigaracom/navigara-cli/releases
 after verifying the SHA-256 digest embedded in this script,
@@ -59,7 +69,12 @@ then runs navigara wizard.
   -Prefix DIR      install into DIR (default: $Prefix)
   -LocalFile FILE  install FILE instead of the download; no digest check
   -NoWizard        do not run navigara wizard after the install
-  -Help            show this help"
+  -NavigaraHost    Navigara origin for MDM (default: https://app.navigara.com)
+  -Source          tools to configure for MDM: all, claude, codex (default: all)
+  -Help            show this help
+
+With NAVIGARA_TOKEN set (MDM), it configures telemetry and uploads history
+for the signed-in user instead of running the wizard."
         return
     }
     if (-not $Prefix) { Fail '-Prefix must not be empty' }
@@ -118,9 +133,22 @@ The download was discarded. Nothing was installed."
     & $dest --version
     if ($LASTEXITCODE -ne 0) { Fail 'installed binary did not start' }
     Add-UserPath $Prefix
-    if (-not $NoWizard) {
+    if ($env:NAVIGARA_TOKEN) {
+        & $dest sessions config patch --host $NavigaraHost --apply --source $Source
+        if ($LASTEXITCODE -eq 3) {
+            Write-Output 'Skipped: no signed-in Claude Code or Codex account yet; run this script again later.'
+            $script:ExitCode = 3
+            return
+        }
+        if ($LASTEXITCODE -ne 0) { Fail 'sessions config patch failed' }
+        & $dest sessions upload --url "$NavigaraHost/api" --source $Source
+        if ($LASTEXITCODE -ne 0) { Fail 'sessions upload failed' }
+    } elseif (-not $NoWizard) {
         & $dest wizard
     }
 }
 
+$script:ExitCode = 0
 Install-Navigara
+# Only MDM runs set a code; there, exit tells Intune to retry. Interactive runs never exit.
+if ($script:ExitCode -ne 0) { exit $script:ExitCode }

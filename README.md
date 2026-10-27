@@ -43,7 +43,19 @@ Run `navigara sessions --help` for more commands.
 
 ## 🖥️ MDM
 
-MDM is for macOS and Linux.
+### Windows (Intune)
+
+Add a PowerShell script in Intune. Set **Run this script using the logged on credentials** to **Yes**.
+
+```powershell
+$env:NAVIGARA_TOKEN = '<key>'
+& ([scriptblock]::Create((irm https://github.com/navigaracom/navigara-cli/releases/latest/download/install.ps1))) -NavigaraHost https://app.navigara.com
+```
+
+The script installs the CLI for the signed-in user, configures telemetry, and uploads session history.
+It exits with 3 when the user has no signed-in Claude Code or Codex account yet. Run it again later for that user.
+
+### macOS and Linux
 
 Create an **Analytics Ingestor** key in Navigara. Set `NAVIGARA_TOKEN` only for the setup command below.
 
