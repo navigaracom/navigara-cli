@@ -29,6 +29,17 @@ func getUserEnv(name string) (string, bool, error) {
 	return value, err == nil, err
 }
 
+// getMachineEnv reads a machine environment variable. A user variable with the same name hides it.
+func getMachineEnv(name string) string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	value, _, _ := k.GetStringValue(name)
+	return value
+}
+
 // setUserEnv saves a user environment variable, or deletes it when value is empty.
 // Like setx, it tells running programs, so that new terminals get the value.
 func setUserEnv(name, value string) error {

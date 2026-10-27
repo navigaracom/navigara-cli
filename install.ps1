@@ -37,9 +37,6 @@ $SHA256_WINDOWS_ARM64 = ''
 $SHA256_WINDOWS_AMD64 = ''
 # ---- end release block --------------------------------------------------------
 
-$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-
 # throw, not exit: under irm | iex, exit would close the user's terminal.
 function Fail([string]$Message) {
     throw "install.ps1: $Message"
@@ -59,6 +56,9 @@ function Add-UserPath([string]$Dir) {
 }
 
 function Install-Navigara {
+    # Local to this function, so irm | iex does not change the user's session.
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
     if ($Help) {
         Write-Output "Usage: install.ps1 [-Prefix DIR] [-LocalFile FILE] [-NoWizard] [-NavigaraHost ORIGIN] [-Source SOURCE] [-Help]
 
@@ -132,9 +132,11 @@ The download was discarded. Nothing was installed."
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    Add-UserPath $Prefix
+    # Native stderr must not stop the script in Windows PowerShell 5.1; exit codes decide.
+    $ErrorActionPreference = 'Continue'
     & $dest --version
     if ($LASTEXITCODE -ne 0) { Fail 'installed binary did not start' }
-    Add-UserPath $Prefix
     if ($env:NAVIGARA_TOKEN) {
         & $dest sessions config patch --host $NavigaraHost --apply --source $Source
         if ($LASTEXITCODE -eq 3) {

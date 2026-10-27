@@ -58,6 +58,10 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		switch shell {
 		case "windows":
 			f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) {
+				if v == "" {
+					// Start from the machine value, which the new user value hides.
+					v = getMachineEnv("OTEL_RESOURCE_ATTRIBUTES")
+				}
 				return strings.TrimPrefix(withoutEnduserID(v)+",enduser.id="+opts.email, ","), nil
 			})
 			if err != nil {
@@ -202,7 +206,10 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 			if enduserID(v) == "" {
 				return v, nil
 			}
-			return withoutEnduserID(v), nil
+			if out := withoutEnduserID(v); out != getMachineEnv("OTEL_RESOURCE_ATTRIBUTES") {
+				return out, nil
+			}
+			return "", nil
 		})
 		if err != nil {
 			return nil, err
