@@ -129,3 +129,10 @@ func TestUserEnvironmentKeepsForeignValues(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeManagedSettingsOnWindows(t *testing.T) {
+	t.Setenv("ProgramFiles", `C:\Program Files`)
+	if got := claudeManagedSettings(); got != `C:\Program Files\ClaudeCode\managed-settings.json` {
+		t.Fatalf("managed settings = %q", got)
+	}
+}
