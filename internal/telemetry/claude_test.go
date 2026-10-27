@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -413,6 +414,9 @@ func TestBuildClaudeReportsCommitsAndBranches(t *testing.T) {
 }
 
 func TestCommitCalls(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("these transcripts use POSIX paths")
+	}
 	for _, tc := range []struct {
 		command string
 		want    []commitCall
@@ -439,6 +443,9 @@ func TestCommitCalls(t *testing.T) {
 }
 
 func TestBuildClaudeLooksUpCommitsWhereTheCommandCommitted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("these transcripts use POSIX paths")
+	}
 	dir := t.TempDir()
 	root := filepath.Join(dir, sid+".jsonl")
 	writeLines(t, root,
@@ -567,6 +574,9 @@ func TestBuildClaudeGivesAParallelMergeNoCommits(t *testing.T) {
 }
 
 func TestBuildClaudeKeepsACommitWhenALaterStepFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("these transcripts use POSIX paths")
+	}
 	dir := t.TempDir()
 	root := filepath.Join(dir, sid+".jsonl")
 	failed := toolResult("t1")
@@ -667,6 +677,9 @@ func TestBuildClaudeReportsAStandaloneAmend(t *testing.T) {
 }
 
 func TestBuildClaudeLooksUpASubshellCommitInItsDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("these transcripts use POSIX paths")
+	}
 	dir := t.TempDir()
 	root := filepath.Join(dir, sid+".jsonl")
 	writeLines(t, root,

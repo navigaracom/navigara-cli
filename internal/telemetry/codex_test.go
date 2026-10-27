@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -348,6 +349,10 @@ func TestCodexDiscoveryErrors(t *testing.T) {
 		t.Fatalf("malformed header error = %v", err)
 	}
 
+	// Windows reports a path under a file as missing, and chmod cannot lock a directory.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	blocked := filepath.Join(home, "blocked")
 	if err := os.WriteFile(blocked, nil, 0600); err != nil {
 		t.Fatal(err)

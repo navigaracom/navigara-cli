@@ -534,7 +534,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "codex", "--email", "dev@example.com",
 			"--claude-home", claudeHome, "--codex-home", codexHome, "--output", output}, &stdout, &stderr)
-		if code != 1 || !strings.Contains(stderr.String(), "invalid Codex rollout header") || !strings.Contains(stderr.String(), strings.Trim(strconv.Quote(rollout), `"`)) {
+		if code != 1 || !strings.Contains(stderr.String(), "invalid Codex rollout header") || !strings.Contains(stderr.String(), "rollout-bad.jsonl") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 		}
 		if _, err := os.Stat(output); !os.IsNotExist(err) {
