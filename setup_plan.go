@@ -68,7 +68,7 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 				return nil, err
 			}
 			f.owner = opts.email
-			if prev := enduserID(string(f.before)); prev != "" && prev != opts.email && prev != getEnvOwner(f.env) {
+			if prev := enduserID(string(f.before)); prev != "" && prev != getEnvOwner(f.env) {
 				f.notes = append(f.notes, "Replaces your enduser.id="+prev+"; config remove restores it")
 			}
 			files = append(files, f)
@@ -208,11 +208,12 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 			if id := enduserID(v); id == "" || id != getEnvOwner("OTEL_RESOURCE_ATTRIBUTES") {
 				return v, nil
 			}
-			// Setup created the variable from the machine value; deleting it shows that value again.
-			if getEnvOwner("OTEL_RESOURCE_ATTRIBUTES"+createdSuffix) != "" {
+			out := withoutEnduserID(v)
+			// Setup created the variable from the machine value. Unless the user added to it,
+			// deleting it shows that value again.
+			if getEnvOwner("OTEL_RESOURCE_ATTRIBUTES"+createdSuffix) != "" && out == withoutEnduserID(getMachineEnv("OTEL_RESOURCE_ATTRIBUTES")) {
 				return "", nil
 			}
-			out := withoutEnduserID(v)
 			if prev := getEnvOwner("OTEL_RESOURCE_ATTRIBUTES" + previousSuffix); prev != "" {
 				out = strings.TrimPrefix(out+",enduser.id="+prev, ",")
 			}

@@ -124,9 +124,13 @@ The download was discarded. Nothing was installed."
         $dest = Join-Path $Prefix 'navigara.exe'
         $staged = Join-Path $Prefix ".navigara.$VERSION.$PID.exe"
         Copy-Item -LiteralPath $file -Destination $staged
-        # Start the new binary before it replaces a working one. A launch failure throws here.
-        & $staged --version
-        if ($LASTEXITCODE -ne 0) {
+        # Start the new binary before it replaces a working one.
+        $started = $false
+        try {
+            & $staged --version
+            $started = $LASTEXITCODE -eq 0
+        } catch {}
+        if (-not $started) {
             Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
             Fail 'the new binary did not start; the installed version is unchanged'
         }
@@ -169,7 +173,12 @@ The download was discarded. Nothing was installed."
     }
 }
 
+# A script file, or a script block that a script file runs, as in Intune, may exit. At an
+# interactive prompt (irm | iex), exit would close the terminal, so throw there.
+$fromFile = $MyInvocation.MyCommand.Path -or $MyInvocation.ScriptName
 $script:ExitCode = 0
 Install-Navigara
-# Only MDM runs (NAVIGARA_TOKEN set) set a code; exit tells Intune to retry.
-if ($script:ExitCode -ne 0) { exit $script:ExitCode }
+if ($script:ExitCode -ne 0) {
+    if ($fromFile) { exit $script:ExitCode }
+    throw "install.ps1: exit code $script:ExitCode"
+}

@@ -80,7 +80,7 @@ func TestCodexEmailInUserEnvironment(t *testing.T) {
 	if err := applySetupFiles(files, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "team=core" {
+	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "team=core,enduser.id=old@example.com" {
 		t.Fatalf("after remove = %q", got)
 	}
 	if _, err := codexEmail(""); err == nil {
@@ -286,5 +286,30 @@ func TestRemoveShowsMachineValueAgain(t *testing.T) {
 	}
 	if _, exists, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); exists {
 		t.Fatal("remove kept the user variable that hides the machine value")
+	}
+}
+
+func TestRemoveKeepsAttributesAddedAfterSetup(t *testing.T) {
+	cleanUserEnv(t)
+	home := t.TempDir()
+	opts := options{source: "codex", codexHome: home, url: "https://app.example/api", token: "secret", email: "dev@example.com"}
+	files, err := setupPlans(opts, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "service.name=x,enduser.id=dev@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if files, err = removePlans(opts, home, []string{"https://app.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "service.name=x" {
+		t.Fatalf("after remove = %q", got)
 	}
 }

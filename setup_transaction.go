@@ -134,10 +134,13 @@ func applyEnv(f *setupFile) (err error) {
 		}
 	}()
 	if f.owner != "" {
-		if prev := enduserID(string(f.before)); prev != "" && prev != f.owner && prev != saved[0] {
-			if err = setEnvOwner(names[1], prev); err != nil {
-				return err
-			}
+		// When the value is not ours yet, its enduser.id, also the same email, belongs to the user.
+		previous := saved[1]
+		if id := enduserID(string(f.before)); id == "" || id != saved[0] {
+			previous = id
+		}
+		if err = setEnvOwner(names[1], previous); err != nil {
+			return err
 		}
 		// A variable that the user owns now was not created by setup, whatever an old record says.
 		created := saved[2]
