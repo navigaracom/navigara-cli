@@ -59,6 +59,10 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 			if err = setUserEnv(f.env, string(f.after)); err != nil {
 				return err
 			}
+			// Record the email setup wrote, so remove and status can prove it is ours.
+			if err = setEnvOwner(f.env, enduserID(string(f.after))); err != nil {
+				return err
+			}
 		}
 	}
 	collectBackups(installed)

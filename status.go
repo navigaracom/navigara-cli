@@ -238,10 +238,14 @@ func codexEmail(shell string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if email := enduserID(attrs); email != "" {
-			return email, nil
+		email := enduserID(attrs)
+		if email == "" {
+			return "", errors.New(`no enduser.id in HKCU\Environment\OTEL_RESOURCE_ATTRIBUTES; run navigara wizard`)
 		}
-		return "", errors.New(`no enduser.id in HKCU\Environment\OTEL_RESOURCE_ATTRIBUTES; run navigara wizard`)
+		if email != getEnvOwner("OTEL_RESOURCE_ATTRIBUTES") {
+			return "", errors.New(`the enduser.id in HKCU\Environment\OTEL_RESOURCE_ATTRIBUTES is not what setup writes; run navigara wizard`)
+		}
+		return email, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

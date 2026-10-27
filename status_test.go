@@ -171,6 +171,9 @@ func TestSessionsStatus(t *testing.T) {
 					if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "enduser.id=o'neil@example.com"); err != nil {
 						t.Fatal(err)
 					}
+					if err := setEnvOwner("OTEL_RESOURCE_ATTRIBUTES", "o'neil@example.com"); err != nil {
+						t.Fatal(err)
+					}
 				}
 				switch tc.identity {
 				case "":

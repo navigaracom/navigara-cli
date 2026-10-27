@@ -12,6 +12,7 @@ func init() {
 	isolatePlatform = func(dir string) func() {
 		os.Setenv("APPDATA", dir)
 		userEnvKey = `Software\NavigaraTest\Environment`
+		envOwnerKey = `Software\NavigaraTest\Owner`
 		k, _, err := registry.CreateKey(registry.CURRENT_USER, userEnvKey, registry.ALL_ACCESS)
 		if err != nil {
 			panic(err)
@@ -19,6 +20,7 @@ func init() {
 		k.Close()
 		return func() {
 			_ = registry.DeleteKey(registry.CURRENT_USER, userEnvKey)
+			_ = registry.DeleteKey(registry.CURRENT_USER, envOwnerKey)
 			_ = registry.DeleteKey(registry.CURRENT_USER, `Software\NavigaraTest`)
 		}
 	}
@@ -153,5 +155,36 @@ func TestRemoveKeepsEmailWithoutNavigaraCodex(t *testing.T) {
 		if f.env != "" {
 			t.Fatalf("remove plans the user's own email: %q", f.after)
 		}
+	}
+}
+
+func TestRemoveKeepsEmailChangedAfterSetup(t *testing.T) {
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", ""); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	opts := options{source: "codex", codexHome: home, url: "https://app.example/api", token: "secret", email: "dev@example.com"}
+	files, err := setupPlans(opts, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "team=core,enduser.id=their-id"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codexEmail(""); err == nil {
+		t.Fatal("status accepted an email that setup did not write")
+	}
+	files, err = removePlans(opts, home, []string{"https://app.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "team=core,enduser.id=their-id" {
+		t.Fatalf("remove changed the user's email: %q", got)
 	}
 }

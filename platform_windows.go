@@ -29,6 +29,36 @@ func getUserEnv(name string) (string, bool, error) {
 	return value, err == nil, err
 }
 
+// envOwnerKey records, per user variable, the enduser.id that setup wrote. Tests point it at a scratch key.
+var envOwnerKey = `Software\Navigara`
+
+// getEnvOwner returns the enduser.id that setup wrote to the user variable name.
+func getEnvOwner(name string) string {
+	k, err := registry.OpenKey(registry.CURRENT_USER, envOwnerKey, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	value, _, _ := k.GetStringValue(name)
+	return value
+}
+
+// setEnvOwner records id as the enduser.id that setup wrote, or deletes the record when id is empty.
+func setEnvOwner(name, id string) error {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, envOwnerKey, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	if id == "" {
+		if err = k.DeleteValue(name); errors.Is(err, registry.ErrNotExist) {
+			err = nil
+		}
+		return err
+	}
+	return k.SetStringValue(name, id)
+}
+
 // getMachineEnv reads a machine environment variable. A user variable with the same name hides it.
 func getMachineEnv(name string) string {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`, registry.QUERY_VALUE)

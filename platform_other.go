@@ -16,3 +16,7 @@ func getUserEnv(string) (string, bool, error) { return "", false, errUserEnv }
 func setUserEnv(string, string) error { return errUserEnv }
 
 func getMachineEnv(string) string { return "" }
+
+func getEnvOwner(string) string { return "" }
+
+func setEnvOwner(string, string) error { return errUserEnv }
