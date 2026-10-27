@@ -14,7 +14,9 @@ type setupFile struct {
 	// env names a Windows user environment variable whose value before and
 	// after hold. Setup saves it after it installs every file. owner is the
 	// enduser.id that the plan writes as Navigara's; it is empty for remove.
-	env, owner    string
+	env, owner string
+	// dropRecords makes remove clear the records of env even when its value stays.
+	dropRecords   bool
 	before, after []byte
 	existed       bool
 	installed     os.FileInfo

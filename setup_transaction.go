@@ -9,7 +9,8 @@ import (
 )
 
 // The records of a user variable that setup changes: the enduser.id that setup wrote (no suffix),
-// the user's own one that it replaced, and whether setup created the variable.
+// the user's own one that it replaced, and the machine value that setup copied when it created
+// the variable.
 const (
 	previousSuffix = "_PREVIOUS"
 	createdSuffix  = "_CREATED"
@@ -145,7 +146,8 @@ func applyEnv(f *setupFile) (err error) {
 		// A variable that the user owns now was not created by setup, whatever an old record says.
 		created := saved[2]
 		if !f.existed {
-			created = "1"
+			// Keep the copy of the machine value, so remove can tell it from user additions.
+			created, _ = resourceAttributes(getMachineEnv(f.env), "")
 		} else if enduserID(string(f.before)) != saved[0] {
 			created = ""
 		}

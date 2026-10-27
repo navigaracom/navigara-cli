@@ -298,7 +298,7 @@ func runConfigRemove(args []string, stdout, stderr io.Writer) int {
 	}
 	var changed []*setupFile
 	for _, f := range files {
-		if bytes.Equal(f.before, f.after) {
+		if bytes.Equal(f.before, f.after) && !f.dropRecords {
 			fmt.Fprintln(stdout, "Unchanged:", f.path)
 			continue
 		}

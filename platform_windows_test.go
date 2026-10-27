@@ -16,13 +16,16 @@ func init() {
 		root := `Software\NavigaraTest\` + strconv.Itoa(os.Getpid())
 		userEnvKey, envOwnerKey = root+`\Environment`, root+`\Owner`
 		machineEnvKey.root, machineEnvKey.path = registry.CURRENT_USER, root+`\Machine`
+		for i := range claudePolicyKeys {
+			claudePolicyKeys[i].root, claudePolicyKeys[i].path = registry.CURRENT_USER, root+`\Policy`+strconv.Itoa(i)
+		}
 		k, _, err := registry.CreateKey(registry.CURRENT_USER, userEnvKey, registry.ALL_ACCESS)
 		if err != nil {
 			panic(err)
 		}
 		k.Close()
 		return func() {
-			for _, key := range []string{userEnvKey, envOwnerKey, machineEnvKey.path, root, `Software\NavigaraTest`} {
+			for _, key := range []string{userEnvKey, envOwnerKey, machineEnvKey.path, claudePolicyKeys[0].path, claudePolicyKeys[1].path, root, `Software\NavigaraTest`} {
 				_ = registry.DeleteKey(registry.CURRENT_USER, key)
 			}
 		}
@@ -114,7 +117,7 @@ func TestUserEnvironmentKeepsForeignValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = k.SetExpandStringValue("OTEL_RESOURCE_ATTRIBUTES", "flag,host.name=%COMPUTERNAME%")
+	err = k.SetExpandStringValue("OTEL_RESOURCE_ATTRIBUTES", "host.name=%COMPUTERNAME%")
 	k.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +136,7 @@ func TestUserEnvironmentKeepsForeignValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer k.Close()
-	if got, kind, err := k.GetStringValue("OTEL_RESOURCE_ATTRIBUTES"); err != nil || kind != registry.EXPAND_SZ || got != "flag,host.name=%COMPUTERNAME%,enduser.id=dev@example.com" {
+	if got, kind, err := k.GetStringValue("OTEL_RESOURCE_ATTRIBUTES"); err != nil || kind != registry.EXPAND_SZ || got != "host.name=%COMPUTERNAME%,enduser.id=dev@example.com" {
 		t.Fatalf("value = %q, kind %d, %v", got, kind, err)
 	}
 
@@ -311,5 +314,97 @@ func TestRemoveKeepsAttributesAddedAfterSetup(t *testing.T) {
 	}
 	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "service.name=x" {
 		t.Fatalf("after remove = %q", got)
+	}
+}
+
+func TestClaudeRegistryPolicyBlocksSetup(t *testing.T) {
+	k, _, err := registry.CreateKey(claudePolicyKeys[1].root, claudePolicyKeys[1].path, registry.SET_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = k.SetStringValue("Settings", `{"env":{}}`)
+	k.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = registry.DeleteKey(claudePolicyKeys[1].root, claudePolicyKeys[1].path) })
+	home := t.TempDir()
+	_, err = setupPlans(options{source: "claude", claudeHome: home, url: "https://app.example/api", token: "secret", email: "dev@example.com"}, home)
+	if err == nil || !strings.Contains(err.Error(), `HKCU\`+claudePolicyKeys[1].path+`\Settings`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSetupRejectsMalformedAttributes(t *testing.T) {
+	cleanUserEnv(t)
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "flag,team=core"); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if _, err := setupPlans(options{source: "codex", codexHome: home, url: "https://app.example/api", token: "secret", email: "dev@example.com"}, home); err == nil || !strings.Contains(err.Error(), "invalid OTEL_RESOURCE_ATTRIBUTES entry") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRemoveClearsRecordsOfAChangedEmail(t *testing.T) {
+	cleanUserEnv(t)
+	home := t.TempDir()
+	opts := options{source: "codex", codexHome: home, url: "https://app.example/api", token: "secret", email: "dev@example.com"}
+	files, err := setupPlans(opts, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "enduser.id=their-id"); err != nil {
+		t.Fatal(err)
+	}
+	if files, err = removePlans(opts, home, []string{"https://app.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "enduser.id=their-id" || getEnvOwner("OTEL_RESOURCE_ATTRIBUTES") != "" || getEnvOwner("OTEL_RESOURCE_ATTRIBUTES"+createdSuffix) != "" {
+		t.Fatalf("value %q, owner %q", got, getEnvOwner("OTEL_RESOURCE_ATTRIBUTES"))
+	}
+}
+
+func TestRemoveDeletesCopyAfterMachineValueChanged(t *testing.T) {
+	cleanUserEnv(t)
+	setMachine := func(value string) {
+		k, _, err := registry.CreateKey(machineEnvKey.root, machineEnvKey.path, registry.SET_VALUE)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer k.Close()
+		if err := k.SetStringValue("OTEL_RESOURCE_ATTRIBUTES", value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setMachine("team=core,enduser.id=machine@corp.example")
+	t.Cleanup(func() { _ = registry.DeleteKey(machineEnvKey.root, machineEnvKey.path) })
+	home := t.TempDir()
+	opts := options{source: "codex", codexHome: home, url: "https://app.example/api", token: "secret", email: "dev@example.com"}
+	files, err := setupPlans(opts, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notes := strings.Join(files[1].notes, "\n"); !strings.Contains(notes, "Hides the machine enduser.id=machine@corp.example") {
+		t.Fatalf("notes = %q", notes)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	setMachine("team=platform")
+	if files, err = removePlans(opts, home, []string{"https://app.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); exists {
+		t.Fatal("remove kept a copy that hides the new machine value")
 	}
 }

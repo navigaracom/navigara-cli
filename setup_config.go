@@ -652,17 +652,10 @@ func resourceAttributes(existing, email string) (string, error) {
 			kept = append(kept, attr)
 		}
 	}
-	return strings.Join(append(kept, "enduser.id="+email), ","), nil
-}
-
-func withoutEnduserID(attrs string) string {
-	var kept []string
-	for _, attr := range strings.Split(attrs, ",") {
-		if key, _, _ := strings.Cut(attr, "="); strings.TrimSpace(attr) != "" && strings.TrimSpace(key) != "enduser.id" {
-			kept = append(kept, strings.TrimSpace(attr))
-		}
+	if email != "" {
+		kept = append(kept, "enduser.id="+email)
 	}
-	return strings.Join(kept, ",")
+	return strings.Join(kept, ","), nil
 }
 
 func validValue(name, value string) error {

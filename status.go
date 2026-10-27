@@ -56,6 +56,9 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	} else {
 		fmt.Fprintf(stdout, "Login: %s as %s, organization %s\n", c.Host, firstNonEmpty(c.Email, "unknown"), firstNonEmpty(c.OrganizationName, c.OrganizationID, "unknown"))
 	}
+	if shellSet && runtime.GOOS == "windows" {
+		fmt.Fprintln(stderr, "navigara: --shell is ignored on Windows: the Codex email is in the user environment variable OTEL_RESOURCE_ATTRIBUTES")
+	}
 	shell = firstNonEmpty(shell, filepath.Base(os.Getenv("SHELL")))
 	claudeHome, codexHome, homeErr := toolHomes("", "")
 	ok, found := true, false
@@ -164,8 +167,7 @@ func claudeLink(home string) (toolLink, error) {
 	if settings.HeadersHelper != nil {
 		return toolLink{}, errors.New("otelHeadersHelper in settings.json is not what setup writes; run navigara wizard")
 	}
-	managed := claudeManagedSettings()
-	if _, err := os.Stat(managed); err == nil {
+	if managed := claudeManagedBy(); managed != "" {
 		return toolLink{}, fmt.Errorf("Claude Code is managed by %s; ask your administrator to configure telemetry", managed)
 	}
 	shell := map[string]string{}

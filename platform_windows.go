@@ -60,6 +60,31 @@ func setEnvOwner(name, id string) error {
 	return k.SetStringValue(name, id)
 }
 
+// claudePolicyKeys are the registry policies of Claude Code. Tests point them at scratch keys.
+var claudePolicyKeys = []struct {
+	root       registry.Key
+	name, path string
+}{
+	{registry.LOCAL_MACHINE, "HKLM", `SOFTWARE\Policies\ClaudeCode`},
+	{registry.CURRENT_USER, "HKCU", `SOFTWARE\Policies\ClaudeCode`},
+}
+
+// claudePolicy names the registry policy that manages Claude Code, or is "" when there is none.
+func claudePolicy() string {
+	for _, p := range claudePolicyKeys {
+		k, err := registry.OpenKey(p.root, p.path, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		_, _, err = k.GetValue("Settings", nil)
+		k.Close()
+		if err == nil {
+			return p.name + `\` + p.path + `\Settings`
+		}
+	}
+	return ""
+}
+
 // machineEnvKey is the registry key of the machine environment. Tests point it at a scratch key.
 var machineEnvKey = struct {
 	root registry.Key

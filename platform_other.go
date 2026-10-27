@@ -19,4 +19,6 @@ func getMachineEnv(string) string { return "" }
 
 func getEnvOwner(string) string { return "" }
 
+func claudePolicy() string { return "" }
+
 func setEnvOwner(string, string) error { return errUserEnv }
