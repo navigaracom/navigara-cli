@@ -74,6 +74,30 @@ jobs:
             cat "$errors"
             exit 1
           fi
+      - name: Check Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "$env:RUNNER_TEMP\navigara-windows-amd64.exe"
+          foreach ($ps in 'pwsh', 'powershell') {
+            $prefix = "$env:RUNNER_TEMP\install-$ps"
+            & $ps -NoProfile -ExecutionPolicy Bypass -File install.ps1 -LocalFile $exe -Prefix $prefix -NoWizard
+            if ($LASTEXITCODE -ne 0) { throw "$ps could not install the local file" }
+            & "$prefix\navigara.exe" --version
+            if ($LASTEXITCODE -ne 0) { throw "$ps installed a binary that does not start" }
+          }
+          & pwsh -NoProfile -File install.ps1 -NoWizard 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'install.ps1 installed without a pinned digest' }
+          $global:LASTEXITCODE = 0
+          Copy-Item install.ps1 $env:RUNNER_TEMP
+      - name: Upload Windows binaries
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: navigara-windows
+          path: |
+            ${{ runner.temp }}/navigara-windows-*.exe
+            ${{ runner.temp }}/install.ps1
 
   detect-changes:
     name: detect-changes

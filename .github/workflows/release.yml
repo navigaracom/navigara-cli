@@ -1,0 +1,63 @@
+name: Release
+
+# Run on a version tag: gh workflow run release.yml --ref vX.Y.Z
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test
+        run: go test ./...
+      - name: Build binaries
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" != tag ] || ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            printf 'Run this workflow on a vMAJOR.MINOR.PATCH tag, not %s %s\n' "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME"
+            exit 1
+          fi
+          mkdir dist
+          for target in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64 windows-arm64 windows-amd64; do
+            os="${target%-*}" arch="${target#*-}" exe=""
+            [ "$os" = windows ] && exe=".exe"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=$version" \
+              -o "dist/navigara-$version-$target$exe" .
+          done
+          "dist/navigara-$version-linux-amd64" --version | grep -qx "navigara $version"
+      - name: Fill installer release blocks
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          digest() { sha256sum "dist/navigara-$version-$1" | cut -d' ' -f1; }
+          sed -e "s/^VERSION=\".*\"$/VERSION=\"$version\"/" \
+            -e "s/^SHA256_DARWIN_ARM64=\"\"$/SHA256_DARWIN_ARM64=\"$(digest darwin-arm64)\"/" \
+            -e "s/^SHA256_DARWIN_AMD64=\"\"$/SHA256_DARWIN_AMD64=\"$(digest darwin-amd64)\"/" \
+            -e "s/^SHA256_LINUX_ARM64=\"\"$/SHA256_LINUX_ARM64=\"$(digest linux-arm64)\"/" \
+            -e "s/^SHA256_LINUX_AMD64=\"\"$/SHA256_LINUX_AMD64=\"$(digest linux-amd64)\"/" \
+            install.sh > dist/install.sh
+          sed -e "s/^\$VERSION = '.*'$/\$VERSION = '$version'/" \
+            -e "s/^\$SHA256_WINDOWS_ARM64 = ''$/\$SHA256_WINDOWS_ARM64 = '$(digest windows-arm64.exe)'/" \
+            -e "s/^\$SHA256_WINDOWS_AMD64 = ''$/\$SHA256_WINDOWS_AMD64 = '$(digest windows-amd64.exe)'/" \
+            install.ps1 > dist/install.ps1
+          grep -qx "VERSION=\"$version\"" dist/install.sh
+          test "$(grep -Ec '^SHA256_[A-Z0-9_]+="[0-9a-f]{64}"$' dist/install.sh)" -eq 4
+          grep -qx "\$VERSION = '$version'" dist/install.ps1
+          test "$(grep -Ec "^\\\$SHA256_WINDOWS_[A-Z0-9]+ = '[0-9a-f]{64}'$" dist/install.ps1)" -eq 2
+          (cd dist && sha256sum navigara-* install.sh install.ps1 > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

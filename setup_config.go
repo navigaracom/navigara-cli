@@ -655,6 +655,16 @@ func resourceAttributes(existing, email string) (string, error) {
 	return strings.Join(append(kept, "enduser.id="+email), ","), nil
 }
 
+func withoutEnduserID(attrs string) string {
+	var kept []string
+	for _, attr := range strings.Split(attrs, ",") {
+		if key, _, _ := strings.Cut(attr, "="); strings.TrimSpace(attr) != "" && strings.TrimSpace(key) != "enduser.id" {
+			kept = append(kept, strings.TrimSpace(attr))
+		}
+	}
+	return strings.Join(kept, ",")
+}
+
 func validValue(name, value string) error {
 	if value == "" || strings.ContainsAny(value, "\x00\r\n") {
 		return fmt.Errorf("%s must not be empty or contain control characters", name)

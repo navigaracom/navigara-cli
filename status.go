@@ -164,10 +164,7 @@ func claudeLink(home string) (toolLink, error) {
 	if settings.HeadersHelper != nil {
 		return toolLink{}, errors.New("otelHeadersHelper in settings.json is not what setup writes; run navigara wizard")
 	}
-	managed := "/etc/claude-code/managed-settings.json"
-	if runtime.GOOS == "darwin" {
-		managed = "/Library/Application Support/ClaudeCode/managed-settings.json"
-	}
+	managed := claudeManagedSettings()
 	if _, err := os.Stat(managed); err == nil {
 		return toolLink{}, fmt.Errorf("Claude Code is managed by %s; ask your administrator to configure telemetry", managed)
 	}
@@ -236,6 +233,16 @@ func codexLink(home, shell string) (toolLink, error) {
 // codexEmail reads the email that setup exports to Codex from the profile of the user's shell.
 // The block must be exactly what setup writes for that email.
 func codexEmail(shell string) (string, error) {
+	if runtime.GOOS == "windows" {
+		attrs, _, err := getUserEnv("OTEL_RESOURCE_ATTRIBUTES")
+		if err != nil {
+			return "", err
+		}
+		if email := enduserID(attrs); email != "" {
+			return email, nil
+		}
+		return "", errors.New(`no enduser.id in HKCU\Environment\OTEL_RESOURCE_ATTRIBUTES; run navigara wizard`)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

@@ -1,0 +1,89 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"golang.org/x/sys/windows/registry"
+)
+
+func init() {
+	isolatePlatform = func(dir string) func() {
+		os.Setenv("APPDATA", dir)
+		userEnvKey = `Software\NavigaraTest\Environment`
+		k, _, err := registry.CreateKey(registry.CURRENT_USER, userEnvKey, registry.ALL_ACCESS)
+		if err != nil {
+			panic(err)
+		}
+		k.Close()
+		return func() {
+			_ = registry.DeleteKey(registry.CURRENT_USER, userEnvKey)
+			_ = registry.DeleteKey(registry.CURRENT_USER, `Software\NavigaraTest`)
+		}
+	}
+}
+
+func TestCodexEmailInUserEnvironment(t *testing.T) {
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "team=core,enduser.id=old@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	codex := filepath.Join(home, ".codex")
+	if err := os.Mkdir(codex, 0700); err != nil {
+		t.Fatal(err)
+	}
+	opts := options{source: "codex", codexHome: codex, url: "https://app.example/api", token: "secret", email: "dev@example.com"}
+	files, err := setupPlans(opts, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[1].path != `HKCU\Environment\OTEL_RESOURCE_ATTRIBUTES` {
+		t.Fatalf("plans: %+v", files)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "team=core,enduser.id=dev@example.com" {
+		t.Fatalf("after setup = %q", got)
+	}
+	if email, err := codexEmail(""); err != nil || email != "dev@example.com" {
+		t.Fatalf("codexEmail = %q, %v", email, err)
+	}
+	if files, err = setupPlans(opts, home); err != nil || !files[1].unchanged() {
+		t.Fatalf("second setup changes the variable: %+v, %v", files, err)
+	}
+
+	files, err = removePlans(opts, home, []string{"https://app.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "team=core" {
+		t.Fatalf("after remove = %q", got)
+	}
+	if _, err := codexEmail(""); err == nil {
+		t.Fatal("codexEmail found an email after remove")
+	}
+}
+
+func TestSetupRejectsUserEnvironmentChangedDuringSetup(t *testing.T) {
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", ""); err != nil {
+		t.Fatal(err)
+	}
+	f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(string) (string, error) { return "enduser.id=dev@example.com", nil })
+	if err != nil || f.existed {
+		t.Fatalf("plan = %+v, %v", f, err)
+	}
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "enduser.id=other@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles([]*setupFile{f}, func() error { return nil }); err == nil {
+		t.Fatal("setup replaced a value that changed after the plan")
+	}
+	if got, _, _ := getUserEnv("OTEL_RESOURCE_ATTRIBUTES"); got != "enduser.id=other@example.com" {
+		t.Fatalf("value = %q", got)
+	}
+}

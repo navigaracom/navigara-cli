@@ -35,12 +35,15 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 		if err = f.check(); err != nil {
 			return err
 		}
+		if f.env != "" {
+			continue
+		}
 		if prepared[i] == "" {
 			info, e := os.Lstat(f.path)
 			if e != nil {
 				return e
 			}
-			if info.Mode().Perm() == 0600 {
+			if privateMode(info, 0600) {
 				continue
 			}
 			return fmt.Errorf("%s changed during setup; run setup again", f.path)
@@ -49,6 +52,13 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 			return err
 		}
 		installed = append(installed, f)
+	}
+	for _, f := range files {
+		if f.env != "" && !f.unchanged() {
+			if err = setUserEnv(f.env, string(f.after)); err != nil {
+				return err
+			}
+		}
 	}
 	collectBackups(installed)
 	return nil

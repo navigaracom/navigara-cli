@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -116,7 +117,7 @@ func loadAccount(host string) (accountConfig, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return accountConfig{}, fmt.Errorf("%s must be a private directory", dir)
 	}
-	if info.Mode().Perm() != 0700 {
+	if !privateMode(info, 0700) {
 		return accountConfig{}, fmt.Errorf("%s has insecure permissions; run chmod 700 %q", dir, dir)
 	}
 	data, exists, err := accountSnapshot(path)
@@ -221,6 +222,12 @@ func writeAccount(c accountConfig, expected *accountConfig) error {
 	return nil
 }
 
+// privateMode reports whether info has exactly perm. Windows has no Unix modes;
+// the default ACL of the user profile keeps its files private.
+func privateMode(info os.FileInfo, perm os.FileMode) bool {
+	return runtime.GOOS == "windows" || info.Mode().Perm() == perm
+}
+
 func ensureAccountDir(dir string) error {
 	info, err := os.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -232,7 +239,7 @@ func ensureAccountDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0700 {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || !privateMode(info, 0700) {
 		return fmt.Errorf("%s must be a private directory", dir)
 	}
 	return nil
@@ -249,7 +256,7 @@ func accountSnapshot(path string) ([]byte, bool, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return nil, false, fmt.Errorf("%s must be a regular file", path)
 	}
-	if info.Mode().Perm() != 0600 {
+	if !privateMode(info, 0600) {
 		return nil, false, fmt.Errorf("%s has insecure permissions; run chmod 600 %q", path, path)
 	}
 	b, err := os.ReadFile(path)

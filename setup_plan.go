@@ -31,10 +31,7 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		if err := validateClaudeEnv(env, endpoint, opts.token); err != nil {
 			return nil, err
 		}
-		managed := "/etc/claude-code/managed-settings.json"
-		if runtime.GOOS == "darwin" {
-			managed = "/Library/Application Support/ClaudeCode/managed-settings.json"
-		}
+		managed := claudeManagedSettings()
 		if _, err := os.Stat(managed); err == nil {
 			return nil, fmt.Errorf("Claude Code is managed by %s; ask your administrator to configure telemetry", managed)
 		}
@@ -54,7 +51,17 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		codex.notes, codex.conflict = settingsChanges(codex.before, codex.after, toml.Unmarshal), codexTelemetryConflict(codex.before, endpoint)
 		var profiles []string
 		profile := shellSettings
-		switch firstNonEmpty(opts.shell, filepath.Base(os.Getenv("SHELL"))) {
+		shell := firstNonEmpty(opts.shell, filepath.Base(os.Getenv("SHELL")))
+		if runtime.GOOS == "windows" {
+			shell = "windows"
+		}
+		switch shell {
+		case "windows":
+			f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) { return resourceAttributes(v, opts.email) })
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, f)
 		case "zsh":
 			profiles = []string{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc")}
 		case "bash":
@@ -98,6 +105,17 @@ func planConflict(files []*setupFile) error {
 		}
 	}
 	return nil
+}
+
+// claudeManagedSettings is the path where an administrator manages Claude Code.
+func claudeManagedSettings() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "/Library/Application Support/ClaudeCode/managed-settings.json"
+	case "windows":
+		return filepath.Join(firstNonEmpty(os.Getenv("ProgramFiles"), `C:\Program Files`), "ClaudeCode", "managed-settings.json")
+	}
+	return "/etc/claude-code/managed-settings.json"
 }
 
 func fishConfig(home string) string {
@@ -171,6 +189,16 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 			if origin := claudeUnknownOrigin(files[0].before, known); origin != "" {
 				files[0].warning = "Claude Code sends telemetry to " + origin + ", which is not a known Navigara address; nothing removed. Use --host " + origin + " if it is your Navigara instance."
 			}
+		}
+	}
+	if runtime.GOOS == "windows" && opts.source != "claude" {
+		// ponytail: drops any enduser.id, also one the user set; add a marker if users report it.
+		f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) { return withoutEnduserID(v), nil })
+		if err != nil {
+			return nil, err
+		}
+		if f.existed {
+			files = append(files, f)
 		}
 	}
 	return files, nil

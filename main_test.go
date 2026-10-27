@@ -9,6 +9,10 @@ import (
 	"testing"
 )
 
+// isolatePlatform moves platform state that tests change away from the real
+// user. It returns the cleanup.
+var isolatePlatform = func(string) func() { return func() {} }
+
 // TestMain keeps setup backups of tests that do not set XDG_CONFIG_HOME out of
 // the real home.
 func TestMain(m *testing.M) {
@@ -17,7 +21,9 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("XDG_CONFIG_HOME", dir)
+	cleanup := isolatePlatform(dir)
 	code := m.Run()
+	cleanup()
 	os.RemoveAll(dir)
 	os.Exit(code)
 }

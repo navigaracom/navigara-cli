@@ -1,12 +1,20 @@
 # Navigara CLI
 
-Connect Claude Code and Codex to Navigara on macOS and Linux.
+Connect Claude Code and Codex to Navigara on macOS, Linux, and Windows.
 
 ## 🚀 Install and connect
 
 ```sh
 curl -fsSL https://navigara.com/cli | sh
 ```
+
+On Windows, run this in PowerShell:
+
+```powershell
+irm https://github.com/navigaracom/navigara-cli/releases/latest/download/install.ps1 | iex
+```
+
+On Windows, setup saves the Codex email in the user environment variable `OTEL_RESOURCE_ATTRIBUTES`, not in a shell profile.
 
 | To… | Run… |
 | --- | --- |
@@ -34,6 +42,8 @@ Each run saves the previous files in one folder: `~/.config/navigara/backups/<ti
 Run `navigara sessions --help` for more commands.
 
 ## 🖥️ MDM
+
+MDM is for macOS and Linux.
 
 Create an **Analytics Ingestor** key in Navigara. Set `NAVIGARA_TOKEN` only for the setup command below.
 

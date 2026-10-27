@@ -1,0 +1,11 @@
+//go:build !windows
+
+package main
+
+import "errors"
+
+var errUserEnv = errors.New("user environment variables are only saved on Windows")
+
+func getUserEnv(string) (string, bool, error) { return "", false, errUserEnv }
+
+func setUserEnv(string, string) error { return errUserEnv }
