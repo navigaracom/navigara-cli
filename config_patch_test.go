@@ -316,6 +316,13 @@ func TestConfigPatchTokenDefaultsEmailToToolAccount(t *testing.T) {
 		t.Fatalf("no tool account: code=%d out=%s err=%s", code, out.String(), errOut.String())
 	}
 
+	t.Setenv("CODEX_HOME", "")
+	out.Reset()
+	errOut.Reset()
+	if code := runConfigPatch(context.Background(), []string{"--token", "mdm-secret", "--source", "codex"}, &out, &errOut); code != exitNoEmail || !strings.Contains(errOut.String(), "run Codex once") {
+		t.Fatalf("tool never ran: code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+
 	if err := os.WriteFile(filepath.Join(claude, ".claude.json"), []byte(`{"oauthAccount":{"emailAddress":"Dev@Example.com"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}

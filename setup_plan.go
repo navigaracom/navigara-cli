@@ -67,6 +67,10 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 			if err != nil {
 				return nil, err
 			}
+			f.owner = opts.email
+			if prev := enduserID(string(f.before)); prev != "" && prev != opts.email && prev != getEnvOwner(f.env) {
+				f.notes = append(f.notes, "Replaces your enduser.id="+prev+"; config remove restores it")
+			}
 			files = append(files, f)
 		case "zsh":
 			profiles = []string{filepath.Join(firstNonEmpty(os.Getenv("ZDOTDIR"), home), ".zshrc")}
@@ -119,7 +123,8 @@ func claudeManagedSettings() string {
 	case "darwin":
 		return "/Library/Application Support/ClaudeCode/managed-settings.json"
 	case "windows":
-		return filepath.Join(firstNonEmpty(os.Getenv("ProgramFiles"), `C:\Program Files`), "ClaudeCode", "managed-settings.json")
+		// ProgramW6432 is the 64-bit folder also under a 32-bit parent, such as Intune's default host.
+		return filepath.Join(firstNonEmpty(os.Getenv("ProgramW6432"), os.Getenv("ProgramFiles"), `C:\Program Files`), "ClaudeCode", "managed-settings.json")
 	}
 	return "/etc/claude-code/managed-settings.json"
 }
@@ -203,10 +208,15 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 			if id := enduserID(v); id == "" || id != getEnvOwner("OTEL_RESOURCE_ATTRIBUTES") {
 				return v, nil
 			}
-			if out := withoutEnduserID(v); out != getMachineEnv("OTEL_RESOURCE_ATTRIBUTES") {
-				return out, nil
+			// Setup created the variable from the machine value; deleting it shows that value again.
+			if getEnvOwner("OTEL_RESOURCE_ATTRIBUTES"+createdSuffix) != "" {
+				return "", nil
 			}
-			return "", nil
+			out := withoutEnduserID(v)
+			if prev := getEnvOwner("OTEL_RESOURCE_ATTRIBUTES" + previousSuffix); prev != "" {
+				out = strings.TrimPrefix(out+",enduser.id="+prev, ",")
+			}
+			return out, nil
 		})
 		if err != nil {
 			return nil, err

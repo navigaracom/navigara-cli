@@ -103,7 +103,7 @@ for the signed-in user instead of running the wizard."
             $asset = "navigara-$VERSION-$target.exe"
             $url = "https://github.com/navigaracom/navigara-cli/releases/download/v$VERSION/$asset"
             $file = Join-Path $tmp $asset
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             Write-Output "Downloading $url"
             try {
                 Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $file
@@ -124,6 +124,12 @@ The download was discarded. Nothing was installed."
         $dest = Join-Path $Prefix 'navigara.exe'
         $staged = Join-Path $Prefix ".navigara.$VERSION.$PID.exe"
         Copy-Item -LiteralPath $file -Destination $staged
+        # Start the new binary before it replaces a working one. A launch failure throws here.
+        & $staged --version
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+            Fail 'the new binary did not start; the installed version is unchanged'
+        }
         try {
             # Windows can rename a running .exe but not replace it; move it aside first.
             $old = "$dest.old"
@@ -133,6 +139,10 @@ The download was discarded. Nothing was installed."
             Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
         } catch {
             Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+            # Put the previous version back, so a failed upgrade leaves a working navigara.
+            if (-not (Test-Path -LiteralPath $dest) -and (Test-Path -LiteralPath $old)) {
+                Move-Item -LiteralPath $old -Destination $dest -ErrorAction SilentlyContinue
+            }
             Fail "could not replace $dest; close every running navigara and try again: $_"
         }
         Write-Output "Installed $dest"
@@ -143,12 +153,10 @@ The download was discarded. Nothing was installed."
     Add-UserPath $Prefix
     # Native stderr must not stop the script in Windows PowerShell 5.1; exit codes decide.
     $ErrorActionPreference = 'Continue'
-    & $dest --version
-    if ($LASTEXITCODE -ne 0) { Fail 'installed binary did not start' }
     if ($env:NAVIGARA_TOKEN) {
         & $dest sessions config patch --host $NavigaraHost --apply --source $Source
         if ($LASTEXITCODE -eq 3) {
-            Write-Output 'Skipped: no signed-in Claude Code or Codex account yet; run this script again later.'
+            Write-Output 'Skipped: Claude Code or Codex has not run or has no signed-in account yet; run this script again later.'
             $script:ExitCode = 3
             return
         }

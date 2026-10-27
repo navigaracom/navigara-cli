@@ -45,15 +45,18 @@ Run `navigara sessions --help` for more commands.
 
 ### Windows (Intune)
 
-Add a PowerShell script in Intune. Set **Run this script using the logged on credentials** to **Yes**.
+Add a PowerShell script in Intune. Set **Run this script using the logged on credentials** and **Run script in 64 bit PowerShell Host** to **Yes**.
 
 ```powershell
+$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $env:NAVIGARA_TOKEN = '<key>'
 & ([scriptblock]::Create((irm https://github.com/navigaracom/navigara-cli/releases/latest/download/install.ps1))) -NavigaraHost https://app.navigara.com
 ```
 
 The script installs the CLI for the signed-in user, configures telemetry, and uploads session history.
-It exits with 3 when the user has no signed-in Claude Code or Codex account yet. Run it again later for that user.
+It exits with 3 when Claude Code or Codex has not run or has no signed-in account for that user yet.
+Intune retries a failed script only a few times. To configure such users later, assign the script again or run it as a remediation.
 
 ### macOS and Linux
 

@@ -29,10 +29,11 @@ func getUserEnv(name string) (string, bool, error) {
 	return value, err == nil, err
 }
 
-// envOwnerKey records, per user variable, the enduser.id that setup wrote. Tests point it at a scratch key.
+// envOwnerKey records, per user variable, the enduser.id that setup wrote (value name) and the one it
+// replaced (name + previousSuffix). Tests point it at a scratch key.
 var envOwnerKey = `Software\Navigara`
 
-// getEnvOwner returns the enduser.id that setup wrote to the user variable name.
+// getEnvOwner returns a value of the record of the user variable name.
 func getEnvOwner(name string) string {
 	k, err := registry.OpenKey(registry.CURRENT_USER, envOwnerKey, registry.QUERY_VALUE)
 	if err != nil {
@@ -43,7 +44,7 @@ func getEnvOwner(name string) string {
 	return value
 }
 
-// setEnvOwner records id as the enduser.id that setup wrote, or deletes the record when id is empty.
+// setEnvOwner sets a value of the record of the user variable name, or deletes it when id is empty.
 func setEnvOwner(name, id string) error {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, envOwnerKey, registry.SET_VALUE)
 	if err != nil {
@@ -59,15 +60,32 @@ func setEnvOwner(name, id string) error {
 	return k.SetStringValue(name, id)
 }
 
+// machineEnvKey is the registry key of the machine environment. Tests point it at a scratch key.
+var machineEnvKey = struct {
+	root registry.Key
+	path string
+}{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`}
+
 // getMachineEnv reads a machine environment variable. A user variable with the same name hides it.
 func getMachineEnv(name string) string {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`, registry.QUERY_VALUE)
+	k, err := registry.OpenKey(machineEnvKey.root, machineEnvKey.path, registry.QUERY_VALUE)
 	if err != nil {
 		return ""
 	}
 	defer k.Close()
 	value, _, _ := k.GetStringValue(name)
 	return value
+}
+
+// machineEnvKind is the registry type of a machine environment variable.
+func machineEnvKind(name string) uint32 {
+	k, err := registry.OpenKey(machineEnvKey.root, machineEnvKey.path, registry.QUERY_VALUE)
+	if err != nil {
+		return registry.SZ
+	}
+	defer k.Close()
+	_, kind, _ := k.GetValue(name, nil)
+	return kind
 }
 
 // setUserEnv saves a user environment variable, or deletes it when value is empty.
@@ -78,7 +96,11 @@ func setUserEnv(name, value string) error {
 		return err
 	}
 	defer k.Close()
-	switch _, kind, _ := k.GetValue(name, nil); {
+	_, kind, err := k.GetValue(name, nil)
+	if errors.Is(err, registry.ErrNotExist) {
+		kind = machineEnvKind(name)
+	}
+	switch {
 	case value == "":
 		if err = k.DeleteValue(name); errors.Is(err, registry.ErrNotExist) {
 			err = nil

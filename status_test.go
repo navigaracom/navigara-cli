@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -227,6 +228,11 @@ func TestStatusRejectsEachChangedManagedSetting(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(home, ".zshrc"), profile, 0600); err != nil {
 		t.Fatal(err)
+	}
+	if isWindows() {
+		if err := errors.Join(setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "enduser.id=dev@example.com"), setEnvOwner("OTEL_RESOURCE_ATTRIBUTES", "dev@example.com")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	endpoint := "https://app.navigara.com/api/otlp"
 	attrs := "enduser.id=dev@example.com"

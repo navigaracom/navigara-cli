@@ -12,8 +12,9 @@ import (
 type setupFile struct {
 	path, backup string
 	// env names a Windows user environment variable whose value before and
-	// after hold. Setup saves it after it installs every file.
-	env           string
+	// after hold. Setup saves it after it installs every file. owner is the
+	// enduser.id that the plan writes as Navigara's; it is empty for remove.
+	env, owner    string
 	before, after []byte
 	existed       bool
 	installed     os.FileInfo

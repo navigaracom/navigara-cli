@@ -8,6 +8,13 @@ import (
 	"path/filepath"
 )
 
+// The records of a user variable that setup changes: the enduser.id that setup wrote (no suffix),
+// the user's own one that it replaced, and whether setup created the variable.
+const (
+	previousSuffix = "_PREVIOUS"
+	createdSuffix  = "_CREATED"
+)
+
 // Prepare every replacement before checking the receiver or changing any target.
 func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 	prepared := make([]string, len(files))
@@ -55,24 +62,8 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 		installed = append(installed, f)
 	}
 	for _, f := range files {
-		if f.env == "" {
-			continue
-		}
-		// Record the email that setup writes before the value, and drop the record after the
-		// value, so remove and status never treat an email without a record as ours.
-		id := enduserID(string(f.after))
-		if id != "" {
-			if err = setEnvOwner(f.env, id); err != nil {
-				return err
-			}
-		}
-		if !f.unchanged() {
-			if err = setUserEnv(f.env, string(f.after)); err != nil {
-				return err
-			}
-		}
-		if id == "" {
-			if err = setEnvOwner(f.env, ""); err != nil {
+		if f.env != "" {
+			if err = applyEnv(f); err != nil {
 				return err
 			}
 		}
@@ -119,4 +110,61 @@ func (f *setupFile) rollback() error {
 		}
 	}
 	return os.RemoveAll(dir)
+}
+
+// applyEnv saves the user variable of f and its records. Setup records the email before the value
+// and remove drops the records after it, so remove and status never treat an email without a
+// record as ours. On failure it restores the value and the records.
+func applyEnv(f *setupFile) (err error) {
+	names := []string{f.env, f.env + previousSuffix, f.env + createdSuffix}
+	saved := make([]string, len(names))
+	for i, name := range names {
+		saved[i] = getEnvOwner(name)
+	}
+	valueSet := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		if valueSet {
+			err = errors.Join(err, setUserEnv(f.env, string(f.before)))
+		}
+		for i, name := range names {
+			err = errors.Join(err, setEnvOwner(name, saved[i]))
+		}
+	}()
+	if f.owner != "" {
+		if prev := enduserID(string(f.before)); prev != "" && prev != f.owner && prev != saved[0] {
+			if err = setEnvOwner(names[1], prev); err != nil {
+				return err
+			}
+		}
+		// A variable that the user owns now was not created by setup, whatever an old record says.
+		created := saved[2]
+		if !f.existed {
+			created = "1"
+		} else if enduserID(string(f.before)) != saved[0] {
+			created = ""
+		}
+		if err = setEnvOwner(names[2], created); err != nil {
+			return err
+		}
+		if err = setEnvOwner(names[0], f.owner); err != nil {
+			return err
+		}
+	}
+	if !f.unchanged() {
+		if err = setUserEnv(f.env, string(f.after)); err != nil {
+			return err
+		}
+		valueSet = true
+	}
+	if f.owner == "" {
+		for _, name := range names {
+			if err = setEnvOwner(name, ""); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
