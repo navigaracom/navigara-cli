@@ -29,7 +29,6 @@ func setConfigHome(t *testing.T, dir string) {
 
 func isWindows() bool { return runtime.GOOS == "windows" }
 
-// skipOnWindows skips a test of Unix-only behavior.
 func skipOnWindows(t *testing.T, why string) {
 	t.Helper()
 	if isWindows() {

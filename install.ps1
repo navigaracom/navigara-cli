@@ -78,6 +78,9 @@ for the signed-in user instead of running the wizard."
         return
     }
     if (-not $Prefix) { Fail '-Prefix must not be empty' }
+    if ($env:NAVIGARA_TOKEN -and [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
+        Fail 'running as SYSTEM; in Intune, set "Run this script using the logged on credentials" to Yes'
+    }
     $Prefix = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Prefix)
     $NavigaraHost = $NavigaraHost.TrimEnd('/')
 
@@ -122,7 +125,12 @@ The download was discarded. Nothing was installed."
         $staged = Join-Path $Prefix ".navigara.$VERSION.$PID.exe"
         Copy-Item -LiteralPath $file -Destination $staged
         try {
+            # Windows can rename a running .exe but not replace it; move it aside first.
+            $old = "$dest.old"
+            Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $dest) { Move-Item -LiteralPath $dest -Destination $old -Force }
             Move-Item -LiteralPath $staged -Destination $dest -Force
+            Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
         } catch {
             Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
             Fail "could not replace $dest; close every running navigara and try again: $_"

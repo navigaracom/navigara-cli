@@ -55,12 +55,24 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 		installed = append(installed, f)
 	}
 	for _, f := range files {
-		if f.env != "" && !f.unchanged() {
+		if f.env == "" {
+			continue
+		}
+		// Record the email that setup writes before the value, and drop the record after the
+		// value, so remove and status never treat an email without a record as ours.
+		id := enduserID(string(f.after))
+		if id != "" {
+			if err = setEnvOwner(f.env, id); err != nil {
+				return err
+			}
+		}
+		if !f.unchanged() {
 			if err = setUserEnv(f.env, string(f.after)); err != nil {
 				return err
 			}
-			// Record the email setup wrote, so remove and status can prove it is ours.
-			if err = setEnvOwner(f.env, enduserID(string(f.after))); err != nil {
+		}
+		if id == "" {
+			if err = setEnvOwner(f.env, ""); err != nil {
 				return err
 			}
 		}

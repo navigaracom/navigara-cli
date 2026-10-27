@@ -211,7 +211,7 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 		if err != nil {
 			return nil, err
 		}
-		if f.existed {
+		if !f.unchanged() {
 			files = append(files, f)
 		}
 	}

@@ -81,8 +81,10 @@ jobs:
           $exe = "$env:RUNNER_TEMP\navigara-windows-amd64.exe"
           foreach ($ps in 'pwsh', 'powershell') {
             $prefix = "$env:RUNNER_TEMP\install-$ps"
-            & $ps -NoProfile -ExecutionPolicy Bypass -File install.ps1 -LocalFile $exe -Prefix $prefix -NoWizard
-            if ($LASTEXITCODE -ne 0) { throw "$ps could not install the local file" }
+            foreach ($run in 'install', 'upgrade') {
+              & $ps -NoProfile -ExecutionPolicy Bypass -File install.ps1 -LocalFile $exe -Prefix $prefix -NoWizard
+              if ($LASTEXITCODE -ne 0) { throw "$ps could not $run the local file" }
+            }
             & "$prefix\navigara.exe" --version
             if ($LASTEXITCODE -ne 0) { throw "$ps installed a binary that does not start" }
           }
