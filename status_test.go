@@ -142,6 +142,7 @@ func TestSessionsStatus(t *testing.T) {
 				data = bytes.ReplaceAll(data, []byte(`"enduser.id=dev@example.com"`), []byte(`""`))
 				write(filepath.Join(claudeHome, "settings.json"), data, err)
 			case "bad home":
+				skipOnWindows(t, "Windows reports a path under a file as missing")
 				write(filepath.Join(home, "file"), nil, nil)
 				t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "file", ".claude"))
 			case "plain":
@@ -163,6 +164,14 @@ func TestSessionsStatus(t *testing.T) {
 					data = bytes.Replace(data, []byte("[otel.exporter.otlp-http]"), []byte("[otel.removed.otlp-http]"), 1)
 				}
 				write(filepath.Join(codexHome, "config.toml"), data, err)
+				if isWindows() {
+					if tc.identity == "none" || tc.identity == "bash no login" {
+						t.Skip("Windows saves the Codex email in the user environment")
+					}
+					if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "enduser.id=o'neil@example.com"); err != nil {
+						t.Fatal(err)
+					}
+				}
 				switch tc.identity {
 				case "":
 					data, err = shellSettings(nil, "o'neil@example.com")

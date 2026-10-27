@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -439,6 +440,7 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 	})
 
 	t.Run("only unreadable transcripts", func(t *testing.T) {
+		skipOnWindows(t, "Windows cannot make a file unreadable with chmod")
 		claudeHome, codexHome := fixtureHomes(t)
 		var bad []string
 		for _, id := range []string{"1", "2"} {
@@ -466,6 +468,7 @@ func TestUploadRejectsIncompleteClaudeDiscovery(t *testing.T) {
 }
 
 func TestUploadSkipsUnreadableTranscripts(t *testing.T) {
+	skipOnWindows(t, "Windows cannot make a file unreadable with chmod")
 	claudeHome, codexHome := fixtureHomes(t)
 	claudeHome, _ = filepath.EvalSymlinks(claudeHome)
 	malformed := filepath.Join(claudeHome, "projects", "-repo", "aaaaaaaa-0000-0000-0000-000000000001.jsonl")
@@ -531,7 +534,7 @@ func TestUploadRejectsInvalidCodexDiscovery(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "codex", "--email", "dev@example.com",
 			"--claude-home", claudeHome, "--codex-home", codexHome, "--output", output}, &stdout, &stderr)
-		if code != 1 || !strings.Contains(stderr.String(), "invalid Codex rollout header") || !strings.Contains(stderr.String(), rollout) {
+		if code != 1 || !strings.Contains(stderr.String(), "invalid Codex rollout header") || !strings.Contains(stderr.String(), strings.Trim(strconv.Quote(rollout), `"`)) {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 		}
 		if _, err := os.Stat(output); !os.IsNotExist(err) {
@@ -585,7 +588,7 @@ func TestUploadSkipsBuildFailuresAndSendsOtherSessions(t *testing.T) {
 			codexHome, _ = filepath.EvalSymlinks(codexHome)
 			bad := filepath.Join(codexHome, "sessions", "rollout-bad.jsonl")
 			if code != 0 || (send && requests.Load() == 0) || (!send && requests.Load() != 0) || !strings.Contains(stdout.String(), "Sessions: 1.") ||
-				!strings.Contains(stderr.String(), "Skipped 1 session files that could not be read:\n  \""+bad+"\": line 2") {
+				!strings.Contains(stderr.String(), "Skipped 1 session files that could not be read:\n  "+strconv.Quote(bad)+": line 2") {
 				t.Fatalf("exit=%d requests=%d stdout=%q stderr=%q", code, requests.Load(), stdout.String(), stderr.String())
 			}
 		})

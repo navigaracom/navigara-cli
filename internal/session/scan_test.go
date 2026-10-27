@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -123,6 +124,9 @@ func TestScanSymlinksAndNonregular(t *testing.T) {
 }
 
 func TestScanFailureKeepsOtherFilesAndQuotesPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file names cannot contain control characters")
+	}
 	home := scanTempDir(t)
 	bad := filepath.Join(home, "sessions", "bad\n\x1b.jsonl")
 	putHistory(t, bad, fixture(t, "codex-root")+"{private malformed tail")

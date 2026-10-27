@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,16 @@ func setHome(t *testing.T, dir string) {
 func setConfigHome(t *testing.T, dir string) {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("APPDATA", dir)
+}
+
+func isWindows() bool { return runtime.GOOS == "windows" }
+
+// skipOnWindows skips a test of Unix-only behavior.
+func skipOnWindows(t *testing.T, why string) {
+	t.Helper()
+	if isWindows() {
+		t.Skip(why)
+	}
 }
 
 // TestMain keeps setup backups of tests that do not set XDG_CONFIG_HOME out of

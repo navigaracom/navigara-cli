@@ -58,6 +58,9 @@ func TestParsePasswd(t *testing.T) {
 
 func stubMDM(t *testing.T, euid int, users []mdmUser, runner func(u mdmUser, args, env []string) error) {
 	t.Helper()
+	if euid == 0 && !mdmSupported {
+		t.Skip("mdm runs only on macOS and Linux")
+	}
 	oldE, oldL, oldR := mdmGeteuid, mdmListUsers, mdmRunChild
 	t.Cleanup(func() { mdmGeteuid, mdmListUsers, mdmRunChild = oldE, oldL, oldR })
 	mdmGeteuid = func() int { return euid }

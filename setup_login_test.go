@@ -102,7 +102,7 @@ func TestSetupWithoutToolsStopsBeforeLogin(t *testing.T) {
 		t.Error("opened the browser without a tool")
 		return nil
 	})
-	want := "navigara: Claude Code and Codex were not found on this computer (looked in ~/.claude and ~/.codex). Install one, run it once, then run navigara wizard again.\n"
+	want := "navigara: Claude Code and Codex were not found on this computer (looked in " + filepath.FromSlash("~/.claude") + " and " + filepath.FromSlash("~/.codex") + "). Install one, run it once, then run navigara wizard again.\n"
 	if code != 1 || errs.String() != want || out.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, &out, &errs)
 	}
@@ -498,6 +498,7 @@ func TestSetupKeepsCheckpointWhenFilesWereSkipped(t *testing.T) {
 }
 
 func TestSetupKeepsCheckpointForUnreadableSubagent(t *testing.T) {
+	skipOnWindows(t, "Windows cannot make a file unreadable with chmod")
 	claude, codex := fixtureHomes(t)
 	home := filepath.Dir(claude)
 	setConfigHome(t, filepath.Join(home, "config"))

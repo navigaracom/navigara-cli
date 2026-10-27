@@ -354,7 +354,7 @@ func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 				t.Fatal("backup did not retain the original settings")
 			}
 			info, err := os.Stat(filepath.Dir(backups[0]))
-			if err != nil || info.Mode().Perm() != 0700 {
+			if err != nil || !privateMode(info, 0700) {
 				t.Fatal("backup directory is not private")
 			}
 		})

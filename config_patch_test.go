@@ -422,6 +422,9 @@ func TestConfigPatchTokenApplyPreflightsBeforeWriting(t *testing.T) {
 				if !bytes.Contains(afterClaude, []byte(test.token)) || !bytes.Contains(afterCodex, []byte(test.token)) || !bytes.Contains(afterClaude, []byte("Bash(git status)")) || !bytes.Contains(afterCodex, []byte("gpt-5.4")) {
 					t.Fatalf("direct-token patch lost existing settings or did not apply: %s", out.String())
 				}
+				if isWindows() {
+					return
+				}
 				command := exec.Command("sh", "-c", string(afterZshrc)+"\nprintf '%s\\n%s' \"$PATH\" \"$OTEL_RESOURCE_ATTRIBUTES\"")
 				command.Env = append(os.Environ(), "PATH=/bin", "OTEL_RESOURCE_ATTRIBUTES=service.name=work,enduser.id=old@example.com")
 				if got, err := command.Output(); err != nil || string(got) != root+"/bin:/bin\nservice.name=work,enduser.id=dev@example.com" {
@@ -539,6 +542,7 @@ func TestConfigPatchExistingCodexTelemetryNeedsReplace(t *testing.T) {
 }
 
 func TestConfigPatchWithoutKnownShellStillPatches(t *testing.T) {
+	skipOnWindows(t, "Windows saves the Codex email in the user environment, not in shell profiles")
 	root, claude, codex, host := patchFixture(t)
 	t.Setenv("SHELL", "")
 	code, out, errOut := runPatch("all", claude, codex, host, "--apply")
@@ -556,6 +560,7 @@ func TestConfigPatchWithoutKnownShellStillPatches(t *testing.T) {
 }
 
 func TestConfigRemoveRestoresOriginalSettings(t *testing.T) {
+	skipOnWindows(t, "Windows saves the Codex email in the user environment, not in shell profiles")
 	root, claude, codex, host := patchFixture(t)
 	claudePath, codexPath, zshrc := filepath.Join(claude, "settings.json"), filepath.Join(codex, "config.toml"), filepath.Join(root, ".zshrc")
 	originals := map[string]string{
