@@ -705,3 +705,14 @@ func TestBuildClaudeLooksUpASubshellCommitInItsDirectory(t *testing.T) {
 		t.Errorf("lookups in %v, results %v; want the subshell's directory and its commit", dirs, results)
 	}
 }
+
+func TestMoveDirReadsGitBashDrivePaths(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Git Bash drive paths exist only on Windows")
+	}
+	for to, want := range map[string]string{"/c/Users/me/repo": `C:\Users\me\repo`, "/d": `D:\`, "sub": `C:\base\sub`} {
+		if got := moveDir(`C:\base`, to); got != want {
+			t.Errorf("moveDir(%q) = %q, want %q", to, got, want)
+		}
+	}
+}

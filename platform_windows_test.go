@@ -87,3 +87,45 @@ func TestSetupRejectsUserEnvironmentChangedDuringSetup(t *testing.T) {
 		t.Fatalf("value = %q", got)
 	}
 }
+
+func TestUserEnvironmentKeepsForeignValues(t *testing.T) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, userEnvKey, registry.SET_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = k.SetExpandStringValue("OTEL_RESOURCE_ATTRIBUTES", "flag,host.name=%COMPUTERNAME%")
+	k.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	opts := options{source: "codex", codexHome: home, url: "https://app.example/api", token: "secret", email: "dev@example.com"}
+	files, err := setupPlans(opts, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applySetupFiles(files, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	k, err = registry.OpenKey(registry.CURRENT_USER, userEnvKey, registry.QUERY_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if got, kind, err := k.GetStringValue("OTEL_RESOURCE_ATTRIBUTES"); err != nil || kind != registry.EXPAND_SZ || got != "flag,host.name=%COMPUTERNAME%,enduser.id=dev@example.com" {
+		t.Fatalf("value = %q, kind %d, %v", got, kind, err)
+	}
+
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "a=1, b=2"); err != nil {
+		t.Fatal(err)
+	}
+	files, err = removePlans(opts, home, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.env != "" && !f.unchanged() {
+			t.Fatalf("remove changes a value without enduser.id: %q", f.after)
+		}
+	}
+}

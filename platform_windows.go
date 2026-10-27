@@ -32,16 +32,20 @@ func getUserEnv(name string) (string, bool, error) {
 // setUserEnv saves a user environment variable, or deletes it when value is empty.
 // Like setx, it tells running programs, so that new terminals get the value.
 func setUserEnv(name, value string) error {
-	k, err := registry.OpenKey(registry.CURRENT_USER, userEnvKey, registry.SET_VALUE)
+	k, err := registry.OpenKey(registry.CURRENT_USER, userEnvKey, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
 	defer k.Close()
-	if value == "" {
+	switch _, kind, _ := k.GetValue(name, nil); {
+	case value == "":
 		if err = k.DeleteValue(name); errors.Is(err, registry.ErrNotExist) {
 			err = nil
 		}
-	} else {
+	case kind == registry.EXPAND_SZ:
+		// Keep %VARIABLES% in the value expandable.
+		err = k.SetExpandStringValue(name, value)
+	default:
 		err = k.SetStringValue(name, value)
 	}
 	if err != nil {

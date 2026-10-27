@@ -57,7 +57,9 @@ func setupPlans(opts options, home string) ([]*setupFile, error) {
 		}
 		switch shell {
 		case "windows":
-			f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) { return resourceAttributes(v, opts.email) })
+			f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) {
+				return strings.TrimPrefix(withoutEnduserID(v)+",enduser.id="+opts.email, ","), nil
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -193,7 +195,12 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 	}
 	if runtime.GOOS == "windows" && opts.source != "claude" {
 		// ponytail: drops any enduser.id, also one the user set; add a marker if users report it.
-		f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) { return withoutEnduserID(v), nil })
+		f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) {
+			if enduserID(v) == "" {
+				return v, nil
+			}
+			return withoutEnduserID(v), nil
+		})
 		if err != nil {
 			return nil, err
 		}

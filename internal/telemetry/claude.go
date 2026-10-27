@@ -11,9 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ClaudeInput is one Claude Code session on disk: the root transcript and its subagent transcripts.
@@ -997,6 +999,9 @@ func moveDir(base, to string) string {
 		return base
 	case filepath.IsAbs(to):
 		return filepath.Clean(to)
+	case runtime.GOOS == "windows" && len(to) >= 2 && to[0] == '/' && unicode.IsLetter(rune(to[1])) && (len(to) == 2 || to[2] == '/'):
+		// Git Bash, which runs Claude Code's commands on Windows, writes C:\ as /c/.
+		return filepath.Clean(strings.ToUpper(to[1:2]) + `:\` + to[2:])
 	}
 	return filepath.Join(base, to)
 }

@@ -78,6 +78,8 @@ for the signed-in user instead of running the wizard."
         return
     }
     if (-not $Prefix) { Fail '-Prefix must not be empty' }
+    $Prefix = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Prefix)
+    $NavigaraHost = $NavigaraHost.TrimEnd('/')
 
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("navigara-" + [Guid]::NewGuid())
     New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -145,10 +147,11 @@ The download was discarded. Nothing was installed."
         if ($LASTEXITCODE -ne 0) { Fail 'sessions upload failed' }
     } elseif (-not $NoWizard) {
         & $dest wizard
+        if ($LASTEXITCODE -ne 0) { Fail "navigara wizard failed; run navigara wizard again" }
     }
 }
 
 $script:ExitCode = 0
 Install-Navigara
-# Only MDM runs set a code; there, exit tells Intune to retry. Interactive runs never exit.
+# Only MDM runs (NAVIGARA_TOKEN set) set a code; exit tells Intune to retry.
 if ($script:ExitCode -ne 0) { exit $script:ExitCode }
