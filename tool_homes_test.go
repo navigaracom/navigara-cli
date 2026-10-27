@@ -22,7 +22,7 @@ func TestToolHomesPreferFlagThenEnvThenDefault(t *testing.T) {
 		{"mixed", "/flag/claude", "", "", "/env/codex", "/flag/claude", "/env/codex"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("HOME", home)
+			setHome(t, home)
 			t.Setenv("CLAUDE_CONFIG_DIR", tc.claudeEnv)
 			t.Setenv("CODEX_HOME", tc.codexEnv)
 			claude, codex, err := toolHomes(tc.claudeFlag, tc.codexFlag)
@@ -35,7 +35,7 @@ func TestToolHomesPreferFlagThenEnvThenDefault(t *testing.T) {
 
 func TestUploadReadsClaudeConfigDir(t *testing.T) {
 	claudeHome, _ := fixtureHomes(t)
-	t.Setenv("HOME", t.TempDir()) // No history in the default home.
+	setHome(t, t.TempDir()) // No history in the default home.
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 	t.Setenv("CODEX_HOME", "")
 	var out, errs bytes.Buffer
@@ -47,7 +47,7 @@ func TestUploadReadsClaudeConfigDir(t *testing.T) {
 }
 
 func TestUploadWarnsAboutMissingClaudeConfigDir(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing"))
 	var out, errs bytes.Buffer
 	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--email", "dev@example.com",
@@ -58,7 +58,7 @@ func TestUploadWarnsAboutMissingClaudeConfigDir(t *testing.T) {
 }
 
 func TestToolHomesNeedNoHomeDirectoryForExplicitHomes(t *testing.T) {
-	t.Setenv("HOME", "")
+	setHome(t, "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CODEX_HOME", "/env/codex")
 	claude, codex, err := toolHomes("/flag/claude", "")
@@ -72,7 +72,7 @@ func TestToolHomesNeedNoHomeDirectoryForExplicitHomes(t *testing.T) {
 }
 
 func TestUploadReportsMissingClaudeConfigDirBeforeEmail(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing"))
 	var out, errs bytes.Buffer
 	code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "claude", "--output", filepath.Join(t.TempDir(), "out")}, &out, &errs)
@@ -83,7 +83,7 @@ func TestUploadReportsMissingClaudeConfigDirBeforeEmail(t *testing.T) {
 
 func TestUploadNeedsNoHomeDirectoryForOneExplicitHome(t *testing.T) {
 	claudeHome, _ := fixtureHomes(t)
-	t.Setenv("HOME", "")
+	setHome(t, "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CODEX_HOME", "")
 	var out, errs bytes.Buffer

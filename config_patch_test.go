@@ -70,8 +70,8 @@ func TestConfigPatchPreviewReadsAccountWithoutWritingOrPosting(t *testing.T) {
 	}))
 	defer srv.Close()
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	t.Setenv("SHELL", "/bin/bash")
 	claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
 	if err := os.MkdirAll(claude, 0700); err != nil {
@@ -162,8 +162,8 @@ func TestConfigPatchApplyScopesAndReusesIngestionKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	t.Setenv("SHELL", "/bin/bash")
 	claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
 	if err := os.MkdirAll(claude, 0700); err != nil {
@@ -238,8 +238,8 @@ func TestConfigPatchInvalidSettingsDoesNotMintIngestionKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	claude := filepath.Join(root, "claude")
 	if err := os.MkdirAll(claude, 0700); err != nil {
 		t.Fatal(err)
@@ -261,8 +261,8 @@ func TestConfigPatchInvalidSettingsDoesNotMintIngestionKey(t *testing.T) {
 
 func TestConfigPatchTokenPreviewUsesDefaultHostWithoutSavedAccount(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	claude := filepath.Join(root, "claude")
 	if err := os.MkdirAll(claude, 0700); err != nil {
 		t.Fatal(err)
@@ -302,8 +302,8 @@ func TestConfigPatchTokenPreviewUsesDefaultHostWithoutSavedAccount(t *testing.T)
 
 func TestConfigPatchTokenDefaultsEmailToToolAccount(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	t.Setenv("NAVIGARA_TOKEN", "")
 	claude := filepath.Join(root, "claude")
 	if err := os.MkdirAll(claude, 0700); err != nil {
@@ -382,8 +382,8 @@ func TestConfigPatchTokenApplyPreflightsBeforeWriting(t *testing.T) {
 			defer srv.Close()
 
 			root := t.TempDir()
-			t.Setenv("HOME", root)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+			setHome(t, root)
+			setConfigHome(t, filepath.Join(root, "state"))
 			t.Setenv("SHELL", "/bin/zsh")
 			t.Setenv("ZDOTDIR", root)
 			claude, codex := filepath.Join(root, "claude"), filepath.Join(root, "codex")
@@ -452,8 +452,8 @@ func patchFixture(t *testing.T) (root, claude, codex, host string) {
 	}))
 	t.Cleanup(srv.Close)
 	root = t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "state"))
+	setHome(t, root)
+	setConfigHome(t, filepath.Join(root, "state"))
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("ZDOTDIR", root)
 	t.Setenv("NAVIGARA_TOKEN", "")

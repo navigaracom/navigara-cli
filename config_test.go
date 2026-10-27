@@ -70,8 +70,8 @@ func TestSaveAccountRejectsConcurrentWriter(t *testing.T) {
 func withConfigHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	setHome(t, dir)
+	setConfigHome(t, filepath.Join(dir, "config"))
 	base, err := os.UserConfigDir()
 	if err != nil {
 		t.Fatal(err)

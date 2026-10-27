@@ -13,13 +13,14 @@ func applySetupFiles(files []*setupFile, preflight func() error) (err error) {
 	prepared := make([]string, len(files))
 	var installed []*setupFile
 	defer func() {
+		// Roll back first: on Windows, os.SameFile reads the file ID of a prepared path.
+		if err != nil {
+			err = errors.Join(err, rollbackSetupFiles(installed))
+		}
 		for _, path := range prepared {
 			if path != "" {
 				_ = os.Remove(path)
 			}
-		}
-		if err != nil {
-			err = errors.Join(err, rollbackSetupFiles(installed))
 		}
 	}()
 	for i, f := range files {

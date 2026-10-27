@@ -72,6 +72,7 @@ func TestScanLayoutsAndSelection(t *testing.T) {
 func TestScanRootPolicies(t *testing.T) {
 	home := scanTempDir(t)
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	missing := filepath.Join(home, "missing")
 	file := filepath.Join(home, "file")
 	putHistory(t, file, "")

@@ -8,6 +8,8 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
+var errConnRefused error = windows.WSAECONNREFUSED
+
 // userEnvKey is the registry key of the user environment. Tests point it at a scratch key.
 var userEnvKey = "Environment"
 

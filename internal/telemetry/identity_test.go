@@ -10,6 +10,7 @@ func TestReadIdentityReadsParentConfigOnlyForDefaultHome(t *testing.T) {
 	user := t.TempDir()
 	other := t.TempDir()
 	t.Setenv("HOME", user)
+	t.Setenv("USERPROFILE", user)
 	writeConfig := func(path, email string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -42,6 +43,7 @@ func TestReadIdentityReadsParentConfigOnlyForDefaultHome(t *testing.T) {
 func TestReadIdentityRecognizesDefaultHomeHoweverSpelled(t *testing.T) {
 	user := t.TempDir()
 	t.Setenv("HOME", user)
+	t.Setenv("USERPROFILE", user)
 	if err := os.Mkdir(filepath.Join(user, ".claude"), 0o700); err != nil {
 		t.Fatal(err)
 	}

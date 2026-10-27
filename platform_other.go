@@ -2,7 +2,12 @@
 
 package main
 
-import "errors"
+import (
+	"errors"
+	"syscall"
+)
+
+var errConnRefused error = syscall.ECONNREFUSED
 
 var errUserEnv = errors.New("user environment variables are only saved on Windows")
 

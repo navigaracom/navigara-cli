@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -119,7 +118,7 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 			if ctx.Err() != nil {
 				return cancelled(ctx, lastErr)
 			}
-			if probe && errors.Is(err, syscall.ECONNREFUSED) {
+			if probe && errors.Is(err, errConnRefused) {
 				return fmt.Errorf("Cannot reach %s. Check the address and your network.", req.URL.Host)
 			}
 			lastErr = fmt.Errorf("OTLP connection failed; check network and TLS settings: %w", err)

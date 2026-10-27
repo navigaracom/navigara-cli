@@ -19,8 +19,8 @@ import (
 func TestAccountOrganizationSelection(t *testing.T) {
 	for _, mode := range []string{"one", "several", "saved", "revoked", "none", "cycle"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			setHome(t, t.TempDir())
+			setConfigHome(t, t.TempDir())
 			requests := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
@@ -105,8 +105,8 @@ func TestAccountOrganizationSelection(t *testing.T) {
 func TestAccountChecksAuthBeforeLogin(t *testing.T) {
 	for _, status := range []int{401, 403, 500} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			setHome(t, t.TempDir())
+			setConfigHome(t, t.TempDir())
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
 			defer srv.Close()
 			if err := saveAccount(accountConfig{Host: srv.URL, SessionToken: "expired", SessionExpiresAt: time.Now().Add(time.Hour)}); err != nil {
@@ -129,8 +129,8 @@ func TestAccountChecksAuthBeforeLogin(t *testing.T) {
 }
 
 func TestAccountKeepsNewSessionWhenOrganizationSelectionFails(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setHome(t, t.TempDir())
+	setConfigHome(t, t.TempDir())
 	exchanges := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -178,8 +178,8 @@ func TestAccountKeepsNewSessionWhenOrganizationSelectionFails(t *testing.T) {
 }
 
 func TestLoginHelpIsOffline(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setHome(t, t.TempDir())
+	setConfigHome(t, t.TempDir())
 	var out, errs bytes.Buffer
 	if code := run(context.Background(), []string{"login", "--help"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "--host") {
 		t.Fatalf("exit=%d %s %s", code, &out, &errs)

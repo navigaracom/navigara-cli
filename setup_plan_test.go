@@ -53,7 +53,7 @@ func TestSetupPlansShellSelection(t *testing.T) {
 			if err := os.Mkdir(codex, 0700); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			setConfigHome(t, filepath.Join(home, ".config"))
 			t.Setenv("ZDOTDIR", home)
 			t.Setenv("SHELL", test.shell)
 			files, err := setupPlans(options{source: "codex", codexHome: codex, shell: test.flag, url: "https://app.example/api", token: "secret", email: "dev@example.com"}, home)

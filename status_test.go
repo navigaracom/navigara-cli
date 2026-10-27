@@ -81,8 +81,8 @@ func TestSessionsStatus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			claudeHome, codexHome := filepath.Join(home, ".claude"), filepath.Join(home, ".codex")
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
 			t.Setenv("CODEX_HOME", codexHome)
 			t.Setenv("SHELL", "/bin/zsh")
@@ -206,7 +206,7 @@ func TestSessionsStatus(t *testing.T) {
 
 func TestStatusRejectsEachChangedManagedSetting(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("ZDOTDIR", home)
 	profile, err := shellSettings(nil, "dev@example.com")

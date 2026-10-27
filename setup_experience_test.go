@@ -227,8 +227,8 @@ func TestWizardCanSkipConflictingToolWithoutChangingSettings(t *testing.T) {
 			apply := action == "connect"
 			claude, codex := fixtureHomes(t)
 			home := filepath.Dir(claude)
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claude)
 			t.Setenv("CODEX_HOME", codex)
 			t.Setenv("SHELL", "/bin/zsh")
@@ -299,8 +299,8 @@ func TestWizardReplacesExistingCodexTelemetryAfterContinue(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			claude, codex := fixtureHomes(t)
 			home := filepath.Dir(claude)
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			setHome(t, home)
+			setConfigHome(t, filepath.Join(home, "config"))
 			t.Setenv("CLAUDE_CONFIG_DIR", claude)
 			t.Setenv("CODEX_HOME", codex)
 			t.Setenv("SHELL", "/bin/zsh")

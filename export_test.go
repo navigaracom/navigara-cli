@@ -28,7 +28,7 @@ import (
 func fixtureHomes(t *testing.T) (claudeHome, codexHome string) {
 	t.Helper()
 	root := t.TempDir()
-	t.Setenv("HOME", root) // The default layout: ~/.claude with ~/.claude.json next to it.
+	setHome(t, root) // The default layout: ~/.claude with ~/.claude.json next to it.
 	claudeHome = filepath.Join(root, ".claude")
 	codexHome = filepath.Join(root, ".codex")
 	for _, id := range []string{"aaaaaaaa-0000-0000-0000-000000000001", "aaaaaaaa-0000-0000-0000-000000000002"} {
@@ -161,7 +161,7 @@ func TestUploadDryRunUsesLoginEmail(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(claudeHome), ".claude.json"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(filepath.Dir(claudeHome), "config"))
+	setConfigHome(t, filepath.Join(filepath.Dir(claudeHome), "config"))
 	t.Setenv("NAVIGARA_TOKEN", "")
 	var batches atomic.Int32
 	srv := setupAccountServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -875,7 +875,7 @@ func TestUploadDryRunNeedsNoUsableLogin(t *testing.T) {
 	for _, mode := range []string{"env token", "expired session", "auth server offline"} {
 		t.Run(mode, func(t *testing.T) {
 			claudeHome, codexHome := fixtureHomes(t)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(filepath.Dir(claudeHome), "config"))
+			setConfigHome(t, filepath.Join(filepath.Dir(claudeHome), "config"))
 			t.Setenv("NAVIGARA_TOKEN", "env-secret")
 			if mode != "env token" {
 				expires := time.Now().Add(time.Hour)
