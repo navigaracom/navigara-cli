@@ -136,3 +136,22 @@ func TestClaudeManagedSettingsOnWindows(t *testing.T) {
 		t.Fatalf("managed settings = %q", got)
 	}
 }
+
+func TestRemoveKeepsEmailWithoutNavigaraCodex(t *testing.T) {
+	if err := setUserEnv("OTEL_RESOURCE_ATTRIBUTES", "enduser.id=me@corp.example"); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("model = \"o3\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := removePlans(options{source: "codex", codexHome: home}, home, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.env != "" {
+			t.Fatalf("remove plans the user's own email: %q", f.after)
+		}
+	}
+}

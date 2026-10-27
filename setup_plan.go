@@ -157,6 +157,7 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 	}
 	shell := removeManagedBlock
 	var codexWarning string
+	codexOurs := false
 	targets := []struct {
 		path      string
 		transform func([]byte) ([]byte, error)
@@ -183,6 +184,7 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 		}
 		if i == 1 && len(files) > before {
 			files[before].warning = codexWarning
+			codexOurs = !bytes.Equal(files[before].before, files[before].after)
 		}
 		if i == 0 && len(files) == 1 {
 			if !bytes.Equal(files[0].before, files[0].after) {
@@ -193,8 +195,9 @@ func removePlans(opts options, home string, known []string) ([]*setupFile, error
 			}
 		}
 	}
-	if runtime.GOOS == "windows" && opts.source != "claude" {
-		// ponytail: drops any enduser.id, also one the user set; add a marker if users report it.
+	// The email belongs to Navigara only when Codex has a Navigara block to remove.
+	if runtime.GOOS == "windows" && codexOurs {
+		// ponytail: drops any enduser.id then, also one the user set; add a marker if users report it.
 		f, err := planEnv("OTEL_RESOURCE_ATTRIBUTES", func(v string) (string, error) {
 			if enduserID(v) == "" {
 				return v, nil
