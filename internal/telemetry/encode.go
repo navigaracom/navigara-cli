@@ -83,8 +83,22 @@ func Encode(s *Session, emit func(Body) error) error {
 }
 
 func resource(s *Session) json.RawMessage {
-	b, _ := json.Marshal(map[string]any{"attributes": attributes(map[string]any{"service.name": s.Service, "navigara.backfill": true})})
+	b, _ := json.Marshal(map[string]any{"attributes": attributes(map[string]any{
+		"service.name": s.Service, "navigara.backfill": true,
+		// The server replaces an old day only when the window covers all of it.
+		"navigara.backfill.since": windowBound(s.Since, time.Unix(0, 0)),
+		// An open end holds all of the session, so the end of its last day bounds it.
+		"navigara.backfill.until": windowBound(s.Until, s.End.UTC().Truncate(24*time.Hour).Add(24*time.Hour)),
+	})})
 	return b
+}
+
+// windowBound formats a window bound; an open bound becomes open.
+func windowBound(t, open time.Time) string {
+	if t.IsZero() {
+		t = open
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // chunk encodes items 0..n-1 in order and packs them into bodies of at most MaxBodyBytes.
