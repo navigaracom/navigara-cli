@@ -40,6 +40,8 @@ type Session struct {
 	Estimated bool
 	// Missing counts records the builder could not map, by reason.
 	Missing map[string]int
+	// Since and Until are the export window that Within applied; zero is open.
+	Since, Until time.Time
 
 	seen *seen
 	// lastSettled is the end of the last process run a cost-state row settled.
@@ -87,6 +89,7 @@ func (s *Session) sortRecords() {
 
 // Within keeps only the events and points in [since, until]; a zero bound is open.
 func (s *Session) Within(since, until time.Time) {
+	s.Since, s.Until = since, until
 	in := func(t time.Time) bool {
 		return (since.IsZero() || !t.Before(since)) && (until.IsZero() || !t.After(until))
 	}
