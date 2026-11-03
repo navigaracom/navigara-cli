@@ -88,9 +88,20 @@ func resource(s *Session) json.RawMessage {
 		// The server replaces an old day only when the window covers all of it.
 		"navigara.backfill.since": windowBound(s.Since, time.Unix(0, 0)),
 		// An open end holds all of the session, so the end of its last day bounds it.
-		"navigara.backfill.until": windowBound(s.Until, s.End.UTC().Truncate(24*time.Hour).Add(24*time.Hour)),
+		"navigara.backfill.until": windowBound(s.Until, lastAt(s).UTC().Truncate(24*time.Hour).Add(24*time.Hour)),
 	})})
 	return b
+}
+
+// lastAt is the time of the session's last event or point: a token point can follow the last event.
+func lastAt(s *Session) time.Time {
+	last := s.End
+	for _, p := range s.Points {
+		if p.Time.After(last) {
+			last = p.Time
+		}
+	}
+	return last
 }
 
 // windowBound formats a window bound; an open bound becomes open.
