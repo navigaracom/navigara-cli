@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
+	"uuid"
 )
 
 // Record contains metadata extracted from a history.
@@ -23,6 +25,11 @@ type Record struct {
 // Claude sidechains are ignored until EOF. Errors discard all partial metadata
 // and never include input values.
 func Read(source string, r io.Reader) (Record, error) {
+	return read(source, r, "")
+}
+
+// read keeps the Claude lines of session want, or of the first sessionId when no line has want.
+func read(source string, r io.Reader, want string) (Record, error) {
 	if source != "claude_code" && source != "codex" {
 		return Record{}, fmt.Errorf("unsupported source")
 	}
@@ -30,6 +37,7 @@ func Read(source string, r io.Reader) (Record, error) {
 	var context codexContext
 	reader := bufio.NewReader(r)
 	line, sawSidechain := 0, false
+	first, fallback := "", Session{Source: source}
 	fail := func(problem string) (Record, error) {
 		return Record{}, fmt.Errorf("line %d: %s", line, problem)
 	}
@@ -48,6 +56,7 @@ func Read(source string, r io.Reader) (Record, error) {
 			continue
 		}
 		var id, version, timestamp, kind string
+		dst := &result.Session
 		if source == "claude_code" {
 			var side struct {
 				IsSidechain bool `json:"isSidechain"`
@@ -67,6 +76,19 @@ func Read(source string, r io.Reader) (Record, error) {
 			}
 			if identity.ID == "" {
 				continue
+			}
+			if first == "" {
+				first = identity.ID
+			}
+			if want == "" {
+				want = first
+			}
+			if identity.ID != want {
+				// Another session wrote this line; that session's own file counts it.
+				if identity.ID != first {
+					continue
+				}
+				dst = &fallback
 			}
 			var root struct {
 				Version   string `json:"version"`
@@ -144,15 +166,15 @@ func Read(source string, r io.Reader) (Record, error) {
 			if strings.TrimSpace(id) == "" {
 				return fail("missing session identity")
 			}
-			if result.Session.SessionID != "" && result.Session.SessionID != id {
+			if dst.SessionID != "" && dst.SessionID != id {
 				return fail("conflicting session identity")
 			}
-			result.Session.SessionID = id
+			dst.SessionID = id
 		}
-		if result.Session.SourceVersion == "" {
-			result.Session.SourceVersion = version
+		if dst.SourceVersion == "" {
+			dst.SourceVersion = version
 		}
-		observedAt, timestampErr := addTimestamp(&result.Session, timestamp)
+		observedAt, timestampErr := addTimestamp(dst, timestamp)
 		if timestampErr != nil {
 			return fail("invalid timestamp")
 		}
@@ -166,18 +188,21 @@ func Read(source string, r io.Reader) (Record, error) {
 			return fail(err.Error())
 		}
 		if u != nil {
-			result.Session.UsageObservations = append(result.Session.UsageObservations, *u)
+			dst.UsageObservations = append(dst.UsageObservations, *u)
 		}
 		repository, err := observeRepository(b, source, kind, observedAt, line)
 		if err != nil {
 			return fail(err.Error())
 		}
 		if repository != nil {
-			observations := result.Session.RepositoryObservations
+			observations := dst.RepositoryObservations
 			if len(observations) == 0 || repository.Branch != observations[len(observations)-1].Branch || repository.CommitHash != observations[len(observations)-1].CommitHash || repository.RepositoryURL != observations[len(observations)-1].RepositoryURL {
-				result.Session.RepositoryObservations = append(observations, *repository)
+				dst.RepositoryObservations = append(observations, *repository)
 			}
 		}
+	}
+	if result.Session.SessionID == "" && fallback.SessionID != "" {
+		result.Session = fallback
 	}
 	if result.Session.SessionID == "" {
 		if sawSidechain {
@@ -207,4 +232,14 @@ func addTimestamp(s *Session, value string) (*time.Time, error) {
 		s.LastObservedAt = &t
 	}
 	return &t, nil
+}
+
+// ClaudeFileSessionID returns the session ID in a Claude Code history file name
+// (<uuid>.jsonl), or "" when the name is not a UUID.
+func ClaudeFileSessionID(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	if _, err := uuid.Parse(name); err != nil {
+		return ""
+	}
+	return name
 }

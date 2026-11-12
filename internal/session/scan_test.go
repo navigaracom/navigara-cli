@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func scanTempDir(t *testing.T) string {
@@ -191,8 +192,28 @@ func TestReadSnapshotExcludesAppendedRecords(t *testing.T) {
 	if err := appendFile.Close(); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readSnapshot("codex", f, info.Size())
+	got, err := readSnapshot("codex", f, info.Size(), "")
 	if err != nil || got.Session.LastObservedAt == nil || got.Session.LastObservedAt.Format("2006-01-02T15:04:05Z") != "2026-01-02T00:02:00Z" {
 		t.Fatalf("snapshot included append: %+v, %v", got, err)
+	}
+}
+
+func TestScanClaudeFileNameOwnsSession(t *testing.T) {
+	claude := filepath.Join(scanTempDir(t), ".claude")
+	own := "aaaaaaaa-0000-0000-0000-000000000001"
+	foreign := `{"type":"user","sessionId":"bbbbbbbb-0000-0000-0000-000000000002","timestamp":"2026-03-01T00:00:00Z","version":"9.9.9"}` + "\n"
+	putHistory(t, filepath.Join(claude, "projects", "p", own+".jsonl"),
+		foreign+strings.ReplaceAll(fixture(t, "claude-root"), "claude_code-root", own)+foreign)
+	putHistory(t, filepath.Join(claude, "projects", "p", "cccccccc-0000-0000-0000-000000000003.jsonl"), foreign)
+	got := Scan("claude", claude, "", nil)
+	if len(got.Errors) != 0 || len(got.Records) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	s := got.Records[0].Session
+	if s.SessionID != own || s.SourceVersion != "2.1.285" || !s.LastObservedAt.Equal(time.Date(2026, 1, 2, 0, 2, 0, 0, time.UTC)) {
+		t.Fatalf("got %+v", s)
+	}
+	if fallback := got.Records[1].Session; fallback.SessionID != "bbbbbbbb-0000-0000-0000-000000000002" || fallback.SourceVersion != "9.9.9" {
+		t.Fatalf("fallback got %+v", fallback)
 	}
 }

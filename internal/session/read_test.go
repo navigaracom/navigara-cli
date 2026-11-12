@@ -55,7 +55,7 @@ func TestReadMutations(t *testing.T) {
 		{"malformed", "claude_code", claude + "{private", "", "line 6"},
 		{"truncated", "codex", codex + `{"type":`, "", "line 3"},
 		{"trailing JSON", "codex", codex + `{} {}`, "", "line 3"},
-		{"claude conflicting identity", "claude_code", claude + `{"sessionId":"other"}`, "", "line 6"},
+		{"claude foreign identity skipped", "claude_code", claude + `{"sessionId":"other"}`, "claude_code-root", ""},
 		{"codex null session identity", "codex", strings.Replace(codex, `"session_id":"codex-root"`, `"session_id":null`, 1), "", "line 1"},
 		{"late null session identity", "codex", codex + strings.Replace(codex, `"session_id":"codex-root"`, `"session_id":null`, 1), "", "line 3"},
 		{"codex absent session identity", "codex", strings.Replace(codex, `"session_id":"codex-root",`, ``, 1), "codex-root", ""},

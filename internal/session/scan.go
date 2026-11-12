@@ -132,11 +132,15 @@ func readFile(source, path string) (record Record, err error) {
 	if !info.Mode().IsRegular() {
 		return Record{}, errors.New("not a regular file")
 	}
-	return readSnapshot(source, f, info.Size())
+	want := ""
+	if source == "claude_code" {
+		want = ClaudeFileSessionID(path)
+	}
+	return readSnapshot(source, f, info.Size(), want)
 }
 
-func readSnapshot(source string, r io.Reader, size int64) (Record, error) {
-	return Read(source, io.LimitReader(r, size))
+func readSnapshot(source string, r io.Reader, size int64, want string) (Record, error) {
+	return read(source, io.LimitReader(r, size), want)
 }
 
 func pathDiagnostic(path string, err error) error {
