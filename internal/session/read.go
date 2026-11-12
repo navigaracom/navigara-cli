@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -23,6 +24,11 @@ type Record struct {
 // Claude sidechains are ignored until EOF. Errors discard all partial metadata
 // and never include input values.
 func Read(source string, r io.Reader) (Record, error) {
+	return read(source, r, "")
+}
+
+// read keeps only the Claude lines of session want; an empty want takes the first sessionId.
+func read(source string, r io.Reader, want string) (Record, error) {
 	if source != "claude_code" && source != "codex" {
 		return Record{}, fmt.Errorf("unsupported source")
 	}
@@ -66,6 +72,13 @@ func Read(source string, r io.Reader) (Record, error) {
 				return fail("invalid session identity")
 			}
 			if identity.ID == "" {
+				continue
+			}
+			if want == "" {
+				want = identity.ID
+			}
+			// Another session wrote this line; that session's own file counts it.
+			if identity.ID != want {
 				continue
 			}
 			var root struct {
@@ -207,4 +220,23 @@ func addTimestamp(s *Session, value string) (*time.Time, error) {
 		s.LastObservedAt = &t
 	}
 	return &t, nil
+}
+
+// ClaudeFileSessionID returns the session ID in a Claude Code history file name
+// (<uuid>.jsonl), or "" when the name is not a UUID.
+func ClaudeFileSessionID(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	if len(name) != 36 {
+		return ""
+	}
+	for i, c := range name {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return ""
+			}
+		} else if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return ""
+		}
+	}
+	return name
 }

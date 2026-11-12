@@ -12,9 +12,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/navigaracom/navigara-cli/internal/session"
 )
 
 // ClaudeInput is one Claude Code session on disk: the root transcript and its subagent transcripts.
@@ -191,16 +194,20 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 	if err != nil {
 		return nil, err
 	}
-	sessionID := ""
+	sessionID := session.ClaudeFileSessionID(in.Path)
 	for _, r := range rows {
+		if sessionID != "" {
+			break
+		}
 		if r.SessionID != "" && !r.IsSidechain {
 			sessionID = r.SessionID
-			break
 		}
 	}
 	if sessionID == "" {
 		return nil, fmt.Errorf("no root session id")
 	}
+	// Another session wrote these lines; that session's own file counts them.
+	rows = slices.DeleteFunc(rows, func(r parsedRow) bool { return r.SessionID != "" && r.SessionID != sessionID })
 	cut := false
 	if !in.Until.IsZero() {
 		kept := rows[:0]

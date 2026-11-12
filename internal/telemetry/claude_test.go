@@ -44,6 +44,27 @@ func TestBuildClaudeKeepsFutureSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildClaudeSkipsLinesOfAnotherSession(t *testing.T) {
+	dir := t.TempDir()
+	foreign := user("2026-10-03T09:00:00Z", "f", "copied")
+	foreign["sessionId"] = "bbbbbbbb-0000-0000-0000-000000000002"
+	clean := filepath.Join(dir, "clean.jsonl")
+	mixed := filepath.Join(dir, sid+".jsonl")
+	writeLines(t, clean, user("2026-10-03T10:00:00Z", "p", "own"))
+	writeLines(t, mixed, foreign, user("2026-10-03T10:00:00Z", "p", "own"), foreign)
+	build := func(path string) *Session {
+		s, err := BuildClaude(ClaudeInput{Path: path}, Identity{}, func(string) string { return "" })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	want, got := build(clean), build(mixed)
+	if got.SessionID != sid || len(got.Events) != len(want.Events) || len(want.Events) == 0 {
+		t.Fatalf("got %s with %d events, want %d", got.SessionID, len(got.Events), len(want.Events))
+	}
+}
+
 func user(at, promptID string, content any) map[string]any {
 	return map[string]any{"type": "user", "sessionId": sid, "promptId": promptID, "uuid": "u-" + at, "timestamp": at,
 		"entrypoint": "cli", "cwd": "/repo", "message": map[string]any{"role": "user", "content": content}}
