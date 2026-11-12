@@ -194,13 +194,16 @@ func BuildClaude(in ClaudeInput, ident Identity, repository func(cwd string) str
 	if err != nil {
 		return nil, err
 	}
-	sessionID := session.ClaudeFileSessionID(in.Path)
+	fileID, sessionID := session.ClaudeFileSessionID(in.Path), ""
 	for _, r := range rows {
-		if sessionID != "" {
-			break
+		if r.SessionID == "" || r.IsSidechain {
+			continue
 		}
-		if r.SessionID != "" && !r.IsSidechain {
+		if sessionID == "" || r.SessionID == fileID {
 			sessionID = r.SessionID
+		}
+		if fileID == "" || sessionID == fileID {
+			break
 		}
 	}
 	if sessionID == "" {

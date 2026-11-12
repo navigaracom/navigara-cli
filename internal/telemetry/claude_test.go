@@ -63,6 +63,11 @@ func TestBuildClaudeSkipsLinesOfAnotherSession(t *testing.T) {
 	if got.SessionID != sid || len(got.Events) != len(want.Events) || len(want.Events) == 0 {
 		t.Fatalf("got %s with %d events, want %d", got.SessionID, len(got.Events), len(want.Events))
 	}
+	foreignOnly := filepath.Join(dir, "cccccccc-0000-0000-0000-000000000003.jsonl")
+	writeLines(t, foreignOnly, foreign)
+	if got := build(foreignOnly); got.SessionID != foreign["sessionId"] || len(got.Events) == 0 {
+		t.Fatalf("fallback got %s with %d events", got.SessionID, len(got.Events))
+	}
 }
 
 func user(at, promptID string, content any) map[string]any {
