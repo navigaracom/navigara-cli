@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"uuid"
 )
 
 // Record contains metadata extracted from a history.
@@ -237,17 +238,8 @@ func addTimestamp(s *Session, value string) (*time.Time, error) {
 // (<uuid>.jsonl), or "" when the name is not a UUID.
 func ClaudeFileSessionID(path string) string {
 	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	if len(name) != 36 {
+	if _, err := uuid.Parse(name); err != nil {
 		return ""
-	}
-	for i, c := range name {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return ""
-			}
-		} else if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
-			return ""
-		}
 	}
 	return name
 }
