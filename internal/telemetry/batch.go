@@ -26,7 +26,7 @@ func NewBatcher(emit func(Body) error) *Batcher {
 	return &Batcher{emit: emit, pending: map[string]*pendingBody{}}
 }
 
-// Add accepts one body produced by Encode. It accepts only the exact internal logs and
+// Add accepts one body produced by Encode. It accepts only the exact internal logs, traces and
 // metrics envelopes, preserving each envelope's resource object bytes and order.
 func (b *Batcher) Add(body Body) error {
 	if b.err != nil {
@@ -71,13 +71,15 @@ func (b *Batcher) Add(body Body) error {
 	return nil
 }
 
-// Flush emits pending logs first, then pending metrics, for deterministic output order.
+// Flush emits pending logs, traces, then metrics, for deterministic output order.
 func (b *Batcher) Flush() error {
 	if b.err != nil {
 		return b.err
 	}
-	if err := b.flushPath("/v1/logs"); err != nil {
-		return err
+	for _, path := range []string{"/v1/logs", "/v1/traces"} {
+		if err := b.flushPath(path); err != nil {
+			return err
+		}
 	}
 	return b.flushPath("/v1/metrics")
 }
@@ -119,6 +121,8 @@ func decodeResources(body Body) ([]json.RawMessage, string, error) {
 	switch body.Path {
 	case "/v1/logs":
 		key = "resourceLogs"
+	case "/v1/traces":
+		key = "resourceSpans"
 	case "/v1/metrics":
 		key = "resourceMetrics"
 	default:

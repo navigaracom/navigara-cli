@@ -28,6 +28,7 @@ On Windows, setup saves the Codex email in the user environment variable `OTEL_R
 | Import the past week | `navigara sessions upload --last 7d` |
 | Import only Claude history | `navigara sessions upload --source claude` |
 | Import only Codex history | `navigara sessions upload --source codex` |
+| Import only GitHub Copilot CLI history, attributed to your git `user.email` | `navigara sessions upload --source copilot` |
 | See what would be sent, without sending | `navigara sessions upload --dry-run` |
 | Send the rest of a stopped upload | `navigara sessions upload --resume DIR` |
 | Enable future sync | `navigara sessions config patch --apply` |

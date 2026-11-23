@@ -44,6 +44,9 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("XDG_CONFIG_HOME", dir)
+	// Keep the developer's own Copilot history and git identity out of every test.
+	os.Setenv("COPILOT_HOME", dir)
+	gitEmail = func() string { return "" }
 	cleanup := isolatePlatform(dir)
 	code := m.Run()
 	cleanup()

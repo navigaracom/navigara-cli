@@ -17,6 +17,8 @@ type Identity struct {
 	Organization string
 	CodexAccount string
 	CodexEmail   string
+	// CopilotEmail is the git user.email: Copilot CLI keeps no email locally.
+	CopilotEmail string
 }
 
 // ReadIdentity reads the signed-in accounts from the Claude Code and Codex homes.
@@ -112,9 +114,10 @@ func jwtEmail(token string) string {
 	return strings.ToLower(claims.Email)
 }
 
-// WithEmail overrides the email of both tools.
+// WithEmail overrides the email of every tool.
 func (id Identity) WithEmail(email string) Identity {
-	id.Email, id.CodexEmail = strings.ToLower(email), strings.ToLower(email)
+	email = strings.ToLower(email)
+	id.Email, id.CodexEmail, id.CopilotEmail = email, email, email
 	return id
 }
 
@@ -141,4 +144,11 @@ func (id Identity) codexAttributes() map[string]any {
 		attrs["user.account_id"] = id.CodexAccount
 	}
 	return attrs
+}
+
+func (id Identity) copilotAttributes() map[string]any {
+	if id.CopilotEmail == "" {
+		return nil
+	}
+	return map[string]any{"enduser.id": id.CopilotEmail}
 }

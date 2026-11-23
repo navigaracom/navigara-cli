@@ -67,9 +67,15 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	}
 	wantClaude := opts.source == "all" || opts.source == "claude"
 	wantCodex := opts.source == "all" || opts.source == "codex"
-	claudeSince, codexSince := opts.sinceFor("claude"), opts.sinceFor("codex")
+	wantCopilot := opts.source == "copilot" || opts.source == "all" && !opts.excludeCopilot
+	claudeSince, codexSince, copilotSince := opts.sinceFor("claude"), opts.sinceFor("codex"), opts.sinceFor("copilot")
 	claudeHome, codexHome, err := toolHomes(opts.claudeHome, opts.codexHome)
 	if (wantClaude && claudeHome == "") || (wantCodex && codexHome == "") {
+		fmt.Fprintln(stderr, "navigara:", err)
+		return 1
+	}
+	copilotHome, err := copilotHome(opts.copilotHome)
+	if wantCopilot && copilotHome == "" {
 		fmt.Fprintln(stderr, "navigara:", err)
 		return 1
 	}
@@ -80,6 +86,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	}{
 		{"Claude Code", claudeHome, wantClaude, opts.claudeHome != ""},
 		{"Codex", codexHome, wantCodex, opts.codexHome != ""},
+		{"Copilot", copilotHome, wantCopilot, opts.copilotHome != ""},
 	} {
 		if !tool.selected || !tool.explicit {
 			continue
@@ -102,6 +109,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	}{
 		{"Claude Code", claudeHome, opts.claudeHome, "CLAUDE_CONFIG_DIR", &wantClaude},
 		{"Codex", codexHome, opts.codexHome, "CODEX_HOME", &wantCodex},
+		{"Copilot", copilotHome, opts.copilotHome, "COPILOT_HOME", &wantCopilot},
 	} {
 		source := homeSource(tool.flag, tool.env)
 		if !*tool.want || source == "" {
@@ -113,13 +121,18 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 		}
 	}
 	ident := telemetry.ReadIdentity(claudeHome, codexHome)
+	if wantCopilot {
+		ident.CopilotEmail = gitEmail()
+	}
 	if opts.email != "" {
 		ident = ident.WithEmail(opts.email)
 	}
 	// Each tool needs its own signed-in email: one tool's account says nothing about the other's.
 	claudeOK := ident.Email != "" || opts.allowAnonymous
 	codexOK := ident.CodexEmail != "" || opts.allowAnonymous
-	if (wantClaude || wantCodex) && (!wantClaude || !claudeOK) && (!wantCodex || !codexOK) {
+	copilotOK := ident.CopilotEmail != "" || opts.allowAnonymous
+	anyOK := wantClaude && claudeOK || wantCodex && codexOK || wantCopilot && copilotOK
+	if (wantClaude || wantCodex || wantCopilot) && !anyOK {
 		fmt.Fprintln(stderr, "navigara: no signed-in email found; pass --email or --allow-anonymous")
 		return 2
 	}
@@ -131,12 +144,16 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 		fmt.Fprintln(stderr, "navigara: skipping Codex: no signed-in email; pass --email or --allow-anonymous")
 		wantCodex = false
 	}
+	if wantCopilot && !copilotOK {
+		fmt.Fprintln(stderr, "navigara: skipping Copilot: no git user.email; pass --email or --allow-anonymous")
+		wantCopilot = false
+	}
 	if !opts.humanSummary {
 		var emails []string
 		for _, e := range []struct {
 			want  bool
 			email string
-		}{{wantClaude, ident.Email}, {wantCodex, ident.CodexEmail}} {
+		}{{wantClaude, ident.Email}, {wantCodex, ident.CodexEmail}, {wantCopilot, ident.CopilotEmail}} {
 			if e.want && e.email != "" && !slices.Contains(emails, e.email) {
 				emails = append(emails, e.email)
 			}
@@ -244,6 +261,19 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			seen[id] = true
 			jobs = append(jobs, job{"codex", id, path, func() (*telemetry.Session, error) {
 				return telemetry.BuildCodex(path, ident, opts.until)
+			}})
+		}
+	}
+	if wantCopilot {
+		// Glob fails only on a bad pattern; a missing home has no sessions.
+		paths, _ := telemetry.CopilotSessions(copilotHome)
+		for _, path := range paths {
+			id := telemetry.CopilotSessionID(path)
+			if stale(copilotSince, path) || !want(id) {
+				continue
+			}
+			jobs = append(jobs, job{"copilot", id, path, func() (*telemetry.Session, error) {
+				return telemetry.BuildCopilot(path, ident)
 			}})
 		}
 	}
@@ -356,12 +386,9 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 				skipped = append(skipped, fmt.Sprintf("%q: %d unreadable subagent transcripts", j.path, n))
 				skippedTool(strings.TrimSuffix(j.source, "_code"))
 			}
-			since := claudeSince
-			if j.source == "codex" {
-				since = codexSince
-			}
+			since := map[string]time.Time{"claude_code": claudeSince, "codex": codexSince, "copilot": copilotSince}[j.source]
 			s.Within(since, opts.until)
-			if len(s.Events) == 0 && len(s.Points) == 0 {
+			if len(s.Events) == 0 && len(s.Points) == 0 && len(s.Spans) == 0 {
 				report(index + pairIndex + 1)
 				continue
 			}
@@ -375,7 +402,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			}
 			exported++
 			events += len(s.Events)
-			points += len(s.Points)
+			points += len(s.Points) + len(s.Spans)
 			if s.Estimated {
 				estimated++
 			}
@@ -398,7 +425,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			for _, reason := range reasons {
 				note += fmt.Sprintf(", missing %s %d", reason, s.Missing[reason])
 			}
-			lines = append(lines, fmt.Sprintf("%s %s: activity events %d, usage measurements %d%s", s.Source, s.SessionID, len(s.Events), len(s.Points), note))
+			lines = append(lines, fmt.Sprintf("%s %s: activity events %d, usage measurements %d%s", s.Source, s.SessionID, len(s.Events), len(s.Points)+len(s.Spans), note))
 		}
 	}
 	if ctx.Err() != nil {
@@ -574,6 +601,15 @@ func lastRecordTime(path string) time.Time {
 		}
 	}
 	return last
+}
+
+// gitEmail is the git user.email, the only identity Copilot CLI history can be attributed to.
+var gitEmail = func() string {
+	out, err := exec.Command("git", "config", "--get", "user.email").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(string(out)))
 }
 
 func firstNonEmpty(values ...string) string {

@@ -114,6 +114,7 @@ func homePath(path, home string) string {
 
 func setupAttempt(ctx context.Context, c accountConfig, opts options, home string, preferences wizardSettings, p *setupInput, stderr io.Writer, open func(string) error) error {
 	opts.source, opts.email = preferences.source, preferences.email
+	opts.excludeCopilot = true
 	selected := selectedTools([]string{"claude", "codex"}, preferences.source)
 	opts.url, opts.token = c.Host+"/api", firstNonEmpty(c.IngestToken, previewIngestToken)
 	window := preferences.history

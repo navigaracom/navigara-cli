@@ -83,7 +83,7 @@ func (s *sender) send(ctx context.Context, b telemetry.Body, probe bool) error {
 	if err := s.validate(); err != nil {
 		return err
 	}
-	if b.Path != "/v1/metrics" && b.Path != "/v1/logs" {
+	if b.Path != "/v1/metrics" && b.Path != "/v1/logs" && b.Path != "/v1/traces" {
 		return errors.New("unsupported OTLP signal")
 	}
 	var lastErr error

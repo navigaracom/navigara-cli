@@ -32,7 +32,7 @@ type setupManifest struct {
 	ImportedTools []string  `json:",omitempty"`
 }
 
-var batchName = regexp.MustCompile(`^(logs|metrics)-[0-9]+\.json\.gz$`)
+var batchName = regexp.MustCompile(`^(logs|traces|metrics)-[0-9]+\.json\.gz$`)
 
 func saveSetupBatches(dir, url, organizationID string) error {
 	return saveSetupManifest(dir, setupManifest{URL: url, OrganizationID: organizationID})

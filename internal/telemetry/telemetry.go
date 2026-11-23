@@ -25,6 +25,14 @@ type Point struct {
 	Value float64
 }
 
+// Span is one OTLP span, such as one model call. TraceID and SpanID are hex.
+type Span struct {
+	Name            string
+	Start, End      time.Time
+	TraceID, SpanID string
+	Attrs           map[string]any
+}
+
 // Session is everything one native session reports.
 type Session struct {
 	Source    string
@@ -35,6 +43,7 @@ type Session struct {
 	Common map[string]any
 	Events []Event
 	Points []Point
+	Spans  []Span
 	End    time.Time
 	// Estimated is true when cost comes from the price table instead of the tool's own total.
 	Estimated bool
@@ -83,9 +92,10 @@ func (s *Session) miss(reason string) {
 func (s *Session) sortRecords() {
 	sort.SliceStable(s.Events, func(i, j int) bool { return s.Events[i].Time.Before(s.Events[j].Time) })
 	sort.SliceStable(s.Points, func(i, j int) bool { return s.Points[i].Time.Before(s.Points[j].Time) })
+	sort.SliceStable(s.Spans, func(i, j int) bool { return s.Spans[i].Start.Before(s.Spans[j].Start) })
 }
 
-// Within keeps only the events and points in [since, until]; a zero bound is open.
+// Within keeps only the events, points and span starts in [since, until]; a zero bound is open.
 func (s *Session) Within(since, until time.Time) {
 	in := func(t time.Time) bool {
 		return (since.IsZero() || !t.Before(since)) && (until.IsZero() || !t.After(until))
@@ -104,6 +114,13 @@ func (s *Session) Within(since, until time.Time) {
 		}
 	}
 	s.Points = points
+	spans := s.Spans[:0]
+	for _, sp := range s.Spans {
+		if in(sp.Start) {
+			spans = append(spans, sp)
+		}
+	}
+	s.Spans = spans
 }
 
 // mergePoints sums points of the same metric, model, type and time: the receiver keeps only one.
