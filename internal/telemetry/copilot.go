@@ -53,7 +53,9 @@ func BuildCopilot(path string, ident Identity) (*Session, error) {
 		if len(line) > 0 && (bytes.Contains(line, []byte(`"session.usage_record"`)) ||
 			bytes.Contains(line, []byte(`"user.message"`)) || bytes.Contains(line, []byte(`"session.shutdown"`))) {
 			var row copilotRow
-			if json.Unmarshal(line, &row) == nil {
+			if json.Unmarshal(line, &row) != nil {
+				s.miss("unreadable records")
+			} else {
 				switch row.Type {
 				case "session.usage_record":
 					records++

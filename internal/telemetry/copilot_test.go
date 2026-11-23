@@ -23,6 +23,7 @@ func TestBuildCopilot(t *testing.T) {
 		copilotUsage("2026-11-02T12:48:18Z", "msg_2", "gpt-6", 500, 20, 400, 0, 500),
 		copilotUsage("2026-11-02T12:48:17Z", "msg_1", "claude-haiku-4.5", 18010, 42, 0, 18000, 1161),
 		copilotUsage("2026-11-02T12:48:19Z", "", "gpt-6", 1, 1, 0, 0, 1),
+		map[string]any{"type": "session.usage_record", "timestamp": "not a time"},
 		// Totals at shutdown are not counted missing when per-call records exist.
 		map[string]any{"type": "session.shutdown", "timestamp": "2026-11-02T12:49:00Z", "data": map[string]any{
 			"modelMetrics": map[string]any{"gpt-6": map[string]any{"requests": map[string]any{"count": 3}}}}},
@@ -42,7 +43,7 @@ func TestBuildCopilot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Spans) != 2 || len(s.Events) != 1 || s.Missing["usage records without a call id"] != 1 || len(s.Missing) != 1 {
+	if len(s.Spans) != 2 || len(s.Events) != 1 || s.Missing["usage records without a call id"] != 1 || s.Missing["unreadable records"] != 1 || len(s.Missing) != 2 {
 		t.Fatalf("spans %d, events %d, missing %v", len(s.Spans), len(s.Events), s.Missing)
 	}
 	call := s.Spans[0]

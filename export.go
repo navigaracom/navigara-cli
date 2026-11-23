@@ -120,6 +120,13 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 			fmt.Fprintf(stderr, "navigara: skipping %s: home %q%s does not exist\n", tool.name, tool.home, source)
 		}
 	}
+	var copilotPaths []string
+	if wantCopilot {
+		// Glob fails only on a bad pattern; a missing home has no sessions.
+		copilotPaths, _ = telemetry.CopilotSessions(copilotHome)
+		// Under source all, Copilot without history must not satisfy the email check for the others.
+		wantCopilot = opts.source == "copilot" || len(copilotPaths) > 0
+	}
 	ident := telemetry.ReadIdentity(claudeHome, codexHome)
 	if wantCopilot {
 		ident.CopilotEmail = gitEmail()
@@ -265,9 +272,7 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 		}
 	}
 	if wantCopilot {
-		// Glob fails only on a bad pattern; a missing home has no sessions.
-		paths, _ := telemetry.CopilotSessions(copilotHome)
-		for _, path := range paths {
+		for _, path := range copilotPaths {
 			id := telemetry.CopilotSessionID(path)
 			if stale(copilotSince, path) || !want(id) {
 				continue
