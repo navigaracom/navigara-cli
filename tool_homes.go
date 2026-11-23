@@ -32,3 +32,15 @@ func homeSource(flag, env string) string {
 	}
 	return ""
 }
+
+// copilotHome resolves the Copilot CLI home: an explicit flag, else $COPILOT_HOME, else ~/.copilot.
+func copilotHome(flag string) (string, error) {
+	if home := firstNonEmpty(flag, os.Getenv("COPILOT_HOME")); home != "" {
+		return home, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".copilot"), nil
+}

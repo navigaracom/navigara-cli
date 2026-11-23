@@ -907,3 +907,51 @@ var progressLine = regexp.MustCompile(`(?m)^(Prepared \d+/\d+ sessions|Sent \d+/
 
 // noProgress drops the progress lines that an upload without a terminal prints.
 func noProgress(s string) string { return progressLine.ReplaceAllString(s, "") }
+
+func TestUploadCopilot(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "session-state", "s-1", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"type":"user.message","timestamp":"2026-11-02T12:48:16Z","data":{"interactionId":"i-1"}}
+{"type":"session.usage_record","timestamp":"2026-11-02T12:48:17Z","data":{"usage":{"model":"gpt-6","apiCallId":"msg_1","inputTokens":10,"outputTokens":2,"duration":100}}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upload := func() (int, string, string) {
+		t.Helper()
+		out := filepath.Join(t.TempDir(), "out")
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--source", "copilot", "--copilot-home", home, "--output", out}, &stdout, &stderr)
+		return code, stdout.String() + stderr.String(), out
+	}
+
+	// Source all is Claude Code and Codex only: Copilot history and a git email change nothing.
+	gitEmail = func() string { return "dev@example.com" }
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--claude-home", t.TempDir(), "--codex-home", t.TempDir(),
+		"--copilot-home", home, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit=%d output=%q; want no signed-in email", code, stdout.String()+stderr.String())
+	}
+	gitEmail = func() string { return "" }
+
+	if code, output, _ := upload(); code != 2 || !strings.Contains(output, "no signed-in email found") {
+		t.Fatalf("exit=%d output=%q; Copilot without a git email needs --email or --allow-anonymous", code, output)
+	}
+
+	gitEmail = func() string { return "dev@example.com" }
+	t.Cleanup(func() { gitEmail = func() string { return "" } })
+	code, output, out := upload()
+	if code != 0 || !strings.Contains(output, "attributed to dev@example.com") || !strings.Contains(output, "copilot s-1: activity events 1, usage measurements 1") {
+		t.Fatalf("exit=%d output=%q", code, output)
+	}
+	for _, name := range []string{"logs-000001.json.gz", "traces-000001.json.gz"} {
+		if !batchName.MatchString(name) {
+			t.Fatalf("%s is not an upload batch name", name)
+		}
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -21,6 +21,7 @@ const exitInterrupted = 130
 type options struct {
 	source, output        string
 	claudeHome, codexHome string
+	copilotHome           string
 	since, until          time.Time
 	sourceSince           map[string]time.Time
 	skippedTools          map[string]bool
@@ -107,10 +108,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {}
 	fs.BoolVar(&help, "help", false, "show upload help")
 	fs.BoolVar(&shortHelp, "h", false, "show upload help")
-	fs.StringVar(&opts.source, "source", "all", "session source: all, claude, codex")
+	fs.StringVar(&opts.source, "source", "all", "session source: all (Claude Code and Codex), claude, codex, copilot")
 	fs.StringVar(&opts.output, "output", "", "new directory for gzip-compressed OTLP request bodies (default: a private temporary directory)")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home containing projects/ (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home containing sessions/ (default $CODEX_HOME or ~/.codex)")
+	fs.StringVar(&opts.copilotHome, "copilot-home", "", "GitHub Copilot CLI home containing session-state/ (default $COPILOT_HOME or ~/.copilot)")
 	fs.Func("session", "only export this session id (repeatable)", func(value string) error {
 		if strings.TrimSpace(value) == "" {
 			return errors.New("--session must not be empty")
@@ -157,12 +159,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if fs.NArg() != 0 {
 		return invalid("unexpected argument: " + fs.Arg(0))
 	}
-	if opts.source != "all" && opts.source != "claude" && opts.source != "codex" {
-		return invalid("--source must be all, claude, or codex")
+	if opts.source != "all" && opts.source != "claude" && opts.source != "codex" && opts.source != "copilot" {
+		return invalid("--source must be all, claude, codex, or copilot")
 	}
 	var emptyPath string
 	fs.Visit(func(f *flag.Flag) {
-		if (f.Name == "output" || f.Name == "claude-home" || f.Name == "codex-home" || f.Name == "resume") && f.Value.String() == "" {
+		if (f.Name == "output" || f.Name == "claude-home" || f.Name == "codex-home" || f.Name == "copilot-home" || f.Name == "resume") && f.Value.String() == "" {
 			emptyPath = f.Name
 		}
 	})
