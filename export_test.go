@@ -927,11 +927,11 @@ func TestUploadCopilot(t *testing.T) {
 		return code, stdout.String() + stderr.String(), out
 	}
 
-	// A git email must not let source all pass the email check when Copilot has no history.
+	// Source all is Claude Code and Codex only: Copilot history and a git email change nothing.
 	gitEmail = func() string { return "dev@example.com" }
 	var stdout, stderr bytes.Buffer
 	if code := run(context.Background(), []string{"sessions", "upload", "--dry-run", "--claude-home", t.TempDir(), "--codex-home", t.TempDir(),
-		"--copilot-home", t.TempDir(), "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr); code != 2 {
+		"--copilot-home", home, "--output", filepath.Join(t.TempDir(), "out")}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit=%d output=%q; want no signed-in email", code, stdout.String()+stderr.String())
 	}
 	gitEmail = func() string { return "" }

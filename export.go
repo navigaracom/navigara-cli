@@ -67,7 +67,8 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	}
 	wantClaude := opts.source == "all" || opts.source == "claude"
 	wantCodex := opts.source == "all" || opts.source == "codex"
-	wantCopilot := opts.source == "copilot" || opts.source == "all" && !opts.excludeCopilot
+	// Copilot is opt-in: the wizard and MDM run source all and configure only Claude Code and Codex.
+	wantCopilot := opts.source == "copilot"
 	claudeSince, codexSince, copilotSince := opts.sinceFor("claude"), opts.sinceFor("codex"), opts.sinceFor("copilot")
 	claudeHome, codexHome, err := toolHomes(opts.claudeHome, opts.codexHome)
 	if (wantClaude && claudeHome == "") || (wantCodex && codexHome == "") {
@@ -124,8 +125,6 @@ func uploadSessions(ctx context.Context, opts options, stdout, stderr io.Writer,
 	if wantCopilot {
 		// Glob fails only on a bad pattern; a missing home has no sessions.
 		copilotPaths, _ = telemetry.CopilotSessions(copilotHome)
-		// Under source all, Copilot without history must not satisfy the email check for the others.
-		wantCopilot = opts.source == "copilot" || len(copilotPaths) > 0
 	}
 	ident := telemetry.ReadIdentity(claudeHome, codexHome)
 	if wantCopilot {

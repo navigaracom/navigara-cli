@@ -22,21 +22,19 @@ type options struct {
 	source, output        string
 	claudeHome, codexHome string
 	copilotHome           string
-	// excludeCopilot keeps Copilot out of source "all": the wizard imports only the tools it configures.
-	excludeCopilot   bool
-	since, until     time.Time
-	sourceSince      map[string]time.Time
-	skippedTools     map[string]bool
-	sessions         []string
-	email            string
-	allowAnonymous   bool
-	humanSummary     bool
-	shell            string
-	send             bool
-	resume           string
-	host, url, token string
-	tokenExplicit    bool
-	organizationID   string
+	since, until          time.Time
+	sourceSince           map[string]time.Time
+	skippedTools          map[string]bool
+	sessions              []string
+	email                 string
+	allowAnonymous        bool
+	humanSummary          bool
+	shell                 string
+	send                  bool
+	resume                string
+	host, url, token      string
+	tokenExplicit         bool
+	organizationID        string
 }
 
 // sinceFor lets the wizard resume each tool from its own last import.
@@ -110,7 +108,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {}
 	fs.BoolVar(&help, "help", false, "show upload help")
 	fs.BoolVar(&shortHelp, "h", false, "show upload help")
-	fs.StringVar(&opts.source, "source", "all", "session source: all, claude, codex, copilot")
+	fs.StringVar(&opts.source, "source", "all", "session source: all (Claude Code and Codex), claude, codex, copilot")
 	fs.StringVar(&opts.output, "output", "", "new directory for gzip-compressed OTLP request bodies (default: a private temporary directory)")
 	fs.StringVar(&opts.claudeHome, "claude-home", "", "Claude home containing projects/ (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&opts.codexHome, "codex-home", "", "Codex home containing sessions/ (default $CODEX_HOME or ~/.codex)")

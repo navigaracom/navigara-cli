@@ -64,7 +64,8 @@ func BuildCopilot(path string, ident Identity) (*Session, error) {
 					s.copilotPrompt(row)
 				case "session.shutdown":
 					for _, m := range row.Data.ModelMetrics {
-						totals += int(m.Requests.Count)
+						// The count comes from the file: bound it so a corrupt value cannot overflow.
+						totals += int(min(max(m.Requests.Count, 0), 1e6))
 					}
 				}
 			}
@@ -76,10 +77,11 @@ func BuildCopilot(path string, ident Identity) (*Session, error) {
 			return nil, fmt.Errorf("read Copilot session %q: %w", path, err)
 		}
 	}
-	if records == 0 {
-		for range totals {
-			s.miss(MissingCopilotTotals)
+	if records == 0 && totals > 0 {
+		if s.Missing == nil {
+			s.Missing = map[string]int{}
 		}
+		s.Missing[MissingCopilotTotals] = totals
 	}
 	s.sortRecords()
 	return s, nil
